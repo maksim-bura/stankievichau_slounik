@@ -2,13 +2,13 @@ import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import QListWidgetItem
 from PySide6.QtCore import Qt
 from utils.accent_utils import remove_accents
-from ..components.constants import RESULTS_MIN_WIDTH, ENTRY_LIST_WIDTH_PADDING
+from theme.layout_constants import RESULTS_MIN_WIDTH, ENTRY_LIST_WIDTH_PADDING
 
 
-class EntryList:
-    def __init__(self, parent_window, search_controller, results_list, entry_viewer, entry_scroll_manager, navigation_bar):
+class SearchResultsList:
+    def __init__(self, parent_window, search_engine, results_list, entry_viewer, entry_scroll_manager, navigation_bar):
         self.parent = parent_window
-        self.search_controller = search_controller
+        self.search_engine = search_engine
         self.results_list = results_list
         self.entry_viewer = entry_viewer
         self.entry_scroll_manager = entry_scroll_manager
@@ -17,8 +17,9 @@ class EntryList:
         self.all_words = None
 
     def set_width(self):
-        if self.all_words is None and self.search_controller is not None:
-            self.all_words = self.search_controller.get_all_words()
+        if self.all_words is None:
+            results = self.search_engine.search("")
+            self.all_words = [r[1] for r in results if r[1] != "!SOURCES"]
 
         if not self.all_words:
             self.results_list.setFixedWidth(RESULTS_MIN_WIDTH)
@@ -58,7 +59,7 @@ class EntryList:
                 if entry_link and len(result) > 3 and result[3] != entry_link:
                     continue
 
-                root = self.search_controller.engine.get_parsed_entry(result[0], result[2])
+                root = self.search_engine.get_parsed_entry(result[0], result[2])
                 main_headword_element = root.find('hw')
                 main_headword = main_headword_element.text if main_headword_element is not None else ""
 

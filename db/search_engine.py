@@ -46,6 +46,11 @@ class SearchEngine:
                 ORDER BY sub_headwords.normalized_headword
             """)
             sub_results = cursor.fetchall()
+
+            combined = main_results + sub_results
+            unique = list({(result[0], result[1]): result for result in combined}.values())
+            unique.sort(key=lambda x: x[1])
+            return [r for r in unique if r[1] != "!SOURCES"]
         else:
             if '*' in search_text:
                 pattern = search_text.replace('*', '%')
@@ -69,9 +74,10 @@ class SearchEngine:
             """, (pattern,))
             sub_results = cursor.fetchall()
 
-        unique_results = list({(result[0], result[1]): result for result in main_results + sub_results}.values())
-        unique_results.sort(key=lambda x: x[1])
-        return unique_results
+            combined = main_results + sub_results
+            unique = list({(result[0], result[1]): result for result in combined}.values())
+            unique.sort(key=lambda x: x[1])
+            return unique
 
     def get_entry_by_headword(self, headword):
         conn = self._get_connection()

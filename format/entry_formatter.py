@@ -1,7 +1,7 @@
 import xml.etree.ElementTree as ElementTree
 from .link_handler import LinkHandler
 from .source_mapper import source_mapper
-from .accent_utils import remove_accents
+from utils.accent_utils import remove_accents
 
 
 class FormatContext:
@@ -36,14 +36,7 @@ def format_entry(xml_string, is_sources=False):
     context = _format_context
     content = _process_element(root, context, is_sources, None)
 
-    html = f"""<body style="
-            font-family: 'Cambria', 'Times New Roman', Times, serif;
-            line-height: 1.4;
-            margin: 15px;
-            text-align: justify;
-        ">
-        {content}
-        </body>"""
+    html = f"<body>{content}</body>"
 
     if not is_sources:
         clear_target()
@@ -92,7 +85,7 @@ def _process_element(element, context, is_sources=False, current_headword=None):
                 parts.append(child.tail)
             continue
 
-        style = _get_style_for_tag(child.tag)
+        tag_class = _get_class_for_tag(child.tag)
 
         if LinkHandler.is_link_tag(child.tag):
             if child.tag == 'src':
@@ -192,12 +185,12 @@ def _process_element(element, context, is_sources=False, current_headword=None):
                 else:
                     link_target = stripped_text
                 link_html = LinkHandler.create_link(child.tag, link_target, display_html=link_text, hw_attr=hw_attr)
-                parts.append(f'<span style="{_get_style_for_tag("see")}">{link_html}</span>')
+                parts.append(f'<span class="see">{link_html}</span>')
         else:
             inner_parts = []
 
             if is_target_headword:
-                inner_parts.append('<span style="font-weight: normal; margin-right: 4px;">➡️</span>')
+                inner_parts.append('<span class="headword-arrow">➡️</span>')
 
             if len(child) > 0:
                 inner_parts.append(_process_element(child, context, is_sources, new_headword))
@@ -208,12 +201,12 @@ def _process_element(element, context, is_sources=False, current_headword=None):
             inner_html = ''.join(inner_parts)
 
             if is_target_sense:
-                parts.append('<span style="margin-right: 4px;">➡️</span>')
                 sense_id = f"sense_{sense_attribute}"
-                parts.append(f'<span id="{sense_id}" style="{style}">{inner_html}</span>')
+                parts.append(f'<span class="sense-arrow">➡️</span>')
+                parts.append(f'<span id="{sense_id}" class="{tag_class}">{inner_html}</span>' if tag_class else f'<span id="{sense_id}">{inner_html}</span>')
             elif is_sources and child.tag == 'abbr' and child.text:
                 anchor_id = child.text.rstrip(':').rstrip('.')
-                parts.append(f'<span id="{anchor_id}" style="{style}">{inner_html}</span>')
+                parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}</span>')
             elif not is_sources and child.tag == 'hw' and child.text:
                 anchor_id = remove_accents(child.text)
                 link_attr = child.get('link')
@@ -223,11 +216,11 @@ def _process_element(element, context, is_sources=False, current_headword=None):
                     child.tail = child.tail[1:]
 
                 if link_attr:
-                    parts.append(f'<span id="{link_attr}" style="{style}">{inner_html}{comma}</span>')
+                    parts.append(f'<span id="{link_attr}" class="{tag_class}">{inner_html}{comma}</span>' if tag_class else f'<span id="{link_attr}">{inner_html}{comma}</span>')
                 else:
-                    parts.append(f'<span id="{anchor_id}" style="{style}">{inner_html}{comma}</span>')
-            elif style:
-                parts.append(f'<span style="{style}">{inner_html}</span>')
+                    parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}{comma}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}{comma}</span>')
+            elif tag_class:
+                parts.append(f'<span class="{tag_class}">{inner_html}</span>')
             else:
                 parts.append(inner_html)
 
@@ -235,25 +228,24 @@ def _process_element(element, context, is_sources=False, current_headword=None):
             if child.tag == 'g' and child.tail.startswith(','):
                 comma = child.tail[0]
                 remaining = child.tail[1:]
-                parts.append(f'<span style="font-style: italic;">{comma}</span>{remaining}')
+                parts.append(f'<span class="g">{comma}</span>{remaining}')
             else:
                 parts.append(child.tail)
 
     return ''.join(parts)
 
 
-def _get_style_for_tag(tag):
-    styles = {
-        'hw': 'font-weight: bold;',
-        'g': 'font-style: italic;',
-        'ex': 'font-style: italic;',
-        'i': 'font-style: italic;',
-        'b': 'font-weight: bold;',
-        'abbr': 'font-weight: bold;',
-        'see': 'font-style: italic;',
-        'p': 'font-style: normal; font-weight: normal;',
-        'h1': 'font-weight: bold; font-size: 18pt; margin-bottom: 8px; display: block;',
-        'h2': 'font-weight: bold; font-size: 16pt; margin-bottom: 8px; display: block;',
-        'span': '',
+def _get_class_for_tag(tag):
+    classes = {
+        'hw': 'hw',
+        'g': 'g',
+        'ex': 'g',
+        'i': 'i',
+        'b': 'b',
+        'abbr': 'abbr',
+        'see': 'see',
+        'p': 'p',
+        'h1': 'h1',
+        'h2': 'h2',
     }
-    return styles.get(tag, '')
+    return classes.get(tag, '')

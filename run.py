@@ -1,10 +1,14 @@
 import sys
 import os
 from PySide6.QtWidgets import QApplication
-from core import SearchEngine
-from ui import MainWindow
+from db import SearchEngine
+from db.build_database import build_database, needs_rebuild, get_paths
+from app import MainWindow
 
-database_path = os.path.join(os.path.dirname(__file__), 'build', 'dictionary.db')
+if needs_rebuild():
+    build_database()
+
+database_path = get_paths()['database']
 search_engine = SearchEngine(database_path)
 
 app = QApplication(sys.argv)

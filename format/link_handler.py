@@ -1,5 +1,5 @@
 import re
-from .accent_utils import remove_accents
+from utils.accent_utils import remove_accents
 
 
 class LinkHandler:

@@ -2,6 +2,17 @@ import json
 import os
 
 
+class _StringsGroup:
+    def __init__(self, data):
+        self._data = data
+
+    def __getattr__(self, key):
+        if key in self._data:
+            val = self._data[key]
+            return _StringsGroup(val) if isinstance(val, dict) else val
+        return f"[{key}]"
+
+
 class Strings:
     _instance = None
     _strings = {}
@@ -22,7 +33,8 @@ class Strings:
 
     def __getattr__(self, key):
         if key in self._strings:
-            return self._strings[key]
+            val = self._strings[key]
+            return _StringsGroup(val) if isinstance(val, dict) else val
         return f"[{key}]"
 
 

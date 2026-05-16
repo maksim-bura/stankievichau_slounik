@@ -1,12 +1,14 @@
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QSizePolicy
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QSizePolicy, QTextBrowser, QVBoxLayout
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from localization import strings
-from .components.constants import (
-    NAV_BAR_HEIGHT, NAV_BAR_MIN_WIDTH, NAV_BUTTON_WIDTH, CLOSE_BUTTON_SIZE,
-    NAV_BAR_CONTENTS_MARGINS, NAV_BAR_BACKGROUND, NAV_SPACER_MIN_WIDTH, NAV_SPACER_MAX_WIDTH
+from theme.layout_constants import (
+    BAR_HEIGHT, NAV_BUTTON_WIDTH, BUTTON_SIZE,
+    BAR_CONTENTS_MARGINS, BAR_SPACING, NAV_SPACER_MIN_WIDTH, NAV_SPACER_MAX_WIDTH,
+    LAYOUT_MARGINS, LAYOUT_SPACING
 )
-from .components.widgets import IconButton
+from app.widgets import IconButton, DictTextBrowser
+from utils.scroll_manager import ScrollManager
+from theme.widget_styles import ENTRY_STYLESHEET
 
 
 class NavigationBar(QWidget):
@@ -19,18 +21,11 @@ class NavigationBar(QWidget):
 
         self.setVisible(False)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setFixedHeight(NAV_BAR_HEIGHT)
-        self.setMinimumWidth(NAV_BAR_MIN_WIDTH)
-        self.setAutoFillBackground(True)
-
-        palette = self.palette()
-        palette.setColor(self.backgroundRole(), QColor(*NAV_BAR_BACKGROUND))
-        self.setPalette(palette)
-        self.setAutoFillBackground(True)
+        self.setFixedHeight(BAR_HEIGHT)
 
         layout = QHBoxLayout()
-        layout.setContentsMargins(*NAV_BAR_CONTENTS_MARGINS)
-        layout.setSpacing(0)
+        layout.setContentsMargins(*BAR_CONTENTS_MARGINS)
+        layout.setSpacing(BAR_SPACING)
 
         button_style = """
             QPushButton {
@@ -41,7 +36,7 @@ class NavigationBar(QWidget):
             }
         """
 
-        self.back_button = QPushButton(f"⬅️ {strings.back_button}")
+        self.back_button = QPushButton(f"\u2b05\ufe0f {strings.button.back}")
         self.back_button.setCursor(Qt.PointingHandCursor)
         self.back_button.setFlat(True)
         self.back_button.setStyleSheet(button_style)
@@ -57,15 +52,15 @@ class NavigationBar(QWidget):
         self.button_spacer.setMaximumWidth(NAV_SPACER_MAX_WIDTH)
         self.button_spacer.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
 
-        self.forward_button = QPushButton(f"➡️ {strings.forward_button}")
+        self.forward_button = QPushButton(f"\u27a1\ufe0f {strings.button.forward}")
         self.forward_button.setCursor(Qt.PointingHandCursor)
         self.forward_button.setFlat(True)
         self.forward_button.setStyleSheet(button_style)
         self.forward_button.setFixedWidth(NAV_BUTTON_WIDTH)
         self.forward_button.clicked.connect(self.on_forward)
 
-        self.close_button = IconButton("❌", flat=True)
-        self.close_button.setFixedSize(CLOSE_BUTTON_SIZE)
+        self.close_button = IconButton("\u274c", flat=True)
+        self.close_button.setFixedSize(BUTTON_SIZE)
         self.close_button.clicked.connect(self.hide)
 
         layout.addWidget(self.back_button)
@@ -118,3 +113,59 @@ class NavigationBar(QWidget):
         self.current_index = -1
         self.setVisible(False)
         self.update_buttons()
+
+
+class EntryViewer:
+    def __init__(self, parent_window, open_entry_callback):
+        self.parent = parent_window
+        self.open_entry_callback = open_entry_callback
+
+        self.container = QWidget()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(*LAYOUT_MARGINS)
+        layout.setSpacing(LAYOUT_SPACING)
+
+        self.navigation_bar = NavigationBar(parent_window, open_entry_callback)
+        layout.addWidget(self.navigation_bar)
+
+        self.viewer = DictTextBrowser()
+        self.viewer.setReadOnly(True)
+        self.viewer.setOpenExternalLinks(False)
+        self.viewer.setFocusPolicy(Qt.StrongFocus)
+        self.viewer.anchorClicked.connect(parent_window.on_link_clicked)
+        self.viewer.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
+
+        layout.addWidget(self.viewer)
+        self.container.setLayout(layout)
+
+        self.scroll_manager = ScrollManager(self.viewer)
+        self.stored_html = None
+
+    def get_widget(self):
+        return self.container
+
+    def get_viewer(self):
+        return self.viewer
+
+    def display_entry(self, result, formatter):
+        self.stored_html = formatter.format_entry(result[2])
+        self.scroll_manager.cache_state()
+        self.viewer.setHtml(self.stored_html)
+        self.scroll_manager.last_anchor = None
+
+    def refresh(self):
+        if self.stored_html:
+            self.scroll_manager.restore_content(self.stored_html)
+
+    def clear(self):
+        self.viewer.clear()
+        self.scroll_manager.clear_cache()
+
+    def scroll_to_anchor(self, anchor_id):
+        self.scroll_manager.scroll_to_anchor(anchor_id)
+
+    def cache_scroll(self):
+        self.scroll_manager.cache_state()
+
+    def restore_scroll(self):
+        self.scroll_manager.restore_state()

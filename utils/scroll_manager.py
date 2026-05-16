@@ -22,6 +22,13 @@ class ScrollManager:
             self.viewer.setHtml(self.cached_html)
             self.viewer.verticalScrollBar().setValue(self.cached_scroll)
 
+    def save_scroll(self):
+        self.cached_scroll = self.viewer.verticalScrollBar().value()
+
+    def restore_content(self, html):
+        self.viewer.setHtml(html)
+        self.viewer.verticalScrollBar().setValue(self.cached_scroll)
+
     def clear_cache(self):
         self.cached_html = None
         self.cached_scroll = 0

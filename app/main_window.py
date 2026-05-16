@@ -1,25 +1,23 @@
-import os
 import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QListWidget, QTextBrowser, QSplitter, QApplication
+    QListWidget, QSplitter, QApplication
 )
 from PySide6.QtCore import Qt
-from utils.link_handler import LinkHandler
+from format.link_handler import LinkHandler
 from utils.accent_utils import remove_accents
-from utils.scrolling import ScrollManager
-import utils.xml_formatter as formatter
+import format.entry_formatter as formatter
 from localization import strings
-from controllers.search_controller import SearchController
-from .buttons import SourcesButton
-from .navigation import NavigationBar
-from .panels import SourcesToggle, EntryList
-from .components.widgets import SearchBox
-from .components.constants import (
+from db import SearchEngine
+from app.widgets import SourcesButton, SearchBox
+from app.panels import SearchResultsList, EntryViewer, SourcesPanel
+from app.panels.sources_panel import SourcesToggle
+from theme.layout_constants import (
     RESULTS_MIN_WIDTH, ENTRY_MIN_WIDTH, SOURCES_MIN_WIDTH,
     WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT, SPLITTER_ENTRY_INITIAL,
     SPLITTER_SOURCES_INITIAL, LAYOUT_MARGINS, LAYOUT_SPACING, TOP_LAYOUT_SPACING
 )
+from theme.widget_styles import GLOBAL_STYLE
 
 
 class MainWindow(QMainWindow):
@@ -31,28 +29,31 @@ class MainWindow(QMainWindow):
         self.current_display_xml = None
         self.current_display_xml_id = None
         self.current_display_headword = None
-        from .sources_window import SourcesWindow
-        self.sources = SourcesWindow(self)
+        self.sources_panel = SourcesPanel(self)
         self.sources_visible = False
         self.sources_toggle = SourcesToggle(self)
 
-        self.setWindowTitle(strings.main_window_title)
+        self.setWindowTitle(strings.window.title)
         self.resize(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
 
         self.entry_min_width = ENTRY_MIN_WIDTH
         self.sources_min_width = SOURCES_MIN_WIDTH
         self.results_min_width = RESULTS_MIN_WIDTH
 
+        self.entry_viewer = EntryViewer(self, self.open_entry_by_headword_nav)
+        self.entry_scroll_manager = self.entry_viewer.scroll_manager
+
         self.setup_ui()
         self.load_styles()
-        self.entry_scroll_manager = ScrollManager(self.entry_viewer)
 
-        self.entry_list = EntryList(self, None, self.results_list, self.entry_viewer, self.entry_scroll_manager, self.navigation_bar)
-        self.search_controller = SearchController(search_engine, self.entry_list)
-        self.entry_list.search_controller = self.search_controller
+        self.results_list = SearchResultsList(
+            self, search_engine,
+            self.results_widget, self.entry_viewer,
+            self.entry_scroll_manager, self.entry_viewer.navigation_bar
+        )
 
         self.show_all_entries()
-        self.entry_list.set_width()
+        self.results_list.set_width()
 
     def open_entry_by_headword_nav(self, headword, sense_parts):
         self.open_entry_by_headword(headword, sense_parts, from_navigation=True)
@@ -60,7 +61,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if event.oldSize().width() != event.size().width():
-            self.sources.handle_resize()
+            self.sources_panel.handle_resize()
             self.entry_scroll_manager.handle_resize()
 
     def setup_ui(self):
@@ -75,7 +76,7 @@ class MainWindow(QMainWindow):
         self.sources_button = SourcesButton()
         self.sources_button.clicked.connect(self.toggle_sources)
 
-        self.search_box = SearchBox(strings.search_placeholder)
+        self.search_box = SearchBox(strings.placeholder.entries_search)
         self.search_box.textChanged.connect(self.on_search)
 
         top_layout.addWidget(self.search_box, 1)
@@ -83,35 +84,16 @@ class MainWindow(QMainWindow):
 
         self.bottom_splitter = QSplitter(Qt.Horizontal)
 
-        self.results_list = QListWidget()
-        self.results_list.itemClicked.connect(self.on_result_clicked)
-        self.results_list.setMinimumWidth(self.results_min_width)
-        self.bottom_splitter.addWidget(self.results_list)
+        self.results_widget = QListWidget()
+        self.results_widget.itemClicked.connect(self.on_result_clicked)
+        self.results_widget.setMinimumWidth(self.results_min_width)
+        self.bottom_splitter.addWidget(self.results_widget)
 
-        entry_container = QWidget()
-        entry_layout = QVBoxLayout()
-        entry_layout.setContentsMargins(*LAYOUT_MARGINS)
-        entry_layout.setSpacing(LAYOUT_SPACING)
+        entry_widget = self.entry_viewer.get_widget()
+        entry_widget.setMinimumWidth(self.entry_min_width)
+        self.bottom_splitter.addWidget(entry_widget)
 
-        self.navigation_bar = NavigationBar(self, self.open_entry_by_headword_nav)
-        self.navigation_bar.hide()
-        entry_layout.addWidget(self.navigation_bar)
-
-        self.entry_viewer = QTextBrowser()
-        self.entry_viewer.setReadOnly(True)
-        self.entry_viewer.setOpenExternalLinks(False)
-        self.entry_viewer.setFocusPolicy(Qt.StrongFocus)
-        self.entry_viewer.anchorClicked.connect(self.on_link_clicked)
-        self.entry_viewer.document().setDefaultStyleSheet("""
-            a, a:visited { text-decoration: none; color: inherit; }
-        """)
-        entry_layout.addWidget(self.entry_viewer)
-
-        entry_container.setLayout(entry_layout)
-        entry_container.setMinimumWidth(self.entry_min_width)
-        self.bottom_splitter.addWidget(entry_container)
-
-        sources_viewer = self.sources.get_viewer()
+        sources_viewer = self.sources_panel.get_viewer()
         sources_viewer.setMinimumWidth(self.sources_min_width)
         self.bottom_splitter.addWidget(sources_viewer)
 
@@ -126,30 +108,40 @@ class MainWindow(QMainWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
-        self.setMinimumWidth(self.results_min_width + self.entry_min_width + self.sources_min_width)
+        self._update_min_width()
 
     def load_styles(self):
-        css_path = os.path.join(os.path.dirname(__file__), 'styles', 'dictionary.css')
-        with open(css_path, 'r', encoding='utf-8') as file:
-            css = file.read()
-        QApplication.instance().setStyleSheet(css)
+        QApplication.instance().setStyleSheet(GLOBAL_STYLE)
 
     def toggle_sources(self):
         self.sources_visible = self.sources_toggle.toggle(
-            self.sources_visible, self.sources, self.sources_button,
+            self.sources_visible, self.sources_panel, self.sources_button,
             self.bottom_splitter, self.entry_min_width, self.sources_min_width,
             self.entry_scroll_manager
         )
+        self._update_min_width()
+
+    def _update_min_width(self):
+        min_w = self.results_min_width + self.entry_min_width
+        if self.sources_visible:
+            min_w += self.sources_min_width
+        self.setMinimumWidth(min_w)
 
     def show_all_entries(self):
-        self.search_controller.search("")
+        results = self.search_engine.search("")
+        self.results_list.display_results(results)
 
     def on_search(self, text):
-        self.navigation_bar.clear()
-        self.search_controller.search(text)
+        self.entry_viewer.navigation_bar.clear()
+        results = self.search_engine.search(text)
+        self.results_list.display_results(results)
 
     def on_result_clicked(self, item):
-        self.entry_list.on_clicked(item, formatter, self.display_entry, self.entry_scroll_manager.scroll_to_anchor)
+        self.results_list.on_clicked(
+            item, formatter,
+            lambda r: self.display_entry(r),
+            self.entry_scroll_manager.scroll_to_anchor
+        )
 
     def on_link_clicked(self, url):
         url_string = url.toString()
@@ -162,12 +154,11 @@ class MainWindow(QMainWindow):
 
     def open_source(self, source_abbreviation):
         formatter.clear_target()
+        self.entry_scroll_manager.save_scroll()
         if not self.sources_visible:
             self.toggle_sources()
-        else:
-            self.entry_scroll_manager.cache_state()
-        self.sources.scroll_to_source(source_abbreviation)
-        self.entry_scroll_manager.restore_state()
+        self.sources_panel.scroll_to_source(source_abbreviation)
+        self.entry_viewer.refresh()
 
     def open_entry_by_headword(self, headword, sense_parts=None, entry_link=None, from_navigation=False):
         target_headword = remove_accents(headword)
@@ -178,7 +169,7 @@ class MainWindow(QMainWindow):
             result_to_display = None
 
             if entry_link:
-                for result in self.entry_list.current_results:
+                for result in self.results_list.current_results:
                     if len(result) > 3 and result[3] == entry_link:
                         result_to_display = result
                         break
@@ -187,13 +178,13 @@ class MainWindow(QMainWindow):
                     if entry_data:
                         result_to_display = entry_data
             else:
-                for result in self.entry_list.current_results:
+                for result in self.results_list.current_results:
                     if result[1] == headword:
                         result_to_display = result
                         break
 
                 if not result_to_display:
-                    for result in self.entry_list.current_results:
+                    for result in self.results_list.current_results:
                         if remove_accents(result[1]) == target_headword:
                             result_to_display = result
                             break
@@ -220,7 +211,7 @@ class MainWindow(QMainWindow):
                 self.display_entry(result_to_display)
 
                 if not from_navigation and result_to_display[1] != old_headword:
-                    self.navigation_bar.push(result_to_display[1], sense_parts, old_headword)
+                    self.entry_viewer.navigation_bar.push(result_to_display[1], sense_parts, old_headword)
 
                 if entry_link and '#' in entry_link:
                     anchor = entry_link.split('#')[1]
@@ -232,7 +223,5 @@ class MainWindow(QMainWindow):
         self.current_display_xml = result[2]
         self.current_display_xml_id = result[0]
         self.current_display_headword = result[1]
-        html = formatter.format_entry(result[2])
-        self.entry_scroll_manager.cache_state()
-        self.entry_viewer.setHtml(html)
+        self.entry_viewer.display_entry(result, formatter)
         self.entry_scroll_manager.last_anchor = None

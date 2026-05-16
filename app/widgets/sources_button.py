@@ -1,8 +1,8 @@
 from PySide6.QtWidgets import QPushButton, QSizePolicy
 from PySide6.QtCore import Qt
 from localization import strings
-from .components.constants import BUTTON_SIZE
-from .components.styles import SOURCES_BUTTON_STYLE, TOOLTIP_STYLE
+from theme.layout_constants import BUTTON_SIZE
+from theme.widget_styles import MENU_BUTTON_STYLE
 
 
 class SourcesButton(QPushButton):
@@ -12,9 +12,9 @@ class SourcesButton(QPushButton):
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setFixedSize(BUTTON_SIZE)
         self.setCursor(Qt.PointingHandCursor)
-        self.setProperty("class", "sources-button")
-        self.setToolTip(strings.sources_button)
-        self.setStyleSheet(SOURCES_BUTTON_STYLE)
+        self.setProperty("class", "menu-button")
+        self.setToolTip(strings.tooltip.sources)
+        self.setStyleSheet(MENU_BUTTON_STYLE)
         self.update_style()
 
     def update_style(self):
