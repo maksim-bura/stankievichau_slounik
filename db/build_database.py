@@ -82,7 +82,7 @@ def build_database():
         if not headword:
             continue
 
-        normalized_headword = remove_accents(headword)
+        normalized_headword = remove_accents(headword).lower()
         entry_string = ElementTree.tostring(entry, encoding="unicode")
         entry_link = entry.get('link')
 
@@ -96,7 +96,7 @@ def build_database():
         all_headwords = entry.findall(".//hw")
         for sub_headword_element in all_headwords[1:]:
             if sub_headword_element.text:
-                sub_normalized = remove_accents(sub_headword_element.text)
+                sub_normalized = remove_accents(sub_headword_element.text).lower()
                 cursor.execute(
                     "INSERT INTO sub_headwords (headword, normalized_headword, main_entry_id) VALUES (?, ?, ?)",
                     (sub_headword_element.text, sub_normalized, main_entry_id)

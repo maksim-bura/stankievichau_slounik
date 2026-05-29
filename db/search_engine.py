@@ -49,13 +49,13 @@ class SearchEngine:
 
             combined = main_results + sub_results
             unique = list({(result[0], result[1]): result for result in combined}.values())
-            unique.sort(key=lambda x: x[1])
+            unique.sort(key=lambda x: x[1].lower())
             return [r for r in unique if r[1] != "!SOURCES"]
         else:
             if '*' in search_text:
-                pattern = search_text.replace('*', '%')
+                pattern = search_text.replace('?', '_').replace('*', '%')
             else:
-                pattern = f"{search_text}%"
+                pattern = f"{search_text.replace('?', '_')}%"
 
             cursor.execute("""
                 SELECT id, headword, full_entry, entry_link
@@ -76,7 +76,7 @@ class SearchEngine:
 
             combined = main_results + sub_results
             unique = list({(result[0], result[1]): result for result in combined}.values())
-            unique.sort(key=lambda x: x[1])
+            unique.sort(key=lambda x: x[1].lower())
             return unique
 
     def get_entry_by_headword(self, headword):

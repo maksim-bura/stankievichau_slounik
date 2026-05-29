@@ -10,6 +10,7 @@ import format.entry_formatter as formatter
 from localization import strings
 from db import SearchEngine
 from app.widgets import SourcesButton, SearchBox
+from app.shortcuts.shortcuts import install_global_copy
 from app.panels import SearchResultsList, EntryViewer, SourcesPanel
 from app.panels.sources_panel import SourcesToggle
 from theme.layout_constants import (
@@ -45,6 +46,7 @@ class MainWindow(QMainWindow):
 
         self.setup_ui()
         self.load_styles()
+        install_global_copy(self)
 
         self.results_list = SearchResultsList(
             self, search_engine,

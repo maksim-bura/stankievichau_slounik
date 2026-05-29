@@ -131,7 +131,7 @@ class EntryViewer:
         self.viewer = DictTextBrowser()
         self.viewer.setReadOnly(True)
         self.viewer.setOpenExternalLinks(False)
-        self.viewer.setFocusPolicy(Qt.StrongFocus)
+        self.viewer.setFocusPolicy(Qt.NoFocus)
         self.viewer.anchorClicked.connect(parent_window.on_link_clicked)
         self.viewer.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
 

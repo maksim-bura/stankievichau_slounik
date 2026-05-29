@@ -4,6 +4,7 @@ from .source_mapper import source_mapper
 from utils.accent_utils import remove_accents
 
 
+
 class FormatContext:
     def __init__(self, subheadword=None, senses=None, headword=None):
         self.subheadword = subheadword
@@ -245,7 +246,5 @@ def _get_class_for_tag(tag):
         'abbr': 'abbr',
         'see': 'see',
         'p': 'p',
-        'h1': 'h1',
-        'h2': 'h2',
     }
     return classes.get(tag, '')

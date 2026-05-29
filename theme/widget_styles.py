@@ -78,7 +78,7 @@ ENTRY_STYLESHEET = """
         font-family: 'Cambria', 'Times New Roman', Times, serif;
         font-size: 12pt;
         line-height: 1.4;
-        margin: 15px;
+        margin: 0;
         text-align: justify;
     }
     .hw { font-weight: bold; }
@@ -87,8 +87,9 @@ ENTRY_STYLESHEET = """
     .abbr { font-weight: bold; }
     .see { font-style: italic; }
     .p { font-style: normal; font-weight: normal; }
-    .h1 { font-weight: bold; font-size: 18pt; margin-bottom: 8px; display: block; }
-    .h2 { font-weight: bold; font-size: 16pt; margin-bottom: 8px; display: block; }
+    .h1 { font-weight: bold; font-size: 16pt; }
+    .h2 { font-weight: bold; font-size: 14pt; }
+    h1, h2 { margin: 0; }
     .src, .source-link { font-style: normal; }
     .sense, .gl { font-style: normal; }
     .headword-arrow { font-weight: normal; margin-right: 4px; }
@@ -103,5 +104,12 @@ ENTRY_STYLESHEET = """
     .link:hover, .word-link:hover { text-decoration: underline; }
     .source-link { font-style: normal; color: inherit; text-decoration: none; cursor: pointer; }
     .source-link:hover { text-decoration: underline; }
+    .search-highlight { background-color: #FFF9C4; }
     a, a:visited { text-decoration: none; color: inherit; }
+    a:hover { text-decoration: underline; }
+    .toggle-btn, .toggle-btn:visited, .toggle-btn:hover {
+        text-decoration: none; color: inherit; cursor: pointer;
+    }
+    h1 { font-weight: bold; font-size: 16pt; }
+    h2 { font-weight: bold; font-size: 14pt; }
 """

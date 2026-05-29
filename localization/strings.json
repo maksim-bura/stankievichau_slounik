@@ -12,5 +12,6 @@
     "button": {
         "back": "Назад",
         "forward": "Наперад"
-    }
+    },
+    "sources_no_results": "Няма вынікаў."
 }
