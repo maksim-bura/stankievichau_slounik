@@ -7,11 +7,23 @@
         "sources_search": "Увядзіце назоў жарала"
     },
     "tooltip": {
-        "sources": "Жаролы"
+        "sources": "Жаролы",
+        "settings": "Налады"
+    },
+    "settings": {
+        "search_settings": {
+            "heading": "Налады шуканьня",
+            "search_in_belarusian": {
+                "label": "Шукаць пабеларуску",
+                "headwords": "Шукаць у загалоўках",
+                "examples": "Шукаць у прыкладах"
+            },
+            "search_in_russian": "Шукаць парасійску (у перакладах)"
+        }
     },
     "button": {
         "back": "Назад",
         "forward": "Наперад"
     },
-    "sources_no_results": "Няма вынікаў."
+    "no_results": "Няма вынікаў."
 }

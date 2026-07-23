@@ -1,22 +1,7 @@
 import re
 import html
 from localization import strings
-
-
-def compile_search_regex(search_text):
-    parts = []
-    for ch in search_text:
-        if ch.isupper():
-            parts.append(re.escape(ch))
-        elif ch.islower():
-            upper = ch.upper()
-            if upper != ch:
-                parts.append(f'[{re.escape(ch)}{re.escape(upper)}]')
-            else:
-                parts.append(re.escape(ch))
-        else:
-            parts.append(re.escape(ch))
-    return re.compile(''.join(parts), re.UNICODE)
+from utils.case_utils import compile_search_regex
 
 
 def build_filtered_html(all_children, collapsed_sections, arrow_marker, search_text=None, marker_anchor=None):
@@ -49,7 +34,7 @@ def build_filtered_html(all_children, collapsed_sections, arrow_marker, search_t
                 needs_br = True
 
     if not matching_sections:
-        parts.append(strings.sources_no_results)
+        parts.append(strings.no_results)
 
     while parts and parts[-1] == '<br>':
         parts.pop()

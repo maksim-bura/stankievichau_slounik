@@ -5,6 +5,7 @@ from db import SearchEngine
 from db.build_database import build_database, needs_rebuild, get_paths
 from app import MainWindow
 
+
 if needs_rebuild():
     build_database()
 

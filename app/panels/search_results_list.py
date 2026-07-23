@@ -1,61 +1,100 @@
-import xml.etree.ElementTree as ElementTree
-from PySide6.QtWidgets import QListWidgetItem
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QListWidgetItem, QStyledItemDelegate
 from utils.accent_utils import remove_accents
-from theme.layout_constants import RESULTS_MIN_WIDTH, ENTRY_LIST_WIDTH_PADDING
+from theme.layout_constants import RESULTS_MIN_WIDTH
+
+
+class _ElidingDelegate(QStyledItemDelegate):
+    def __init__(self, list_widget):
+        super().__init__(list_widget)
+        self._list = list_widget
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        text = option.text
+        if not text:
+            return
+        fm = option.fontMetrics
+        vw = self._list.viewport().width() - 10
+        if fm.horizontalAdvance(text) > vw:
+            option.text = fm.elidedText(text, Qt.ElideRight, vw)
 
 
 class SearchResultsList:
-    def __init__(self, parent_window, search_engine, results_list, entry_viewer, entry_scroll_manager, navigation_bar):
+    def __init__(self, parent_window, search_engine, list_widget, entry_viewer, entry_scroll_manager, navigation_bar):
         self.parent = parent_window
         self.search_engine = search_engine
-        self.results_list = results_list
+        self._widget = list_widget
         self.entry_viewer = entry_viewer
         self.entry_scroll_manager = entry_scroll_manager
         self.navigation_bar = navigation_bar
         self.current_results = []
-        self.all_words = None
+        self._widget.setFixedWidth(RESULTS_MIN_WIDTH)
+        self._widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._widget.setItemDelegate(_ElidingDelegate(self._widget))
 
     def set_width(self):
-        if self.all_words is None:
-            results = self.search_engine.search("")
-            self.all_words = [r[1] for r in results if r[1] != "!SOURCES"]
+        self._widget.setFixedWidth(RESULTS_MIN_WIDTH)
 
-        if not self.all_words:
-            self.results_list.setFixedWidth(RESULTS_MIN_WIDTH)
-            return
-
-        font = self.results_list.font()
-        font.setBold(True)
-        font_metrics = self.results_list.fontMetrics()
-
-        max_width = 0
-        for word in self.all_words:
-            text_width = font_metrics.horizontalAdvance(word)
-            if text_width > max_width:
-                max_width = text_width
-
-        final_width = max_width + ENTRY_LIST_WIDTH_PADDING if max_width > 0 else RESULTS_MIN_WIDTH
-        self.results_list.setFixedWidth(final_width)
+    def _select_row(self, row):
+        self._widget.clearSelection()
+        item = self._widget.item(row)
+        if item:
+            item.setSelected(True)
+            self._widget.setCurrentItem(item)
+            self._widget.scrollToItem(item)
 
     def display_results(self, results):
         self.current_results = results
-        self.results_list.clear()
+        self._widget.clear()
         self.entry_viewer.clear()
         self.entry_scroll_manager.clear_cache()
 
-        for result in self.current_results:
-            display_word = remove_accents(result[1])
-            item = QListWidgetItem(display_word)
-            item.setData(Qt.UserRole, result[3] if len(result) > 3 else None)
-            self.results_list.addItem(item)
+        if not results:
+            return
+
+        for r in results:
+            item = QListWidgetItem(remove_accents(r[1]))
+            item.setData(Qt.UserRole, r[3] if len(r) > 3 else None)
+            item.setData(Qt.UserRole + 1, r[1])
+            self._widget.addItem(item)
+
+        fm = self._widget.fontMetrics()
+        vw = self._widget.viewport().width() - 10
+        for i in range(self._widget.count()):
+            item = self._widget.item(i)
+            if fm.horizontalAdvance(item.text()) > vw:
+                item.setToolTip(remove_accents(item.data(Qt.UserRole + 1) or item.text()))
+
+        if results:
+            self._select_row(0)
+
+    def navigate(self, direction):
+        row = self._widget.currentRow()
+        if row < 0:
+            row = 0
+        count = self._widget.count()
+        if count == 0:
+            return
+        new_row = row + direction
+        if 0 <= new_row < count:
+            self._select_row(new_row)
+
+    def current_item(self):
+        return self._widget.currentItem()
 
     def on_clicked(self, item, formatter, display_entry, scroll_to_anchor):
-        clicked_word = item.text()
+        self._widget.clearSelection()
+        item.setSelected(True)
+        self._widget.setCurrentItem(item)
+        clicked_word = item.data(Qt.UserRole + 1)
+        if not clicked_word:
+            return
         entry_link = item.data(Qt.UserRole)
+        clicked_clean = remove_accents(clicked_word)
 
         for result in self.current_results:
-            if remove_accents(result[1]) == clicked_word:
+            if remove_accents(result[1]) == clicked_clean:
                 if entry_link and len(result) > 3 and result[3] != entry_link:
                     continue
 
@@ -69,6 +108,6 @@ class SearchResultsList:
                     formatter.clear_target()
 
                 display_entry(result)
-                scroll_to_anchor(clicked_word)
+                scroll_to_anchor(clicked_clean)
                 self.navigation_bar.clear()
                 return

@@ -6,6 +6,7 @@ class LinkHandler:
     LINK_TAGS = {
         'see': {'css_class': 'link word-link', 'action': 'word'},
         'src': {'css_class': 'source-link', 'action': 'source'},
+        'st': {'css_class': 'source-link', 'action': 'source'},
     }
 
     @classmethod
@@ -15,11 +16,12 @@ class LinkHandler:
 
         tag_info = cls.LINK_TAGS.get(tag_name)
         if tag_info:
-            if tag_name == 'src':
+            if tag_info['action'] == 'source':
                 from .source_mapper import source_mapper
                 link_target = source_mapper.get_abbreviation(link_target)
             target = hw_attr if hw_attr else link_target
-            return f'<a href="{tag_info["action"]}:{target}" class="{tag_info["css_class"]}">{display_html}</a>'
+            extra_style = ' style="font-style: normal;"' if tag_name == 'src' else ''
+            return f'<a href="{tag_info["action"]}:{target}" class="{tag_info["css_class"]}"{extra_style}>{display_html}</a>'
         return display_html
 
     @classmethod

@@ -89,7 +89,7 @@ def _process_element(element, context, is_sources=False, current_headword=None):
         tag_class = _get_class_for_tag(child.tag)
 
         if LinkHandler.is_link_tag(child.tag):
-            if child.tag == 'src':
+            if child.tag in ('src', 'st'):
                 inner_html_parts = []
                 for inner_child in child:
                     if inner_child.tag == 'b':
@@ -109,8 +109,11 @@ def _process_element(element, context, is_sources=False, current_headword=None):
                 if source_text:
                     abbreviations = source_mapper.extract_abbreviations(source_text)
 
+                    def _wrap_src(content):
+                        return f'<span style="font-style: normal;">{content}</span>' if child.tag == 'src' else content
+
                     if not abbreviations:
-                        parts.append(inner_html)
+                        parts.append(_wrap_src(inner_html))
                     elif len(abbreviations) > 1:
                         abbrevs_with_positions = []
                         for abbr, variant in abbreviations:
@@ -128,7 +131,7 @@ def _process_element(element, context, is_sources=False, current_headword=None):
                             current_pos = pos + len(variant)
                         if current_pos < len(inner_html):
                             result_parts.append(inner_html[current_pos:])
-                        parts.append(''.join(result_parts))
+                        parts.append(_wrap_src(''.join(result_parts)))
                     else:
                         abbr, variant = abbreviations[0]
                         pos = source_text.find(variant)
@@ -167,9 +170,9 @@ def _process_element(element, context, is_sources=False, current_headword=None):
                             result_parts.append(LinkHandler.create_link(child.tag, abbr, inner_html[html_pos:variant_html_end]))
                             if variant_html_end < len(inner_html):
                                 result_parts.append(inner_html[variant_html_end:])
-                            parts.append(''.join(result_parts))
+                            parts.append(_wrap_src(''.join(result_parts)))
                         else:
-                            parts.append(inner_html)
+                            parts.append(_wrap_src(inner_html))
                 else:
                     parts.append('')
             else:
@@ -240,11 +243,12 @@ def _get_class_for_tag(tag):
     classes = {
         'hw': 'hw',
         'g': 'g',
-        'ex': 'g',
+        'ex': 'ex',
         'i': 'i',
         'b': 'b',
         'abbr': 'abbr',
         'see': 'see',
         'p': 'p',
+        't': 't',
     }
     return classes.get(tag, '')

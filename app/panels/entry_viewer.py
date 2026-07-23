@@ -131,7 +131,7 @@ class EntryViewer:
         self.viewer = DictTextBrowser()
         self.viewer.setReadOnly(True)
         self.viewer.setOpenExternalLinks(False)
-        self.viewer.setFocusPolicy(Qt.NoFocus)
+        self.viewer.setFocusPolicy(Qt.ClickFocus)
         self.viewer.anchorClicked.connect(parent_window.on_link_clicked)
         self.viewer.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
 
@@ -146,6 +146,10 @@ class EntryViewer:
 
     def get_viewer(self):
         return self.viewer
+
+    def display_html(self, html):
+        self.stored_html = html
+        self.viewer.setHtml(html)
 
     def display_entry(self, result, formatter):
         self.stored_html = formatter.format_entry(result[2])

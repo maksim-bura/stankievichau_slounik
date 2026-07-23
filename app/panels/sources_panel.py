@@ -244,43 +244,43 @@ class SourcesToggle:
             entry_width = half
             sources_width = available - half
         else:
-            entry_width = entry_current_width
-            sources_width = entry_current_width
-            new_width = results_width + entry_width + sources_width
-            self.parent.resize(new_width, self.parent.height())
+            entry_width = entry_min_width
+            sources_width = sources_min_width
+            target = results_width + entry_min_width + sources_min_width
+            if self.parent.width() < target:
+                self.parent.resize(target, self.parent.height())
 
-        bottom_splitter.setSizes([results_width, entry_width, sources_width])
+        bottom_splitter.setSizes([entry_width, sources_width])
 
     def _handle_hiding(self, sizes, results_width, bottom_splitter, entry_before_hide, sources_before_hide):
         new_entry = entry_before_hide + sources_before_hide
-        bottom_splitter.setSizes([results_width, new_entry, 0])
+        bottom_splitter.setSizes([new_entry, 0])
 
     def _handle_already_visible(self, sizes, results_width, entry_min_width, sources_min_width, bottom_splitter):
-        if sizes[2] == 0:
+        if sizes[1] == 0:
             available = self.parent.width() - results_width
             needed = entry_min_width + sources_min_width
             if available >= needed:
                 half = available // 2
-                bottom_splitter.setSizes([results_width, half, available - half])
+                bottom_splitter.setSizes([half, available - half])
 
     def _handle_already_hidden(self, sizes, results_width, bottom_splitter):
-        bottom_splitter.setSizes([results_width, results_width + sizes[2], 0])
+        bottom_splitter.setSizes([results_width + sizes[1], 0])
 
-    def toggle(self, sources_visible, sources, sources_button, bottom_splitter, entry_min_width, sources_min_width, entry_scroll_manager):
+    def toggle(self, sources_visible, sources, sources_button, results_width, bottom_splitter, entry_min_width, sources_min_width, entry_scroll_manager):
         was_visible = sources_visible
         sizes_before = bottom_splitter.sizes() if was_visible else None
         sources_visible = sources.toggle()
         sources_button.set_sources_visible(sources_visible)
 
         sizes = bottom_splitter.sizes()
-        results_width = sizes[0]
-        entry_current_width = sizes[1]
+        entry_current_width = sizes[0]
 
         if sources_visible and not was_visible:
             self._handle_showing(sizes, results_width, entry_min_width, sources_min_width, entry_current_width, bottom_splitter)
         elif not sources_visible and was_visible:
-            entry_before_hide = sizes_before[1] if sizes_before else sizes[1]
-            sources_before_hide = sizes_before[2] if sizes_before else 0
+            entry_before_hide = sizes_before[0] if sizes_before else sizes[0]
+            sources_before_hide = sizes_before[1] if sizes_before else 0
             self._handle_hiding(sizes, results_width, bottom_splitter, entry_before_hide, sources_before_hide)
         elif sources_visible:
             self._handle_already_visible(sizes, results_width, entry_min_width, sources_min_width, bottom_splitter)

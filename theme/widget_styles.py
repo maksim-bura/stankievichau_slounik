@@ -51,7 +51,7 @@ SEARCH_BOX_STYLE = """
 
 MENU_BUTTON_STYLE = """
     QPushButton[class="menu-button"] {
-        background-color: #f0f0f0;
+        background-color: #fafafa;
         color: black;
         font-weight: bold;
         border: 2px solid #c0c0c0;
@@ -61,15 +61,23 @@ MENU_BUTTON_STYLE = """
         font-size: 12pt;
     }
     QPushButton[class="menu-button"]:hover {
-        background-color: #e0e0e0;
+        background-color: #ececec;
     }
     QPushButton[class="menu-button"][pressed="true"] {
-        background-color: #deeef9;
+        background-color: #edf7fd;
         color: #1e3a5f;
         border: 2px solid #7c9ec0;
     }
     QPushButton[class="menu-button"][pressed="true"]:hover {
-        background-color: #cde2f4;
+        background-color: #e0eefb;
+    }
+    QPushButton[class="menu-button"][pressed="true"][dual="true"] {
+        background-color: #edf7fd;
+        color: #1e3a5f;
+        border: 2px solid #7c9ec0;
+    }
+    QPushButton[class="menu-button"][pressed="true"][dual="true"]:hover {
+        background-color: #e0eefb;
     }
 """
 
@@ -83,6 +91,7 @@ ENTRY_STYLESHEET = """
     }
     .hw { font-weight: bold; }
     .g, .ex, .i { font-style: italic; }
+    .t { font-style: normal; }
     .b { font-weight: bold; }
     .abbr { font-weight: bold; }
     .see { font-style: italic; }
@@ -90,8 +99,8 @@ ENTRY_STYLESHEET = """
     .h1 { font-weight: bold; font-size: 16pt; }
     .h2 { font-weight: bold; font-size: 14pt; }
     h1, h2 { margin: 0; }
-    .src, .source-link { font-style: normal; }
-    .sense, .gl { font-style: normal; }
+
+    .sense { font-style: normal; }
     .headword-arrow { font-weight: normal; margin-right: 4px; }
     .sense-arrow { font-weight: normal; margin-right: 4px; }
     .link, .word-link {
@@ -102,6 +111,7 @@ ENTRY_STYLESHEET = """
         text-decoration: none; color: inherit;
     }
     .link:hover, .word-link:hover { text-decoration: underline; }
+    .src, .source-link { font-style: normal; }
     .source-link { font-style: normal; color: inherit; text-decoration: none; cursor: pointer; }
     .source-link:hover { text-decoration: underline; }
     .search-highlight { background-color: #FFF9C4; }
@@ -112,4 +122,24 @@ ENTRY_STYLESHEET = """
     }
     h1 { font-weight: bold; font-size: 16pt; }
     h2 { font-weight: bold; font-size: 14pt; }
+    .preview-hw {
+        border-left: 3px solid transparent;
+        padding: 2px 0 2px 5px;
+        margin-top: 4px;
+        font-weight: bold;
+    }
+    .preview-no-results {
+        border-left: 3px solid transparent;
+        padding: 2px 0 2px 5px;
+    }
+    a.preview-hw-link {
+        color: black;
+        text-decoration: none;
+    }
+    a.preview-hw-link:hover {
+        color: black;
+        text-decoration: none;
+        border-left: 3px solid #c0c0c0;
+        background: #fafafa;
+    }
 """

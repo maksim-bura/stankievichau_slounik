@@ -1,7 +1,7 @@
 import sqlite3
 import xml.etree.ElementTree as ElementTree
 import os
-from utils.accent_utils import remove_accents
+from utils.accent_utils import remove_accents, normalize_jo, get_text_excluding_src
 
 
 def parse_with_error_handling(file_path):
@@ -72,6 +72,18 @@ def build_database():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE content_index (
+            id INTEGER PRIMARY KEY,
+            entry_id INTEGER,
+            tag_type TEXT,
+            searchable_text TEXT
+        )
+    """)
+
+    cursor.execute("CREATE INDEX idx_content_search ON content_index(tag_type, searchable_text)")
+    cursor.execute("CREATE INDEX idx_content_entry_id ON content_index(entry_id)")
+
     for entry in all_entries:
         headword_element = entry.find("hw")
         if headword_element is None:
@@ -100,6 +112,24 @@ def build_database():
                 cursor.execute(
                     "INSERT INTO sub_headwords (headword, normalized_headword, main_entry_id) VALUES (?, ?, ?)",
                     (sub_headword_element.text, sub_normalized, main_entry_id)
+                )
+
+        for t_elem in entry.iter('t'):
+            text = get_text_excluding_src(t_elem, extra_exclude={'see'}, skip_attrs={'lang': 'vl', 'excl': None})
+            if text.strip():
+                index_text = normalize_jo(remove_accents(text.lower()))
+                cursor.execute(
+                    "INSERT INTO content_index (entry_id, tag_type, searchable_text) VALUES (?, ?, ?)",
+                    (main_entry_id, 't', index_text)
+                )
+
+        for ex_elem in entry.iter('ex'):
+            text = get_text_excluding_src(ex_elem, skip_attrs={'lang': 'ru'})
+            if text.strip():
+                index_text = remove_accents(text.lower())
+                cursor.execute(
+                    "INSERT INTO content_index (entry_id, tag_type, searchable_text) VALUES (?, ?, ?)",
+                    (main_entry_id, 'ex', index_text)
                 )
 
     connection.commit()
