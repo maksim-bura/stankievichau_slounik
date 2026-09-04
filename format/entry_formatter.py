@@ -250,5 +250,6 @@ def _get_class_for_tag(tag):
         'see': 'see',
         'p': 'p',
         't': 't',
+        'tp': 'tp',
     }
     return classes.get(tag, '')

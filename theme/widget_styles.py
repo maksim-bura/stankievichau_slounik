@@ -92,6 +92,7 @@ ENTRY_STYLESHEET = """
     .hw { font-weight: bold; }
     .g, .ex, .i { font-style: italic; }
     .t { font-style: normal; }
+
     .b { font-weight: bold; }
     .abbr { font-weight: bold; }
     .see { font-style: italic; }

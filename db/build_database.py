@@ -13,7 +13,7 @@ def parse_with_error_handling(file_path):
 def get_paths():
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return {
-        'dictionary_xml': os.path.join(base, 'data', 'dictionary.xml'),
+        'dictionary_dir': os.path.join(base, 'data', 'dictionary'),
         'sources_xml': os.path.join(base, 'data', 'sources.xml'),
         'database': os.path.join(base, 'build', 'dictionary.db'),
         'build_dir': os.path.join(base, 'build'),
@@ -26,25 +26,20 @@ def needs_rebuild():
     if not os.path.exists(db_path):
         return True
     db_mtime = os.path.getmtime(db_path)
-    for key in ('dictionary_xml', 'sources_xml'):
-        xml_path = paths[key]
-        if os.path.exists(xml_path) and os.path.getmtime(xml_path) > db_mtime:
-            return True
+    if os.path.exists(paths['sources_xml']) and os.path.getmtime(paths['sources_xml']) > db_mtime:
+        return True
+    dict_dir = paths['dictionary_dir']
+    if os.path.isdir(dict_dir):
+        for fname in os.listdir(dict_dir):
+            fpath = os.path.join(dict_dir, fname)
+            if os.path.isfile(fpath) and os.path.getmtime(fpath) > db_mtime:
+                return True
     return False
 
 
 def build_database():
     paths = get_paths()
     os.makedirs(paths['build_dir'], exist_ok=True)
-
-    root_dict = parse_with_error_handling(paths['dictionary_xml'])
-    entries_dict = root_dict.findall("entry")
-
-    tree_sources = ElementTree.parse(paths['sources_xml'])
-    root_sources = tree_sources.getroot()
-    entries_sources = root_sources.findall("entry")
-
-    all_entries = entries_dict + entries_sources
 
     db_path = paths['database']
     if os.path.exists(db_path):
@@ -59,7 +54,8 @@ def build_database():
             headword TEXT,
             normalized_headword TEXT,
             full_entry TEXT,
-            entry_link TEXT
+            entry_link TEXT,
+            source_file TEXT
         )
     """)
 
@@ -84,23 +80,22 @@ def build_database():
     cursor.execute("CREATE INDEX idx_content_search ON content_index(tag_type, searchable_text)")
     cursor.execute("CREATE INDEX idx_content_entry_id ON content_index(entry_id)")
 
-    for entry in all_entries:
+    def _insert_entry(entry, source_file):
         headword_element = entry.find("hw")
         if headword_element is None:
-            continue
+            return
 
         headword = ''.join(headword_element.itertext()).strip()
-
         if not headword:
-            continue
+            return
 
         normalized_headword = remove_accents(headword).lower()
         entry_string = ElementTree.tostring(entry, encoding="unicode")
         entry_link = entry.get('link')
 
         cursor.execute(
-            "INSERT INTO dictionary (headword, normalized_headword, full_entry, entry_link) VALUES (?, ?, ?, ?)",
-            (headword, normalized_headword, entry_string, entry_link)
+            "INSERT INTO dictionary (headword, normalized_headword, full_entry, entry_link, source_file) VALUES (?, ?, ?, ?, ?)",
+            (headword, normalized_headword, entry_string, entry_link, source_file)
         )
 
         main_entry_id = cursor.lastrowid
@@ -131,6 +126,20 @@ def build_database():
                     "INSERT INTO content_index (entry_id, tag_type, searchable_text) VALUES (?, ?, ?)",
                     (main_entry_id, 'ex', index_text)
                 )
+
+    dict_dir = paths['dictionary_dir']
+    for fname in sorted(os.listdir(dict_dir)):
+        fpath = os.path.join(dict_dir, fname)
+        if not os.path.isfile(fpath) or not (fname.endswith('.xml') or fname.endswith('.txt')):
+            continue
+        root = parse_with_error_handling(fpath)
+        for entry in root.findall("entry"):
+            _insert_entry(entry, fname)
+
+    tree_sources = ElementTree.parse(paths['sources_xml'])
+    root_sources = tree_sources.getroot()
+    for entry in root_sources.findall("entry"):
+        _insert_entry(entry, 'sources.xml')
 
     connection.commit()
     connection.close()

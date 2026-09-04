@@ -54,14 +54,14 @@ class SearchEngine:
 
         if clean_text == "":
             cursor.execute("""
-                SELECT id, headword, full_entry, entry_link
+                SELECT id, headword, full_entry, entry_link, source_file
                 FROM dictionary
                 ORDER BY normalized_headword
             """)
             main_results = cursor.fetchall()
 
             cursor.execute("""
-                SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link
+                SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
                 FROM sub_headwords
                 JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
                 ORDER BY sub_headwords.normalized_headword
@@ -80,7 +80,7 @@ class SearchEngine:
         sql_pattern = '%' + sql_pattern.replace(' ', '%') + '%'
 
         cursor.execute("""
-            SELECT id, headword, full_entry, entry_link
+            SELECT id, headword, full_entry, entry_link, source_file
             FROM dictionary
             WHERE normalized_headword LIKE ?
             ORDER BY normalized_headword
@@ -88,7 +88,7 @@ class SearchEngine:
         main_results = cursor.fetchall()
 
         cursor.execute("""
-            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link
+            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
             FROM sub_headwords
             JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
             WHERE sub_headwords.normalized_headword LIKE ?
@@ -124,13 +124,13 @@ class SearchEngine:
         placeholders = ','.join(['?'] * len(entry_ids))
 
         cursor.execute(f"""
-            SELECT id, headword, full_entry, entry_link FROM dictionary
+            SELECT id, headword, full_entry, entry_link, source_file FROM dictionary
             WHERE id IN ({placeholders})
         """, entry_ids)
         main_results = cursor.fetchall()
 
         cursor.execute(f"""
-            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link
+            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
             FROM sub_headwords
             JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
             WHERE dictionary.id IN ({placeholders})
@@ -184,11 +184,16 @@ class SearchEngine:
                 main_hw = root.find('.//hw')
                 preview_hw = ''.join(main_hw.itertext()).strip() if main_hw is not None else headword
 
+            rank, word_pos, word_len = self._compute_t_match_rank(element, pattern, tag)
+
             preview_html = self._build_preview_html(element, tag, pattern, parent_map)
             previews.append({
                 'headword': preview_hw,
                 'preview_html': preview_html,
                 'paragraph_break': paragraph_break,
+                'rank': rank,
+                'word_pos': word_pos,
+                'word_len': word_len,
             })
             prev_element = element
         return previews
@@ -244,17 +249,13 @@ class SearchEngine:
             if child.tail:
                 segments.append(child.tail)
                 layout.append(('seg', len(segments) - 1))
-        highlighted_segments = [
-            self._apply_highlight(seg, pattern, normalize=(tag == 't'))
-            for seg in segments
-        ]
-        result_parts = []
+        html_parts = []
         for entry_type, idx in layout:
             if entry_type == 'seg':
-                result_parts.append(highlighted_segments[idx])
+                html_parts.append(segments[idx])
             else:
-                result_parts.append(excluded_fragments[idx])
-        highlighted = ''.join(result_parts)
+                html_parts.append(excluded_fragments[idx])
+        highlighted = self._apply_highlight(''.join(html_parts), pattern, normalize=(tag == 't'))
 
         if tag == 't':
             highlighted = self._add_translation_context(highlighted, element, parent_map)
@@ -321,25 +322,57 @@ class SearchEngine:
                 protected = self._protect_class_blocks(protected, cls, all_saved)
 
         parts = re.split(r'(<[^>]*>)', protected)
+
+        text_ranges = []
+        concat_pos = 0
         for i, part in enumerate(parts):
             if not part.startswith('<') and part and '\x00' not in part:
-                normalized = normalize_jo(part) if normalize else part
-                if normalized == part:
-                    parts[i] = pattern.sub(
-                        r'<span style="background-color: #FFF9C4;">\g<0></span>',
-                        part
-                    )
+                text_ranges.append((concat_pos, i))
+                concat_pos += len(part)
+
+        if not text_ranges:
+            result = ''.join(parts)
+            for _ in range(2):
+                for j, block in enumerate(all_saved):
+                    result = result.replace(f'\x00A{j}\x00', block)
+            return result
+
+        concatenated = ''.join(parts[r[1]] for r in text_ranges)
+        normalized = normalize_jo(concatenated) if normalize else concatenated
+
+        matches = list(pattern.finditer(normalized))
+
+        highlights_per_part = {}
+        for m in matches:
+            ms, me = m.start(), m.end()
+            for concat_start, part_idx in text_ranges:
+                part_len = len(parts[part_idx])
+                concat_end = concat_start + part_len
+                if me <= concat_start or ms >= concat_end:
+                    continue
+                local_start = max(ms - concat_start, 0)
+                local_end = min(me - concat_start, part_len)
+                highlights_per_part.setdefault(part_idx, []).append((local_start, local_end))
+
+        for part_idx, ranges in highlights_per_part.items():
+            ranges.sort()
+            merged = []
+            for s, e in ranges:
+                if merged and s <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], e))
                 else:
-                    result = []
-                    last = 0
-                    for m in pattern.finditer(normalized):
-                        result.append(part[last:m.start()])
-                        result.append(
-                            f'<span style="background-color: #FFF9C4;">{part[m.start():m.end()]}</span>'
-                        )
-                        last = m.end()
-                    result.append(part[last:])
-                    parts[i] = ''.join(result)
+                    merged.append((s, e))
+            part = parts[part_idx]
+            result_parts = []
+            last = 0
+            for s, e in merged:
+                result_parts.append(part[last:s])
+                result_parts.append(
+                    f'<span style="background-color: #FFF9C4;">{part[s:e]}</span>'
+                )
+                last = e
+            result_parts.append(part[last:])
+            parts[part_idx] = ''.join(result_parts)
 
         result = ''.join(parts)
         for _ in range(2):
@@ -417,25 +450,79 @@ class SearchEngine:
                     return ''.join(el.itertext()).strip()
         return None
 
+    def _compute_t_match_rank(self, t_element, pattern, tag):
+        if tag != 't':
+            return (7, 0, 0)
+        lvl = t_element.get('lvl')
+        tp_children = [child for child in t_element if child.tag == 'tp']
+        if not lvl and not tp_children:
+            return (7, 0, 0)
+        candidates = []
+        if lvl:
+            candidates.append(self._rank_from_level(t_element, lvl, pattern))
+        for tp in tp_children:
+            candidates.append(self._rank_from_tp(tp, pattern))
+        return min(candidates)
+
+    def _rank_from_level(self, element, lvl, pattern):
+        text = get_text_excluding_src(element)
+        clean = normalize_jo(remove_accents(text.lower()))
+        m = pattern.search(clean)
+        if not m:
+            return (7, 0, 0)
+        is_exact = m.start() == 0 and m.end() == len(clean)
+        base = 1 if lvl == '1' else 3 if lvl == '2' else 5
+        if is_exact:
+            return (base, 0, 0)
+        return (base + 1,) + self._compute_portion_info(text, clean, m)
+
+    def _rank_from_tp(self, tp, pattern):
+        lvl = tp.get('lvl', '1')
+        text = get_text_excluding_src(tp)
+        clean = normalize_jo(remove_accents(text.lower()))
+        m = pattern.search(clean)
+        if not m:
+            return (7, 0, 0)
+        is_exact = m.start() == 0 and m.end() == len(clean)
+        base = 1 if lvl == '1' else 3 if lvl == '2' else 5
+        if is_exact:
+            return (base, 0, 0)
+        return (base + 1,) + self._compute_portion_info(text, clean, m)
+
+    def _compute_portion_info(self, orig_text, clean_text, match):
+        orig_words = orig_text.split()
+        clean_words = clean_text.split()
+        if not clean_words:
+            return (1, 0)
+        offset = 0
+        for i, cw in enumerate(clean_words):
+            word_end = offset + len(cw)
+            if match.start() < word_end:
+                ow = orig_words[i] if i < len(orig_words) else cw
+                clean_len = len(re.sub(r'\W', '', ow, flags=re.UNICODE))
+                return (0 if i == 0 else 1, clean_len)
+            offset = word_end + 1
+        return (1, 0)
+
     def get_entry_by_headword(self, headword):
         conn = self._get_connection()
         cursor = conn.cursor()
         search_headword = remove_accents(headword).lower()
         cursor.execute("""
-            SELECT id, headword, full_entry, entry_link
+            SELECT id, headword, full_entry, entry_link, source_file
             FROM dictionary
             WHERE normalized_headword = ?
         """, (search_headword,))
         result = cursor.fetchone()
         if result:
-            return result[0], result[1], result[2], result[3]
-        return None, None, None, None
+            return result[0], result[1], result[2], result[3], result[4]
+        return None, None, None, None, None
 
     def get_entry_by_id(self, entry_link):
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, headword, full_entry, entry_link
+            SELECT id, headword, full_entry, entry_link, source_file
             FROM dictionary
             WHERE entry_link = ?
         """, (entry_link,))

@@ -398,15 +398,29 @@ class MainWindow(QMainWindow):
                 for p in result[4]:
                     key = (result[0], p['headword'])
                     if key not in groups:
-                        groups[key] = {'headword': remove_accents(p['headword']), 'htmls': [], 'breaks': []}
+                        groups[key] = {'headword': remove_accents(p['headword']), 'htmls': [], 'breaks': [], 'rank': p.get('rank', 7), 'word_pos': p.get('word_pos', 999), 'word_len': p.get('word_len', 999)}
                     if p['preview_html'] not in groups[key]['htmls']:
                         groups[key]['htmls'].append(p['preview_html'])
                         groups[key]['breaks'].append(p.get('paragraph_break', False))
+                        r = p.get('rank', 7)
+                        if r < groups[key]['rank']:
+                            groups[key]['rank'] = r
+                            groups[key]['word_pos'] = p.get('word_pos', 999)
+                            groups[key]['word_len'] = p.get('word_len', 999)
+                        elif r == groups[key]['rank']:
+                            wp = p.get('word_pos', 999)
+                            if wp < groups[key]['word_pos']:
+                                groups[key]['word_pos'] = wp
+                                groups[key]['word_len'] = p.get('word_len', 999)
+                            elif wp == groups[key]['word_pos']:
+                                wl = p.get('word_len', 999)
+                                if wl < groups[key]['word_len']:
+                                    groups[key]['word_len'] = wl
         if not groups:
             return
         html_parts = ['<body>']
         first_group = True
-        for key in sorted(groups, key=lambda k: k[1].lower()):
+        for key in sorted(groups, key=lambda k: (groups[k]['rank'], groups[k]['word_pos'], groups[k]['word_len'], k[1].lower())):
             g = groups[key]
             if not first_group:
                 html_parts.append('<br><br>')

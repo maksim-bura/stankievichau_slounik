@@ -9,3 +9,5 @@ venv/
 dist/
 *.exe
 build/
+*.db
+db/test_*.py
