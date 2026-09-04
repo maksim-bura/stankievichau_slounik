@@ -83,6 +83,24 @@ dictionary_app/
 | Example (`<ex>`) search indexing | `<src>`, `<st>`, `<i lang="ru">` |
 | Example preview highlight | Same as indexing |
 
+### Search Ranking
+Translation and example preview results are sorted by a computed rank tuple `(rank, word_pos, word_len)`:
+
+| Rank | Match type | Source |
+|---|---|---|
+| 1 | Exact word | `<t lvl="1">` or `<tp lvl="1">` |
+| 2 | Portion of phrase | `<t lvl="1">` or `<tp lvl="1">` |
+| 3 | Exact word | `<t lvl="2">` or `<tp lvl="2">` |
+| 4 | Portion of phrase | `<t lvl="2">` or `<tp lvl="2">` |
+| 5 | Exact word | `<t lvl="3">` or `<tp lvl="3">` |
+| 6 | Portion of phrase | `<t lvl="3">` or `<tp lvl="3">` |
+| 7 | No `lvl` / `<ex>` match | — |
+
+- Both `<t>` (direct `lvl` attribute) and `<tp>` (child element with `lvl`) are evaluated; `min()` picks the best rank
+- `<tp>` defaults to `lvl="1"` when `lvl` is absent
+- Portions sort: primary by word position in the text (earlier wins), secondary by word length (shorter wins)
+- All other preview metadata (sense numbers, grouping, spacing) is identical; ranking only controls sort order
+
 ### Preview System
 - Translation previews: sense number (from enclosing `<sense>`) prepended as `<span class="b">`, optional preceding `<ex>—` prepended as `<span class="g">`
 - Example previews: trailing `—<t>` appended as `<span class="t">` when pattern detected
