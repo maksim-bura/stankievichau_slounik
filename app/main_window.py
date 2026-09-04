@@ -1,4 +1,3 @@
-import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QListWidget, QSplitter, QApplication
@@ -27,7 +26,6 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.search_engine = search_engine
-        self.link_handler = LinkHandler()
         self.current_display_xml = None
         self.current_display_xml_id = None
         self.current_display_headword = None
@@ -68,7 +66,6 @@ class MainWindow(QMainWindow):
         self.search_box.activate.connect(
             lambda: self._on_keyboard_activate())
 
-        self.results_list.set_width()
         self.entry_viewer.navigation_bar.close_button.clicked.connect(self._dismiss_highlight)
 
     def showEvent(self, event):
@@ -114,7 +111,7 @@ class MainWindow(QMainWindow):
                     result_to_display = entry_data
 
         if result_to_display:
-            root = ElementTree.fromstring(result_to_display[2])
+            root = self.search_engine.get_parsed_entry(result_to_display[0], result_to_display[2])
             main_headword_element = root.find('hw')
             main_headword = remove_accents(main_headword_element.text) if main_headword_element is not None else ""
             compare_to = target_headword
@@ -172,7 +169,7 @@ class MainWindow(QMainWindow):
                     self._last_preview_html = self.entry_viewer.stored_html
                     self.entry_viewer.navigation_bar.push(result[1], None, '__preview__')
                     if anchor:
-                        root = ElementTree.fromstring(result[2])
+                        root = self.search_engine.get_parsed_entry(result[0], result[2])
                         main_hw = root.find('hw')
                         main_headword = remove_accents(main_hw.text) if main_hw is not None else ""
                         if anchor != main_headword:
@@ -185,7 +182,7 @@ class MainWindow(QMainWindow):
                     if anchor:
                         self.entry_scroll_manager.scroll_to_anchor(anchor)
             return
-        link_type, target, sense_parts, entry_link = self.link_handler.process_url(url_string)
+        link_type, target, sense_parts, entry_link = LinkHandler.process_url(url_string)
 
         if link_type == 'word' and target:
             self.open_entry_by_headword(target, sense_parts, entry_link, from_navigation=False)

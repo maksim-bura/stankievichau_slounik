@@ -159,19 +159,9 @@ class EditorPane(QWidget):
         self.content_changed.emit()
 
     def insert_tag(self, tag_name):
-        if tag_name == 'lvl1':
+        if tag_name.startswith('lvl'):
             cursor = self._text_edit.textCursor()
-            cursor.insertText('lvl="1"')
-            self._text_edit.setTextCursor(cursor)
-            return
-        if tag_name == 'lvl2':
-            cursor = self._text_edit.textCursor()
-            cursor.insertText('lvl="2"')
-            self._text_edit.setTextCursor(cursor)
-            return
-        if tag_name == 'lvl3':
-            cursor = self._text_edit.textCursor()
-            cursor.insertText('lvl="3"')
+            cursor.insertText(f'lvl="{tag_name[-1]}"')
             self._text_edit.setTextCursor(cursor)
             return
 

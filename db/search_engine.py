@@ -153,16 +153,16 @@ class SearchEngine:
         for i, result in enumerate(results):
             entry_id, headword, full_entry, entry_link = result[:4]
             clean_headword = remove_accents(headword)
-            root = ElementTree.fromstring(full_entry)
+            root = self.get_parsed_entry(entry_id, full_entry)
             previews = self._find_content_matches(root, headword, tag, pattern, full_entry)
             previews = [p for p in previews if remove_accents(p['headword']) == clean_headword or clean_headword in remove_accents(p['headword']).split('|')]
             results[i] = result[:4] + (previews,)
 
     def _find_content_matches(self, root, headword, tag, pattern, xml_data=None):
         parent_map = {c: p for p in root.iter() for c in p}
-        previews = []
-        prev_element = None
-        last_xml_end = 0
+        all_elements = list(root.iter())
+
+        matched = []
         for element in root.iter(tag):
             search_text = get_text_excluding_src(
                 element,
@@ -174,12 +174,36 @@ class SearchEngine:
             if not search_text:
                 continue
             normalized_search = normalize_jo(remove_accents(search_text)) if tag == 't' else remove_accents(search_text)
-            if not pattern.search(normalized_search):
-                continue
+            if pattern.search(normalized_search):
+                matched.append(element)
 
+        if tag == 't':
+            matched_ids = {id(el) for el in matched}
+            absorbed = set()
+            for el in matched:
+                parent = parent_map.get(el)
+                if parent is None:
+                    continue
+                siblings = list(parent)
+                try:
+                    i = siblings.index(el)
+                except ValueError:
+                    continue
+                if i + 2 < len(siblings):
+                    nxt = siblings[i + 1]
+                    nxt2 = siblings[i + 2]
+                    if (nxt.tag == 'ex' and nxt.tail and '—' in nxt.tail
+                            and nxt2.tag == 't' and id(nxt2) in matched_ids):
+                        absorbed.add(id(el))
+            matched = [el for el in matched if id(el) not in absorbed]
+
+        previews = []
+        prev_element = None
+        last_xml_end = 0
+        for element in matched:
             paragraph_break = self._detect_preview_break(prev_element, element, xml_data, last_xml_end)
 
-            preview_hw = self._find_closest_hw(root, element)
+            preview_hw = self._find_closest_hw(element, parent_map, all_elements)
             if preview_hw is None:
                 main_hw = root.find('.//hw')
                 preview_hw = ''.join(main_hw.itertext()).strip() if main_hw is not None else headword
@@ -277,7 +301,11 @@ class SearchEngine:
                 prev_sib = siblings[idx - 1]
                 if prev_sib.tag == 'ex' and prev_sib.tail and '—' in prev_sib.tail:
                     ex_fmt = _process_element(prev_sib, None)
-                    highlighted = f'<span class="g">{ex_fmt}</span>—' + highlighted
+                    context_prefix = ''
+                    if idx > 1:
+                        earlier = siblings[idx - 2]
+                        context_prefix = self._format_child_for_preview(earlier) + (earlier.tail or '')
+                    highlighted = f'{context_prefix}<span class="g">{ex_fmt}</span>—' + highlighted
 
         b_html = ''
         current = element
@@ -412,8 +440,7 @@ class SearchEngine:
             pos = i
         return ''.join(result)
 
-    def _find_closest_hw(self, root, element):
-        parent_map = {c: p for p in root.iter() for c in p}
+    def _find_closest_hw(self, element, parent_map, all_elements):
         match_sense = None
         current = element
         while current in parent_map:
@@ -425,7 +452,6 @@ class SearchEngine:
             hw_attr = match_sense.get('hw')
             if hw_attr:
                 return hw_attr
-        all_elements = list(root.iter())
         try:
             element_index = all_elements.index(element)
         except ValueError:

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QBrush, QPalette
 from utils.accent_utils import remove_accents, normalize_jo
-from db.build_database import get_paths
+from db.build_database import get_source_path
 from app.widgets import SearchBox
 from markup.editor import MarkupEditor
 from markup.checked_state import CheckedState
@@ -305,11 +305,7 @@ class MarkupMainWindow(QMainWindow):
     def _read_entry_from_source(self, entry_id, source_file, headword=None):
         if not source_file:
             return None
-        paths = get_paths()
-        if source_file == 'sources.xml':
-            file_path = paths['sources_xml']
-        else:
-            file_path = os.path.join(paths['dictionary_dir'], source_file)
+        file_path = get_source_path(source_file)
         if not os.path.exists(file_path):
             return None
         try:
@@ -371,11 +367,7 @@ class MarkupMainWindow(QMainWindow):
             QMessageBox.warning(self, 'Save Error', 'No source file found for this entry.')
             return
 
-        paths = get_paths()
-        if source_file == 'sources.xml':
-            file_path = paths['sources_xml']
-        else:
-            file_path = os.path.join(paths['dictionary_dir'], source_file)
+        file_path = get_source_path(source_file)
 
         if not os.path.exists(file_path):
             QMessageBox.warning(self, 'Save Error', f'Source file not found: {source_file}')
