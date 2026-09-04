@@ -49,12 +49,13 @@ def build_filtered_html(all_children, collapsed_sections, arrow_marker, search_t
     return result
 
 
-def section_matches(section, pattern):
+def _parse_section(section):
     sec_children = list(section)
-    if not sec_children or sec_children[0].tag != 'h2':
-        return False
+    h2_elem = sec_children[0]
     idx = 1
+    h2_br = []
     while idx < len(sec_children) and sec_children[idx].tag == 'br':
+        h2_br.append('<br>')
         idx += 1
     gabbr_elem = None
     if section.get('id') == '4' and idx < len(sec_children) and sec_children[idx].tag == 'gabbr':
@@ -63,6 +64,14 @@ def section_matches(section, pattern):
     content = sec_children[idx:]
     gabbr_groups = _split_into_abbr_groups(list(gabbr_elem) if gabbr_elem is not None else [])
     content_groups = _split_into_abbr_groups(content)
+    return h2_elem, h2_br, gabbr_groups, content_groups
+
+
+def section_matches(section, pattern):
+    sec_children = list(section)
+    if not sec_children or sec_children[0].tag != 'h2':
+        return False
+    _, _, gabbr_groups, content_groups = _parse_section(section)
     return any(
         _group_matches(g, pattern)
         for g in gabbr_groups + content_groups
@@ -70,15 +79,8 @@ def section_matches(section, pattern):
 
 
 def _render_section(parts, section, pattern, collapsed_sections):
-    sec_children = list(section)
-    h2_elem = sec_children[0]
     section_id = section.get('id', '')
-
-    idx = 1
-    h2_br = []
-    while idx < len(sec_children) and sec_children[idx].tag == 'br':
-        h2_br.append('<br>')
-        idx += 1
+    h2_elem, h2_br, gabbr_groups, content_groups = _parse_section(section)
 
     is_collapsed = section_id in collapsed_sections
     button = f'<a class="toggle-btn" href="toggle-section:{section_id}">{"&#9654;" if is_collapsed else "&#9660;"}</a> '
@@ -88,16 +90,6 @@ def _render_section(parts, section, pattern, collapsed_sections):
 
     if is_collapsed:
         return
-
-    gabbr_elem = None
-    if section.get('id') == '4' and idx < len(sec_children) and sec_children[idx].tag == 'gabbr':
-        gabbr_elem = sec_children[idx]
-        idx += 1
-
-    content = sec_children[idx:]
-
-    gabbr_groups = _split_into_abbr_groups(list(gabbr_elem) if gabbr_elem is not None else [])
-    content_groups = _split_into_abbr_groups(content)
 
     parts.extend(h2_br)
 

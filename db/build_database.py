@@ -20,6 +20,13 @@ def get_paths():
     }
 
 
+def get_source_path(source_file):
+    paths = get_paths()
+    if source_file == 'sources.xml':
+        return paths['sources_xml']
+    return os.path.join(paths['dictionary_dir'], source_file)
+
+
 def needs_rebuild():
     paths = get_paths()
     db_path = paths['database']
@@ -42,11 +49,13 @@ def build_database():
     os.makedirs(paths['build_dir'], exist_ok=True)
 
     db_path = paths['database']
-    if os.path.exists(db_path):
-        os.remove(db_path)
 
     connection = sqlite3.connect(db_path)
     cursor = connection.cursor()
+
+    cursor.execute("DROP TABLE IF EXISTS dictionary")
+    cursor.execute("DROP TABLE IF EXISTS sub_headwords")
+    cursor.execute("DROP TABLE IF EXISTS content_index")
 
     cursor.execute("""
         CREATE TABLE dictionary (

@@ -33,9 +33,6 @@ class SearchResultsList:
         self._widget.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._widget.setItemDelegate(_ElidingDelegate(self._widget))
 
-    def set_width(self):
-        self._widget.setFixedWidth(RESULTS_MIN_WIDTH)
-
     def _select_row(self, row):
         self._widget.clearSelection()
         item = self._widget.item(row)

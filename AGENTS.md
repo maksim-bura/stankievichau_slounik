@@ -76,6 +76,7 @@ dictionary_app/
 - `content_index` table in `dictionary.db`: `(entry_id, tag_type, searchable_text)` + indexes
 - Built by `build_database.py` — extracts `<t>`/`<ex>` text at build time with same exclusion rules as the search engine
 - Translation/examples search queries the index via `LIKE` first, then fetches only matching entries for preview building — avoids parsing all 30k XML strings per query
+- `SearchEngine.get_parsed_entry(entry_id, xml_string)` parses an entry XML once and caches the root in `_parsed_cache` keyed by `entry_id`. It is reused wherever entry roots are needed (`_annotate_content_matches`, `SearchResultsList.on_clicked`, `open_entry_by_headword`, preview-link clicks) so the same entry is never re-parsed per action.
 
 ### Exclusion Rules
 | Context | Excluded elements |
@@ -104,7 +105,8 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 - All other preview metadata (sense numbers, grouping, spacing) is identical; ranking only controls sort order
 
 ### Preview System
-- Translation previews: sense number (from enclosing `<sense>`) prepended as `<span class="b">`, optional preceding `<ex>—` prepended as `<span class="g">`
+- Translation previews: sense number (from enclosing `<sense>`) prepended as `<span class="b">`; a preceding `<ex>` with `—` tail is prepended as `<span class="g">…</span>—`. The sibling before that `<ex>` is also kept as leading context, but placed OUTSIDE the `<span class="g">` and rendered via `_format_child_for_preview` so it retains its own element formatting (e.g. a `<t>` stays non-italic), with its tail as separator — so `в лицо. <ex>У вабліччу…</ex>—` reads naturally.
+- **Absorbed-`<t>` suppression (translation only):** when a matched `<t>` is immediately followed by an `<ex>` (with `—` tail) whose next sibling is another matched `<t>`, the earlier `<t>` becomes the leading context of the later one and is NOT emitted as its own standalone preview — this avoids duplicating it (e.g. `в лицо` matched twice shows as one `в лицо. У вабліччу… —в лицо мне…` preview).
 - Example previews: trailing `—<t>` appended as `<span class="t">` when pattern detected
 - Multiple matching elements with the same headword within one entry are **grouped** into one preview
 - Preview spacing: `<br>` between sense previews only when `<br>` exists in the raw XML between matched elements; ` <br><br>` between headword groups
@@ -220,7 +222,7 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 - **`__preview__` sentinel**: `open_entry_by_headword` intercepts `headword == '__preview__'` and calls `_restore_preview()` (restores `_last_preview_html`, clears display state and nav bar). Preserve this sentinel value and its handling.
 - `open_entry_by_headword(headword, sense_parts, from_navigation)`:
   - `__preview__` → restore preview and return.
-  - Resolves the entry: by `entry_link` (if given) or by headword, searching `current_results` first (exact, then accent-stripped) then the DB.
+  - Resolves the entry: by `entry_link` (if given) or by headword, searching `current_results` first (exact, then accent-stripped) then the DB. Parses the resolved entry via `get_parsed_entry` (see Content Index for the shared cache).
   - Sets format target: `set_target_senses(sense_parts, headword)` if sense_parts given; else `set_target_subheadword` if accent-stripped target differs from main headword; else `clear_target()`.
   - Pushes to nav stack only when NOT `from_navigation` and headword changed; if the previous headword was None but `_last_preview_html` exists, pushes `__preview__` as the older entry.
   - Scrolls to the appropriate anchor (`sense_{n}`, link `#hash`, or the headword).
@@ -259,7 +261,7 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 
 ## Build / Rebuild
 - `needs_rebuild()` (called in `run.py` BEFORE the QApplication is created): True if the DB is missing, if `data/sources.xml` is newer than the DB, or if ANY file in `data/dictionary/` is newer than the DB.
-- `build_database()` iterates `data/dictionary/` files in sorted filename order (both `.xml` and `.txt`), plus `sources.xml` (`source_file='sources.xml'`).
+- `build_database()` iterates `data/dictionary/` files in sorted filename order (both `.xml` and `.txt`), plus `sources.xml` (`source_file='sources.xml'`). It reuses the existing DB file (drops/recreates the three tables) rather than `os.remove`-ing it, so a second process holding the DB open does not block a rebuild on Windows. `get_source_path(source_file)` maps a `source_file` (e.g. `'sources.xml'` or a split file name) to its absolute path; both apps use it instead of re-deriving paths.
 - At build time the SAME exclusion rules as the search engine are used when building `content_index` (see Exclusion Rules). Translation index text is normalized with `normalize_jo(remove_accents(...))`; example index with `remove_accents(...)` only (no ё→е).
 - `normalized_headword = remove_accents(headword).lower()` at build time.
 
