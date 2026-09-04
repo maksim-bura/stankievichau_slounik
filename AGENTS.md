@@ -69,6 +69,8 @@ dictionary_app/
 - **Combined mode**: headwords ON + examples ON, translations OFF — headword matches fill the results list, example matches fill previews
 - **Any other combination** (or headwords-only) → standard headword search with results list visible
 - Empty search results show `"Няма вынiкаў."` in the entry pane; the results list is left empty
+- **Settings state machine** (`SettingsButton.get_option_states`): radio2 "Russian" → `{headwords:False, translations:True, examples:False}`; radio1 "Belarusian" → `{headwords:<sub0>, translations:False, examples:<sub1>}` — translations is ALWAYS False for Belarusian. Sub-options (Belarusian) control headwords + examples only.
+- **Combined mode does a dual search**: `on_search` runs TWO separate `search_engine.search()` calls (headwords-only fills the list, examples-only fills previews). This keeps the results list showing only headword matches. Do NOT collapse this into a single call.
 
 ### Content Index
 - `content_index` table in `dictionary.db`: `(entry_id, tag_type, searchable_text)` + indexes
@@ -116,11 +118,32 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 - Multi-word queries: regex `\s+` between word patterns
 - `ё`↔`е` mapping (`normalize_je`): applied only for translation search, not for examples
 
+### Accent-Handling Chain
+`remove_accents` is applied at EVERY layer: SQL `normalized_headword` at build time, query normalization, result-list item display text, entry-link matching, and preview headwords. Never drop an accent-strip step on one layer only — it must stay consistent across build, search, and display.
+- `normalize_jo` (`ё`→`е`, `Ё`→`Е`) is applied **only** for translation search (`tag='t'`), never for examples. Reference it via `utils/accent_utils.normalize_jo`.
+- In `MainWindow.on_search`: `_search_normalize` is set True only when translations-only (translations ON and examples OFF); `_search_in_headwords` mirrors the option. These flags steer which classes get highlighted (see Highlighting).
+
+### Wildcard / LIKE building
+- Headword search builds a SQL `LIKE` pattern from the query: `?` → `_`, `*` → `%`, then wraps with `%`, then re-filters results by the compiled regex on accent-stripped text (regex is authoritative; LIKE only narrows candidates).
+- Empty query returns ALL entries (dictionary + sub_headwords) deduplicated by `(id, headword)`, sorted case-insensitively by `headword.lower()`, with `!SOURCES` filtered out.
+
 ### Entry Formatting
 - `entry_formatter._process_element` is recursive: processes children via `LinkHandler` for linkable tags (`src`, `st`, `see`), CSS‑class‑wraps others
 - Each child's CSS class is applied by the **parent iteration** (not self-formatting) — no double-wrapping
 - `<src>` links get `font-style: normal`; `<st>` links inherit italic
 - `LinkHandler.create_link` handles source abbreviation resolution via `SourceMapper`
+- `<tp>` gets its CSS class (`tp`) but no special styling beyond the class mapping
+- **Comma-splitting quirks (preserve these):**
+  - If a `<hw>` element's tail starts with `,`, the comma is split off and placed **inside** the `<span id="anchor">…,` so it stays part of the clickable/linkable anchor rather than dangling outside.
+  - If a `<g>` element's tail starts with `,`, the comma gets its own `<span class="g">` wrapper and the remaining tail is plain text.
+- `_sense_matches_headword` / sense targeting: a `<sense>` element is only considered if its `n` attribute matches a target sense (digit for numeric, string otherwise) AND (if it has an `hw` attribute) the target headword is among its pipe-separated variants, accent-stripped.
+- Context (`FormatContext`) is module-level global state set via `set_target_subheadword` / `set_target_senses` / `clear_target`; `_process_element` reads it to prepend `➡️` arrows and wrap targeted senses/headwords in anchor spans.
+
+### Source Mapping (`SourceMapper`)
+- Singleton (`__new__`), loads `data/source_mappings.json`, builds a variant→abbreviation map (`_variant_to_abbr`).
+- **Space-prefix rule (preserve):** six abbreviations (`акр.`, `п.`, `пав.`, `р.`, `с.`, `вол.`) are in `_space_prefixed_only` and only match when preceded by a space or at position 0. This prevents false matches inside words (e.g. not matching `«п.»` inside `«ап.»`). Do NOT remove or generalize this whitelist.
+- `get_abbreviation(text)`: exact match first, then longest-variant-first fallback.
+- `extract_abbreviations(text)`: uses a compiled combined regex and returns `(abbr, variant)` pairs; same space-prefix check applies.
 
 ### Window Layout (`MainWindow.setup_ui`)
 - Vertical main layout: top row (search box + sources button + settings button), bottom row (results list + splitter)
@@ -134,7 +157,7 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 ### Entry Viewer (`EntryViewer`)
 - `DictTextBrowser` (QTextBrowser subclass) inside a QVBoxLayout with `NavigationBar` above it
 - Read-only, no external links (`setOpenExternalLinks(False)`), `ClickFocus` policy
-- Document margin: 15px left/right (`DOCUMENT_MARGIN`) via `rootFrame().frameFormat()`
+- Document margin: 15px left/right (`DOCUMENT_MARGIN`) via `rootFrame().frameFormat()` — **re-applied on every `setHtml`** because Qt resets the root frame format when HTML is set.
 - `ENTRY_STYLESHEET` set as document default stylesheet for HTML rendering
 - `stored_html` holds the last displayed HTML for refresh/restore
 - `ScrollManager` handles anchor scroll, resize re-scroll, and cached state restore
@@ -182,18 +205,40 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 - Loaded from `data/sources.xml` via `SourcesRenderer` (XML to HTML)
 - Search box filters source entries by text match
 - Panel shown/hidden via toggle button; visibility tracked in `sources_panel_visible`
+- **Collapse/search state machine (preserve):** `_collapsed_sections` (a set) tracks collapsed `<section>` ids. Search **auto-expands** collapsed sections that match; on clearing the search, the pre-search collapsed state is restored. Hiding the panel resets all collapsed state and the anchor.
+- `scroll_to_source(abbr)`: strips trailing `:`/`.` from the abbreviation for anchor lookup, auto-expands collapsed sections containing the target, calls `QApplication.processEvents()` before scrolling so layout is computed.
+- `SourcesToggle.toggle()` resizes the splitter (half entry / half sources) on show; on hide it combines entry+sources width back.
 
 ### Scroll Manager (`ScrollManager`)
 - `scroll_to_anchor(anchor)`: sets HTML `#anchor`, timers for scroll (100ms) and resize re-scroll (150ms)
 - `cache_state()` / `restore_state()`: save/restore scroll position across refreshes
 - `save_scroll()` / `restore_content()`: debounce content changes, restore scroll after 50ms delay
 - `handle_resize()`: re-scrolls to anchor after 150ms debounce
+- `last_anchor` is cleared to `None` after every `display_entry` and `clear_cache`.
+
+### Link Routing (`on_link_clicked` + `open_entry_by_headword`)
+- URL schemes: `preview:`, `word:`, `source:`. All are routed through `LinkHandler.process_url` / `on_link_clicked`, and `DictTextBrowser.setSource` blocks native navigation for `word:`/`source:`/`preview:` so clicks are handled in code.
+- **Preview links** (`preview:{entry_id}|{anchor}`): URL-decode the anchor if it contains `%`, look up the result in `current_results` first then fall back to a direct DB query, set `_highlight_entry = True`, save `_last_preview_html`, and push the `__preview__` sentinel onto the nav stack.
+- **`__preview__` sentinel**: `open_entry_by_headword` intercepts `headword == '__preview__'` and calls `_restore_preview()` (restores `_last_preview_html`, clears display state and nav bar). Preserve this sentinel value and its handling.
+- `open_entry_by_headword(headword, sense_parts, from_navigation)`:
+  - `__preview__` → restore preview and return.
+  - Resolves the entry: by `entry_link` (if given) or by headword, searching `current_results` first (exact, then accent-stripped) then the DB.
+  - Sets format target: `set_target_senses(sense_parts, headword)` if sense_parts given; else `set_target_subheadword` if accent-stripped target differs from main headword; else `clear_target()`.
+  - Pushes to nav stack only when NOT `from_navigation` and headword changed; if the previous headword was None but `_last_preview_html` exists, pushes `__preview__` as the older entry.
+  - Scrolls to the appropriate anchor (`sense_{n}`, link `#hash`, or the headword).
 
 ### Highlighting
 - Entry opened from preview -> search terms highlighted with `#FFF9C4` background
 - Same-entry see links preserve highlight (`_highlighted_entry_id` matches); different-entry see links clear it
 - Close button on navigation bar -> `_dismiss_highlight()` re-renders without highlight
 - Highlight applied via `SearchEngine._apply_highlight`: concatenates all text parts, applies `finditer` across the full text, maps highlights back to individual parts
+- **Exclusion classes (preserve — `_should_exclude_from_highlight`):**
+  - `src`, `st` always excluded from highlighting.
+  - `see` excluded only in translation context.
+  - `<t>` context: children with `lang="vl"` or any `excl` attribute excluded.
+  - `<ex>` context: children with `lang="ru"` excluded.
+- In `MainWindow.display_entry`, the exclude set starts with `hw` **always**. When `_search_normalize` is True (translations-only), `ex` is also excluded. When `_search_in_headwords` is True, `t` is excluded. `<hw>` must NEVER be highlighted in any Belarusian-headword search variant.
+- `_apply_highlight` protects `<a>` tags and excluded class blocks (`_protect_class_blocks` manually tracks `<span>` nesting depth to find the matching close), runs on `(<[^>]*>)`-split text parts, then restores placeholders (twice, to handle nested placeholders).
 
 ### Global Shortcut
 - Ctrl+C copies selection from any QTextEdit via `install_global_copy` in `app/shortcuts/shortcuts.py`
@@ -212,3 +257,15 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 - `sub_headwords` table: `(id, headword, normalized_headword, main_entry_id)` — sub-headwords share parent entry
 - `content_index` table: `(entry_id, tag_type, searchable_text)` — pre-built index for translation/examples search
 - `source_file` column tracks which file in `data/dictionary/` each entry came from (used by markup app for save)
+
+## Build / Rebuild
+- `needs_rebuild()` (called in `run.py` BEFORE the QApplication is created): True if the DB is missing, if `data/sources.xml` is newer than the DB, or if ANY file in `data/dictionary/` is newer than the DB.
+- `build_database()` iterates `data/dictionary/` files in sorted filename order (both `.xml` and `.txt`), plus `sources.xml` (`source_file='sources.xml'`).
+- At build time the SAME exclusion rules as the search engine are used when building `content_index` (see Exclusion Rules). Translation index text is normalized with `normalize_jo(remove_accents(...))`; example index with `remove_accents(...)` only (no ё→е).
+- `normalized_headword = remove_accents(headword).lower()` at build time.
+
+## Key UI Wiring to Preserve
+- **Settings button `_consume_next_press`**: after the menu closes (`aboutToHide`), if the cursor is still over the button, `_consume_next_press` is set so the mousePressEvent consumes the release and the menu does NOT immediately re-open. Keep this workaround.
+- **`show_all_entries()` first-show guard**: runs on the FIRST `showEvent` only (guarded by `_initial_shown` via `getattr`), so the initial entry load happens after the window is visible. Both the dictionary app and markup app use this.
+- **`SearchResultsList.on_clicked`** resolves the clicked item by accent-stripped headword, calls `get_parsed_entry`, sets `set_target_subheadword` when the clicked headword differs from the main headword, then `display_entry` + scroll.
+- **Combined-mode result click**: when clicking a headword match while `_last_preview_html` exists, `__preview__` is pushed onto the nav stack so Back returns to the previews.
