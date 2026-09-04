@@ -1,0 +1,29 @@
+{
+    "window": {
+        "title": "Беларуска-расійскі (вялікалітоўска-расійскі) слоўнік"
+    },
+    "placeholder": {
+        "entries_search": "Увядзіце слова, што хочаце знайсьці ў слоўніку",
+        "sources_search": "Увядзіце назоў жарала"
+    },
+    "tooltip": {
+        "sources": "Жаролы",
+        "settings": "Налады"
+    },
+    "settings": {
+        "search_settings": {
+            "heading": "Налады шуканьня",
+            "search_in_belarusian": {
+                "label": "Шукаць пабеларуску",
+                "headwords": "Шукаць у загалоўках",
+                "examples": "Шукаць у прыкладах"
+            },
+            "search_in_russian": "Шукаць парасійску (у перакладах)"
+        }
+    },
+    "button": {
+        "back": "Назад",
+        "forward": "Наперад"
+    },
+    "no_results": "Няма вынікаў."
+}
