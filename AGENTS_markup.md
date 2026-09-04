@@ -100,9 +100,7 @@ run_markup.py            # root-level launcher
 
 ### Entry Loading
 - `on_result_clicked` matches on **both** `entry_id` AND `headword` — sub-headwords share parent's `entry_id` so matching on `entry_id` alone would load the main headword's data instead
-- When switching from a dirty entry it auto-saves first; then if `_has_unsaved` or the cached `xml_text` is empty, it re-reads fresh from the source file via `_read_entry_from_source(entry_id, source_file, headword)` and updates the matching `current_results` row (by entry_id) with the fresh text, so re-clicking loads the saved version
-- After a save, the cache is updated in-place for ALL `entry_id`-matching rows so every sub-headword shows the saved version
-- `_read_entry_from_source()` locates entries by headword (accent-normalized) within raw `<entry>` blocks, preserving original file markup
+- When switching from a dirty entry it auto-saves first; then if `_has_unsaved` or the cached `xml_text` is empty, it re-reads fresh from the source file (via `_read_entry_from_source`, see Save Flow) and updates the matching `current_results` row (by entry_id) with the fresh text, so re-clicking loads the saved version
 - Checked toggle button updated on entry load; save button hidden on entry load
 
 ## Writing Conventions

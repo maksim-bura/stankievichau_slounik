@@ -195,9 +195,7 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 - Radio buttons use colored circles (green checked / white unchecked)
 - Sub-options use checkmarks (checked/unchecked), indented 24px left margin
 - Sub-options: at least one must remain checked (`_sync_sub_options` disables the last checked one)
-- `get_option_states()` returns the three boolean search options dict
-- When radio2 (Russian) is checked: headwords=False, translations=True, examples=False
-- When radio1 (Belarusian) is checked: headwords/examples/translations from sub-option checkboxes
+- `get_option_states()` returns the three search options dict (see Search Modes for the exact state mapping)
 
 ### Sources Panel (`SourcesPanel`)
 - `DictTextBrowser` (read-only) + search `QLineEdit` + close button in a VBox layout
@@ -217,7 +215,7 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 - `last_anchor` is cleared to `None` after every `display_entry` and `clear_cache`.
 
 ### Link Routing (`on_link_clicked` + `open_entry_by_headword`)
-- URL schemes: `preview:`, `word:`, `source:`. All are routed through `LinkHandler.process_url` / `on_link_clicked`, and `DictTextBrowser.setSource` blocks native navigation for `word:`/`source:`/`preview:` so clicks are handled in code.
+- URL schemes: `preview:`, `word:`, `source:`. All routed through `LinkHandler.process_url` / `on_link_clicked` (see Entry Viewer for `setSource` blocking).
 - **Preview links** (`preview:{entry_id}|{anchor}`): URL-decode the anchor if it contains `%`, look up the result in `current_results` first then fall back to a direct DB query, set `_highlight_entry = True`, save `_last_preview_html`, and push the `__preview__` sentinel onto the nav stack.
 - **`__preview__` sentinel**: `open_entry_by_headword` intercepts `headword == '__preview__'` and calls `_restore_preview()` (restores `_last_preview_html`, clears display state and nav bar). Preserve this sentinel value and its handling.
 - `open_entry_by_headword(headword, sense_parts, from_navigation)`:
@@ -251,6 +249,7 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 - Private methods use `_` prefix
 - Pane = self-contained UI component (EntryViewer, SourcesPanel, SearchResultsList)
 - Window = top-level OS window (MainWindow)
+- **Docs must stay de-duplicated**: state each fact in exactly ONE place; where a later section would repeat it, use a `see <section>` cross-reference instead of restating it. Restating creates drift when code changes and only one copy gets updated.
 
 ## Database Schema
 - `dictionary` table: `(id INTEGER PRIMARY KEY, headword, normalized_headword, full_entry, entry_link, source_file)`
