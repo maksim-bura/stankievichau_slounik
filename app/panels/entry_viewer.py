@@ -8,13 +8,12 @@ from theme.layout_constants import (
 )
 from app.widgets import IconButton, DictTextBrowser
 from utils.scroll_manager import ScrollManager
-from theme.widget_styles import ENTRY_STYLESHEET
+from theme.widget_styles import ENTRY_STYLESHEET, FLAT_BUTTON_STYLE
 
 
 class NavigationBar(QWidget):
     def __init__(self, parent, open_callback):
         super().__init__(parent)
-        self.parent_window = parent
         self.open_callback = open_callback
         self.navigation_stack = []
         self.current_index = -1
@@ -27,19 +26,10 @@ class NavigationBar(QWidget):
         layout.setContentsMargins(*BAR_CONTENTS_MARGINS)
         layout.setSpacing(BAR_SPACING)
 
-        button_style = """
-            QPushButton {
-                border: none;
-                background-color: transparent;
-                color: black;
-                padding: 0px;
-            }
-        """
-
         self.back_button = QPushButton(f"\u2b05\ufe0f {strings.button.back}")
         self.back_button.setCursor(Qt.PointingHandCursor)
         self.back_button.setFlat(True)
-        self.back_button.setStyleSheet(button_style)
+        self.back_button.setStyleSheet(FLAT_BUTTON_STYLE)
         self.back_button.setFixedWidth(NAV_BUTTON_WIDTH)
         self.back_button.clicked.connect(self.on_back)
 
@@ -55,7 +45,7 @@ class NavigationBar(QWidget):
         self.forward_button = QPushButton(f"\u27a1\ufe0f {strings.button.forward}")
         self.forward_button.setCursor(Qt.PointingHandCursor)
         self.forward_button.setFlat(True)
-        self.forward_button.setStyleSheet(button_style)
+        self.forward_button.setStyleSheet(FLAT_BUTTON_STYLE)
         self.forward_button.setFixedWidth(NAV_BUTTON_WIDTH)
         self.forward_button.clicked.connect(self.on_forward)
 
@@ -116,23 +106,20 @@ class NavigationBar(QWidget):
 
 
 class EntryViewer:
-    def __init__(self, parent_window, open_entry_callback):
-        self.parent = parent_window
-        self.open_entry_callback = open_entry_callback
-
+    def __init__(self, main_window, open_entry_callback):
         self.container = QWidget()
         layout = QVBoxLayout()
         layout.setContentsMargins(*LAYOUT_MARGINS)
         layout.setSpacing(LAYOUT_SPACING)
 
-        self.navigation_bar = NavigationBar(parent_window, open_entry_callback)
+        self.navigation_bar = NavigationBar(main_window, open_entry_callback)
         layout.addWidget(self.navigation_bar)
 
         self.viewer = DictTextBrowser()
         self.viewer.setReadOnly(True)
         self.viewer.setOpenExternalLinks(False)
         self.viewer.setFocusPolicy(Qt.ClickFocus)
-        self.viewer.anchorClicked.connect(parent_window.on_link_clicked)
+        self.viewer.anchorClicked.connect(main_window.on_link_clicked)
         self.viewer.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
 
         layout.addWidget(self.viewer)
@@ -167,9 +154,3 @@ class EntryViewer:
 
     def scroll_to_anchor(self, anchor_id):
         self.scroll_manager.scroll_to_anchor(anchor_id)
-
-    def cache_scroll(self):
-        self.scroll_manager.cache_state()
-
-    def restore_scroll(self):
-        self.scroll_manager.restore_state()

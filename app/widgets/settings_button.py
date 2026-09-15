@@ -2,7 +2,7 @@ from PySide6.QtCore import Qt, QPoint, QRect, Signal
 from PySide6.QtGui import QCursor, QFont
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QMenu, QWidgetAction, QLabel, QWidget, QHBoxLayout, QVBoxLayout
 from localization import strings
-from theme.layout_constants import BUTTON_SIZE, SEARCH_BOX_HEIGHT
+from theme.layout_constants import BUTTON_SIZE, SEARCH_BOX_HEIGHT, MENU_OPTION_MARGINS, MENU_INDENT_MARGINS
 from theme.widget_styles import MENU_BUTTON_STYLE
 
 
@@ -18,7 +18,7 @@ class _CheckOption(QWidget):
         layout = QHBoxLayout(self)
         layout.addWidget(self._label)
         self.setMinimumHeight(SEARCH_BOX_HEIGHT)
-        layout.setContentsMargins(6, 9, 6, 9)
+        layout.setContentsMargins(*MENU_OPTION_MARGINS)
         self._update_display()
 
     def _update_display(self):
@@ -62,7 +62,7 @@ class _RadioOption(QWidget):
         layout = QHBoxLayout(self)
         layout.addWidget(self._label)
         self.setMinimumHeight(SEARCH_BOX_HEIGHT)
-        layout.setContentsMargins(6, 9, 6, 9)
+        layout.setContentsMargins(*MENU_OPTION_MARGINS)
         self._update_display()
 
     def _update_display(self):
@@ -104,7 +104,7 @@ class SettingsButton(QPushButton):
         self.settings_menu = QMenu(self)
         heading_action = QWidgetAction(self.settings_menu)
         heading_label = QLabel(strings.settings.search_settings.heading)
-        heading_label.setContentsMargins(6, 9, 6, 9)
+        heading_label.setContentsMargins(*MENU_OPTION_MARGINS)
         font = QFont()
         font.setBold(True)
         heading_label.setFont(font)
@@ -137,7 +137,7 @@ class SettingsButton(QPushButton):
 
     def _add_sub_option(self, text, checked=False):
         option = _CheckOption(text, checked)
-        option.layout().setContentsMargins(24, 9, 6, 9)
+        option.layout().setContentsMargins(*MENU_INDENT_MARGINS)
         option.clicked.connect(self._on_sub_option_clicked)
         action = QWidgetAction(self.settings_menu)
         action.setDefaultWidget(option)

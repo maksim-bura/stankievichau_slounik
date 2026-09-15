@@ -1,15 +1,17 @@
+from theme.widget_styles import FONT_STACK
+
 MARKUP_GLOBAL_STYLE = """
     QWidget {
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
+        font-family: @FONT_STACK@;
         font-size: 12pt;
     }
     QListWidget {
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
+        font-family: @FONT_STACK@;
         font-size: 12pt;
         font-weight: bold;
     }
     QLineEdit {
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
+        font-family: @FONT_STACK@;
         font-size: 12pt;
         background-color: white;
         border: 1px solid #c0c0c0;
@@ -20,7 +22,7 @@ MARKUP_GLOBAL_STYLE = """
         background-color: white;
     }
     QToolTip {
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
+        font-family: @FONT_STACK@;
         font-size: 12pt;
         background-color: #ffffcc;
         color: black;
@@ -37,7 +39,7 @@ MARKUP_GLOBAL_STYLE = """
         background-color: #edf7fd;
         border-bottom: 2px solid #7c9ec0;
     }
-"""
+""".replace("@FONT_STACK@", FONT_STACK)
 
 ENTRY_LIST_STYLE = """
     QListWidget::item {

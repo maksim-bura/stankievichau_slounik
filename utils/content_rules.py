@@ -1,28 +1,4 @@
-def remove_accents(text):
-    if not text:
-        return text
-    accent_map = {
-        'а́': 'а', 'а̀': 'а',
-        'е́': 'е', 'ѐ': 'е',
-        'і́': 'і', 'і̀': 'і',
-        'о́': 'о', 'о̀': 'о',
-        'у́': 'у', 'у̀': 'у',
-        'ы́': 'ы', 'ы̀': 'ы',
-        'э́': 'э', 'э̀': 'э',
-        'ю́': 'ю', 'ю̀': 'ю',
-        'я́': 'я', 'я̀': 'я',
-    }
-    result = text
-    for accented, base in accent_map.items():
-        result = result.replace(accented, base)
-    return result
-
-
-def normalize_jo(text):
-    """Replace ё with е for е=ё search equivalence."""
-    if not text:
-        return text
-    return text.replace('ё', 'е').replace('Ё', 'Е')
+from utils.text_utils import normalize_jo, remove_accents
 
 
 def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None):
@@ -49,3 +25,26 @@ def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None):
         if child.tail:
             parts.append(child.tail)
     return ''.join(parts)
+
+
+def content_text(element, tag):
+    if tag == 't':
+        return get_text_excluding_src(element, extra_exclude={'see'}, skip_attrs={'lang': 'vl', 'excl': None})
+    if tag == 'ex':
+        return get_text_excluding_src(element, skip_attrs={'lang': 'ru'})
+    return get_text_excluding_src(element)
+
+
+def d_hw_variants(d_element):
+    variants = []
+    for child in d_element:
+        if child.tag == 'hw':
+            text = ''.join(child.itertext()).strip()
+            if text:
+                variants.append(text)
+    return variants
+
+
+def index_text(text, tag):
+    clean = remove_accents(text.lower())
+    return normalize_jo(clean) if tag == 't' else clean

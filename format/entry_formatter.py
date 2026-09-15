@@ -1,7 +1,8 @@
 import xml.etree.ElementTree as ElementTree
 from .link_handler import LinkHandler
 from .source_mapper import source_mapper
-from utils.accent_utils import remove_accents
+from utils.text_utils import remove_accents
+from utils.content_rules import d_hw_variants
 
 
 
@@ -35,7 +36,7 @@ def format_entry(xml_string, is_sources=False):
 
     root = ElementTree.fromstring(xml_string)
     context = _format_context
-    content = _process_element(root, context, is_sources, None)
+    content = _process_element(root, context, is_sources)
 
     html = f"<body>{content}</body>"
 
@@ -44,9 +45,11 @@ def format_entry(xml_string, is_sources=False):
     return html
 
 
-def _sense_matches_headword(sense_element, target_headword):
+def _sense_matches_headword(sense_element, target_headword, variants=None):
     if not target_headword:
         return True
+    if variants:
+        return target_headword in variants
     hw_attr = sense_element.get('hw')
     if hw_attr:
         hw_variants = [remove_accents(v.strip()) for v in hw_attr.split('|')]
@@ -54,27 +57,30 @@ def _sense_matches_headword(sense_element, target_headword):
     return True
 
 
-def _process_element(element, context, is_sources=False, current_headword=None):
+def _d_variants(element):
+    return [remove_accents(text) for text in d_hw_variants(element)]
+
+
+def _process_element(element, context, is_sources=False, current_variants=None):
     parts = []
 
     if element.text:
         parts.append(element.text)
 
     for child in element:
-        new_headword = current_headword
-        if child.tag == 'hw' and child.text:
-            new_headword = remove_accents(child.text)
+        new_variants = current_variants
+        if child.tag == 'd':
+            d_variants = _d_variants(child)
+            if d_variants:
+                new_variants = d_variants
 
         is_target_sense = False
         if context and context.senses and child.tag == 'sense':
             sense_attribute = child.get('n')
             if sense_attribute:
-                if sense_attribute.isdigit():
-                    if int(sense_attribute) in context.senses and _sense_matches_headword(child, context.headword):
-                        is_target_sense = True
-                else:
-                    if sense_attribute in context.senses and _sense_matches_headword(child, context.headword):
-                        is_target_sense = True
+                normalized = int(sense_attribute) if sense_attribute.isdigit() else sense_attribute
+                if normalized in context.senses and _sense_matches_headword(child, context.headword, current_variants):
+                    is_target_sense = True
 
         is_target_headword = (context and context.subheadword and
                               child.tag == 'hw' and
@@ -110,7 +116,11 @@ def _process_element(element, context, is_sources=False, current_headword=None):
                     abbreviations = source_mapper.extract_abbreviations(source_text)
 
                     def _wrap_src(content):
-                        return f'<span style="font-style: normal;">{content}</span>' if child.tag == 'src' else content
+                        if child.tag == 'src':
+                            return f'<span style="font-style: normal;">{content}</span>'
+                        if child.tag == 'st':
+                            return f'<span class="st">{content}</span>'
+                        return content
 
                     if not abbreviations:
                         parts.append(_wrap_src(inner_html))
@@ -197,7 +207,7 @@ def _process_element(element, context, is_sources=False, current_headword=None):
                 inner_parts.append('<span class="headword-arrow">➡️</span>')
 
             if len(child) > 0:
-                inner_parts.append(_process_element(child, context, is_sources, new_headword))
+                inner_parts.append(_process_element(child, context, is_sources, new_variants))
             else:
                 if child.text:
                     inner_parts.append(child.text)
@@ -246,6 +256,7 @@ def _get_class_for_tag(tag):
         'ex': 'ex',
         'i': 'i',
         'b': 'b',
+        'n': 'n',
         'abbr': 'abbr',
         'see': 'see',
         'p': 'p',

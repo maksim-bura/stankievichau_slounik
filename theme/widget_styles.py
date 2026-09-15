@@ -1,32 +1,34 @@
-GLOBAL_STYLE = """
-    QWidget {
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
-        font-size: 12pt;
-    }
-    QListWidget {
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
-        font-size: 12pt;
-        font-weight: bold;
-    }
-    QLineEdit {
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
-        font-size: 12pt;
-        background-color: white;
-        border: 1px solid #c0c0c0;
-        border-radius: 3px;
-        padding: 2px;
-    }
-    QLineEdit:focus {
-        background-color: white;
-    }
-    QToolTip {
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
-        font-size: 12pt;
-        background-color: #ffffcc;
-        color: black;
-        border: 1px solid #c0c0c0;
-    }
-"""
+FONT_STACK = "'Cambria', 'Times New Roman', Times, serif"
+
+GLOBAL_STYLE = (""
+    "QWidget {\n"
+    f"    font-family: {FONT_STACK};\n"
+    "    font-size: 12pt;\n"
+    "}\n"
+    "QListWidget {\n"
+    f"    font-family: {FONT_STACK};\n"
+    "    font-size: 12pt;\n"
+    "    font-weight: bold;\n"
+    "}\n"
+    "QLineEdit {\n"
+    f"    font-family: {FONT_STACK};\n"
+    "    font-size: 12pt;\n"
+    "    background-color: white;\n"
+    "    border: 1px solid #c0c0c0;\n"
+    "    border-radius: 3px;\n"
+    "    padding: 2px;\n"
+    "}\n"
+    "QLineEdit:focus {\n"
+    "    background-color: white;\n"
+    "}\n"
+    "QToolTip {\n"
+    f"    font-family: {FONT_STACK};\n"
+    "    font-size: 12pt;\n"
+    "    background-color: #ffffcc;\n"
+    "    color: black;\n"
+    "    border: 1px solid #c0c0c0;\n"
+    "}\n"
+"")
 
 FLAT_BUTTON_STYLE = """
     QPushButton {
@@ -57,7 +59,7 @@ MENU_BUTTON_STYLE = """
         border: 2px solid #c0c0c0;
         border-radius: 5px;
         padding: 5px;
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
+        font-family: __FONT_STACK__;
         font-size: 12pt;
     }
     QPushButton[class="menu-button"]:hover {
@@ -79,11 +81,11 @@ MENU_BUTTON_STYLE = """
     QPushButton[class="menu-button"][pressed="true"][dual="true"]:hover {
         background-color: #e0eefb;
     }
-"""
+""".replace("__FONT_STACK__", FONT_STACK)
 
 ENTRY_STYLESHEET = """
     body {
-        font-family: 'Cambria', 'Times New Roman', Times, serif;
+        font-family: __FONT_STACK__;
         font-size: 12pt;
         line-height: 1.4;
         margin: 0;
@@ -91,9 +93,10 @@ ENTRY_STYLESHEET = """
     }
     .hw { font-weight: bold; }
     .g, .ex, .i { font-style: italic; }
+    .st { font-style: italic; }
     .t { font-style: normal; }
 
-    .b { font-weight: bold; }
+    .b, .n { font-weight: bold; }
     .abbr { font-weight: bold; }
     .see { font-style: italic; }
     .p { font-style: normal; font-weight: normal; }
@@ -114,6 +117,7 @@ ENTRY_STYLESHEET = """
     .link:hover, .word-link:hover { text-decoration: underline; }
     .src, .source-link { font-style: normal; }
     .source-link { font-style: normal; color: inherit; text-decoration: none; cursor: pointer; }
+    .st-link { font-style: italic; }
     .source-link:hover { text-decoration: underline; }
     .search-highlight { background-color: #FFF9C4; }
     a, a:visited { text-decoration: none; color: inherit; }
@@ -143,4 +147,4 @@ ENTRY_STYLESHEET = """
         border-left: 3px solid #c0c0c0;
         background: #fafafa;
     }
-"""
+""".replace("__FONT_STACK__", FONT_STACK)

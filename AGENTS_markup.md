@@ -37,10 +37,11 @@ run_markup.py            # root-level launcher
 - `_navigate` clamps the selection to `[0, count)`, routed from the search box Up/Down signals; Enter triggers `_on_activate` → simulated click
 
 ### Checked State
-- Per-item key = `"{entry_id}:{headword}"` (sub-headwords are independent — if the key were just entry_id, checking one sub-headword would check all of them)
+- Per-item key = `"{source_file}:{entry_link}:{headword}"` — keyed on source file + entry link (not just entry_id) so collided/deduped headwords and sub-headwords stay independent
 - Persisted to `build/markup_checked.json` via `CheckedState`
-- `CheckedState.save()` called on every toggle (real-time persistence); writes UTF-8 with `ensure_ascii=False` (keeps Cyrillic) and `indent=2`, creating `build/` via `os.makedirs(exist_ok=True)` if missing. Loaded lazily in the constructor.
-- API: `is_checked(entry_id, headword)`, `toggle(entry_id, headword)`, `set_checked(entry_id, headword, value)`, `get_all_checked()`
+- `CheckedState.save()` called on every toggle (real-time persistence); writes UTF-8 with `ensure_ascii=False` (keeps Cyrillic) and `indent=2`, creating `build/` via `os.makedirs(exist_ok=True)` if missing.
+- API: `is_checked(source_file, entry_link, headword)`, `toggle(source_file, entry_link, headword)`, `set_checked(source_file, entry_link, headword, value)`, `get_all_checked()`
+- `migrate(conn)` runs at startup and rewrites legacy-format keys (e.g. old `{entry_id}:{headword}`) to the current key schema
 - Visual states via `_BorderDelegate.paint()`:
   - Non-checked idle: white bg, no border
   - Non-checked hover: `#fafafa` bg, grey border
@@ -61,11 +62,12 @@ run_markup.py            # root-level launcher
 - Author pane render: `_render_author` tries `ElementTree.fromstring` + `format_entry`; on `ParseError` it falls back to showing the raw XML as plain text (so the author tab doesn't crash on a transiently invalid entry)
 
 ### Tag Buttons
-- Two rows: `hw, g, t, tp, ex, src` | `lvl="1", lvl="2", lvl="3"` (THREE level buttons — the third inserts `lvl="3"`)
+- Two rows: `hw, g, t, tp, ex, src, br, see` | `lvl="1"` (a single level button)
 - Auto-sized to fit content (no fixed width)
-- `lvl="1"` / `lvl="2"` / `lvl="3"` insert raw attribute text directly, no wrapping (handled in `insert_tag` before the wrap branch)
+- `lvl="1"` inserts raw attribute text directly, no wrapping (handled in `insert_tag` before the wrap branch)
 - Wrapping: wrap selected text in `<tag>…</tag>`, or insert empty `<tag></tag>` with cursor between
 - Style: `TAG_BUTTON_STYLE` (transparent bg, no border, padding 2px 6px)
+- The `tp` and `lvl="1"` buttons are kept in the editor for now (the `lvl="2"`/`lvl="3"` buttons were removed) even though the source XML files are currently stripped of `<tp>`/`lvl` markup — the buttons can re-insert it (see AGENTS.md → Source Data State).
 
 ### Backspace Logic (`_TagAwareTextEdit.keyPressEvent`)
 1. **Inside a tag** (`_is_inside_tag`): normal character deletion

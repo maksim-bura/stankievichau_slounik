@@ -1,7 +1,8 @@
 import sqlite3
 import xml.etree.ElementTree as ElementTree
 import os
-from utils.accent_utils import remove_accents, normalize_jo, get_text_excluding_src
+from utils.text_utils import remove_accents
+from utils.content_rules import content_text, index_text
 
 
 def parse_with_error_handling(file_path):
@@ -90,7 +91,7 @@ def build_database():
     cursor.execute("CREATE INDEX idx_content_entry_id ON content_index(entry_id)")
 
     def _insert_entry(entry, source_file):
-        headword_element = entry.find("hw")
+        headword_element = entry.find(".//hw")
         if headword_element is None:
             return
 
@@ -110,36 +111,40 @@ def build_database():
         main_entry_id = cursor.lastrowid
 
         all_headwords = entry.findall(".//hw")
+        seen_sub_headwords = set()
         for sub_headword_element in all_headwords[1:]:
             if sub_headword_element.text:
                 sub_normalized = remove_accents(sub_headword_element.text).lower()
+                if sub_normalized in seen_sub_headwords:
+                    continue
+                seen_sub_headwords.add(sub_normalized)
                 cursor.execute(
                     "INSERT INTO sub_headwords (headword, normalized_headword, main_entry_id) VALUES (?, ?, ?)",
                     (sub_headword_element.text, sub_normalized, main_entry_id)
                 )
 
         for t_elem in entry.iter('t'):
-            text = get_text_excluding_src(t_elem, extra_exclude={'see'}, skip_attrs={'lang': 'vl', 'excl': None})
+            text = content_text(t_elem, 't')
             if text.strip():
-                index_text = normalize_jo(remove_accents(text.lower()))
+                index_text_raw = index_text(text, 't')
                 cursor.execute(
                     "INSERT INTO content_index (entry_id, tag_type, searchable_text) VALUES (?, ?, ?)",
-                    (main_entry_id, 't', index_text)
+                    (main_entry_id, 't', index_text_raw)
                 )
 
         for ex_elem in entry.iter('ex'):
-            text = get_text_excluding_src(ex_elem, skip_attrs={'lang': 'ru'})
+            text = content_text(ex_elem, 'ex')
             if text.strip():
-                index_text = remove_accents(text.lower())
+                index_text_raw = index_text(text, 'ex')
                 cursor.execute(
                     "INSERT INTO content_index (entry_id, tag_type, searchable_text) VALUES (?, ?, ?)",
-                    (main_entry_id, 'ex', index_text)
+                    (main_entry_id, 'ex', index_text_raw)
                 )
 
     dict_dir = paths['dictionary_dir']
     for fname in sorted(os.listdir(dict_dir)):
         fpath = os.path.join(dict_dir, fname)
-        if not os.path.isfile(fpath) or not (fname.endswith('.xml') or fname.endswith('.txt')):
+        if not os.path.isfile(fpath) or not fname.endswith('.xml'):
             continue
         root = parse_with_error_handling(fpath)
         for entry in root.findall("entry"):

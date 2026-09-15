@@ -1,12 +1,12 @@
 import re
-from utils.accent_utils import remove_accents
+from utils.text_utils import remove_accents
 
 
 class LinkHandler:
     LINK_TAGS = {
         'see': {'css_class': 'link word-link', 'action': 'word'},
         'src': {'css_class': 'source-link', 'action': 'source'},
-        'st': {'css_class': 'source-link', 'action': 'source'},
+        'st': {'css_class': 'source-link st-link', 'action': 'source'},
     }
 
     @classmethod

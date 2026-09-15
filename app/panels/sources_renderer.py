@@ -1,7 +1,7 @@
 import re
 import html
 from localization import strings
-from utils.case_utils import compile_search_regex
+from utils.search_regex import compile_search_regex
 
 
 def build_filtered_html(all_children, collapsed_sections, arrow_marker, search_text=None, marker_anchor=None):
