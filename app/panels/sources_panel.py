@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt
 from utils.scroll_manager import ScrollManager
 from localization import strings
 from theme.layout_constants import (
-    BUTTON_SIZE, BAR_CONTENTS_MARGINS, BAR_SPACING,
+    BUTTON_SIZE, BAR_CONTENTS_MARGINS, BAR_SPACING, LAYOUT_MARGINS,
 )
 from app.widgets import IconButton, SearchBox, DictTextBrowser
 from theme.widget_styles import ENTRY_STYLESHEET
@@ -15,8 +15,8 @@ from app.panels.sources_renderer import build_filtered_html, compile_search_rege
 class SourcesPanel:
     ARROW_MARKER = '\u27a1\ufe0f'
 
-    def __init__(self, parent_window):
-        self.parent = parent_window
+    def __init__(self, main_window):
+        self.main_window = main_window
         self.sources_visible = False
         self.search_visible = False
         self.original_content = None
@@ -27,7 +27,7 @@ class SourcesPanel:
 
         self.container = QWidget()
         self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setContentsMargins(*LAYOUT_MARGINS)
         self.layout.setSpacing(0)
 
         self.search_container = QWidget()
@@ -59,7 +59,7 @@ class SourcesPanel:
         self.viewer_wrapper = QWidget()
         self.viewer_wrapper.setAutoFillBackground(False)
         wrapper_layout = QGridLayout()
-        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setContentsMargins(*LAYOUT_MARGINS)
         wrapper_layout.setSpacing(0)
 
         self.viewer = DictTextBrowser()
@@ -119,7 +119,7 @@ class SourcesPanel:
     def _toggle_section(self, section_id):
         self._collapsed_sections ^= {section_id}
 
-        old_focus = self.parent.entry_viewer.get_viewer().hasFocus()
+        old_focus = self.main_window.entry_viewer.get_viewer().hasFocus()
         current_scroll = self.viewer.verticalScrollBar().value()
 
         text = self.search_line.text() if self.search_visible else None
@@ -130,7 +130,7 @@ class SourcesPanel:
         self.viewer.verticalScrollBar().setValue(current_scroll)
 
         if old_focus:
-            self.parent.entry_viewer.get_viewer().setFocus()
+            self.main_window.entry_viewer.get_viewer().setFocus()
 
     def _on_anchor_clicked(self, url):
         url_str = url.toString()
@@ -138,7 +138,7 @@ class SourcesPanel:
             section_id = url_str[len('toggle-section:'):]
             self._toggle_section(section_id)
         else:
-            self.parent.on_link_clicked(url)
+            self.main_window.on_link_clicked(url)
 
     def scroll_to_source(self, source_abbreviation):
         if self.search_visible:
@@ -162,7 +162,7 @@ class SourcesPanel:
         was_visible = self.sources_visible
 
         if was_visible:
-            old_focus = self.parent.entry_viewer.get_viewer().hasFocus()
+            old_focus = self.main_window.entry_viewer.get_viewer().hasFocus()
             current_scroll = self.viewer.verticalScrollBar().value()
 
         self.content = build_filtered_html(self._all_children, self._collapsed_sections, self.ARROW_MARKER, marker_anchor=anchor)
@@ -174,7 +174,7 @@ class SourcesPanel:
         else:
             self.viewer.verticalScrollBar().setValue(current_scroll)
             if old_focus:
-                self.parent.entry_viewer.get_viewer().setFocus()
+                self.main_window.entry_viewer.get_viewer().setFocus()
 
         QApplication.processEvents()
         self.scroll_manager.scroll_to_anchor(anchor)
@@ -229,62 +229,3 @@ class SourcesPanel:
 
     def get_viewer(self):
         return self.container
-
-
-class SourcesToggle:
-    def __init__(self, parent_window):
-        self.parent = parent_window
-
-    def _handle_showing(self, sizes, results_width, entry_min_width, sources_min_width, entry_current_width, bottom_splitter):
-        available = self.parent.width() - results_width
-        needed = entry_min_width + sources_min_width
-
-        if available >= needed:
-            half = available // 2
-            entry_width = half
-            sources_width = available - half
-        else:
-            entry_width = entry_min_width
-            sources_width = sources_min_width
-            target = results_width + entry_min_width + sources_min_width
-            if self.parent.width() < target:
-                self.parent.resize(target, self.parent.height())
-
-        bottom_splitter.setSizes([entry_width, sources_width])
-
-    def _handle_hiding(self, sizes, results_width, bottom_splitter, entry_before_hide, sources_before_hide):
-        new_entry = entry_before_hide + sources_before_hide
-        bottom_splitter.setSizes([new_entry, 0])
-
-    def _handle_already_visible(self, sizes, results_width, entry_min_width, sources_min_width, bottom_splitter):
-        if sizes[1] == 0:
-            available = self.parent.width() - results_width
-            needed = entry_min_width + sources_min_width
-            if available >= needed:
-                half = available // 2
-                bottom_splitter.setSizes([half, available - half])
-
-    def _handle_already_hidden(self, sizes, results_width, bottom_splitter):
-        bottom_splitter.setSizes([results_width + sizes[1], 0])
-
-    def toggle(self, sources_visible, sources, sources_button, results_width, bottom_splitter, entry_min_width, sources_min_width, entry_scroll_manager):
-        was_visible = sources_visible
-        sizes_before = bottom_splitter.sizes() if was_visible else None
-        sources_visible = sources.toggle()
-        sources_button.set_sources_visible(sources_visible)
-
-        sizes = bottom_splitter.sizes()
-        entry_current_width = sizes[0]
-
-        if sources_visible and not was_visible:
-            self._handle_showing(sizes, results_width, entry_min_width, sources_min_width, entry_current_width, bottom_splitter)
-        elif not sources_visible and was_visible:
-            entry_before_hide = sizes_before[0] if sizes_before else sizes[0]
-            sources_before_hide = sizes_before[1] if sizes_before else 0
-            self._handle_hiding(sizes, results_width, bottom_splitter, entry_before_hide, sources_before_hide)
-        elif sources_visible:
-            self._handle_already_visible(sizes, results_width, entry_min_width, sources_min_width, bottom_splitter)
-        else:
-            self._handle_already_hidden(sizes, results_width, bottom_splitter)
-
-        return sources_visible

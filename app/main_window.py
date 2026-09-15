@@ -4,15 +4,14 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from format.link_handler import LinkHandler
-from utils.accent_utils import remove_accents
-from utils.case_utils import compile_search_regex
+from utils.text_utils import remove_accents, alphabet_sort_key
+from utils.search_regex import compile_search_regex
 import format.entry_formatter as formatter
 from localization import strings
 from db import SearchEngine
 from app.widgets import SourcesButton, SettingsButton, SearchBox
 from app.shortcuts.shortcuts import install_global_copy
-from app.panels import SearchResultsList, EntryViewer, SourcesPanel
-from app.panels.sources_panel import SourcesToggle
+from app.panels import SearchResultsList, EntryViewer, SourcesPanel, SourcesToggle
 from theme.layout_constants import (
     RESULTS_MIN_WIDTH, ENTRY_MIN_WIDTH, SOURCES_MIN_WIDTH,
     WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT, SPLITTER_ENTRY_INITIAL,
@@ -27,7 +26,6 @@ class MainWindow(QMainWindow):
 
         self.search_engine = search_engine
         self.current_display_xml = None
-        self.current_display_xml_id = None
         self.current_display_headword = None
         self.sources_panel = SourcesPanel(self)
         self.sources_visible = False
@@ -54,7 +52,7 @@ class MainWindow(QMainWindow):
         install_global_copy(self)
 
         self.results_list = SearchResultsList(
-            self, search_engine,
+            search_engine,
             self.results_box, self.entry_viewer,
             self.entry_scroll_manager, self.entry_viewer.navigation_bar
         )
@@ -92,7 +90,7 @@ class MainWindow(QMainWindow):
                     result_to_display = result
                     break
             if not result_to_display:
-                entry_data = self.search_engine.get_entry_by_id(entry_link)
+                entry_data = self.search_engine.get_entry_by_link(entry_link)
                 if entry_data:
                     result_to_display = entry_data
         else:
@@ -112,7 +110,7 @@ class MainWindow(QMainWindow):
 
         if result_to_display:
             root = self.search_engine.get_parsed_entry(result_to_display[0], result_to_display[2])
-            main_headword_element = root.find('hw')
+            main_headword_element = root.find('.//hw')
             main_headword = remove_accents(main_headword_element.text) if main_headword_element is not None else ""
             compare_to = target_headword
 
@@ -157,20 +155,14 @@ class MainWindow(QMainWindow):
                         result = r
                         break
                 if not result:
-                    conn = self.search_engine._get_connection()
-                    row = conn.cursor().execute(
-                        "SELECT id, headword, full_entry, entry_link FROM dictionary WHERE id = ?",
-                        (entry_id,)
-                    ).fetchone()
-                    if row:
-                        result = row
+                    result = self.search_engine.get_entry_row(entry_id)
                 if result:
                     self._highlight_entry = True
                     self._last_preview_html = self.entry_viewer.stored_html
                     self.entry_viewer.navigation_bar.push(result[1], None, '__preview__')
                     if anchor:
                         root = self.search_engine.get_parsed_entry(result[0], result[2])
-                        main_hw = root.find('hw')
+                        main_hw = root.find('.//hw')
                         main_headword = remove_accents(main_hw.text) if main_hw is not None else ""
                         if anchor != main_headword:
                             formatter.set_target_subheadword(anchor)
@@ -261,7 +253,7 @@ class MainWindow(QMainWindow):
 
         bottom_layout = QHBoxLayout()
         bottom_layout.setSpacing(0)
-        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setContentsMargins(*LAYOUT_MARGINS)
         bottom_layout.addWidget(self.results_box)
         bottom_layout.addWidget(self.bottom_splitter)
         bottom_layout.setStretch(0, 0)
@@ -282,8 +274,7 @@ class MainWindow(QMainWindow):
         self.sources_visible = self.sources_toggle.toggle(
             self.sources_visible, self.sources_panel, self.sources_button,
             results_width, self.bottom_splitter,
-            self.entry_min_width, self.sources_min_width,
-            self.entry_scroll_manager
+            self.entry_min_width, self.sources_min_width
         )
         self._update_min_width()
 
@@ -317,6 +308,17 @@ class MainWindow(QMainWindow):
         results = self.search_engine.search("", **options)
         self.results_list.display_results(results)
 
+    @staticmethod
+    def _is_exclusive(options):
+        return (options.get('search_in_translations', False) + options.get('search_in_examples', False) == 1
+                and not options.get('search_in_headwords', True))
+
+    @staticmethod
+    def _is_combined(options):
+        return (options.get('search_in_headwords', False)
+                and options.get('search_in_examples', False)
+                and not options.get('search_in_translations', False))
+
     def on_search(self, text):
         self.entry_viewer.navigation_bar.clear()
         self._highlighted_entry_id = None
@@ -329,9 +331,8 @@ class MainWindow(QMainWindow):
         else:
             self._search_pattern = None
 
-        exclusive_count = sum([options.get('search_in_translations', False), options.get('search_in_examples', False)])
-        is_exclusive = exclusive_count == 1 and not options.get('search_in_headwords', True)
-        is_combined = options.get('search_in_headwords', False) and options.get('search_in_examples', False) and not options.get('search_in_translations', False)
+        is_exclusive = self._is_exclusive(options)
+        is_combined = self._is_combined(options)
 
         if is_combined and text.strip():
             self._set_results_visible(True)
@@ -352,7 +353,6 @@ class MainWindow(QMainWindow):
             else:
                 self._set_results_visible(True)
                 self.current_display_xml = None
-                self.current_display_xml_id = None
                 self.current_display_headword = None
                 self.entry_viewer.clear()
 
@@ -362,11 +362,7 @@ class MainWindow(QMainWindow):
             self.on_search(text)
         else:
             options = self.settings_button.get_option_states()
-            exclusive = (
-                options.get('search_in_translations', False) + options.get('search_in_examples', False) == 1
-                and not options.get('search_in_headwords', True)
-            )
-            self._set_results_visible(not exclusive)
+            self._set_results_visible(not self._is_exclusive(options))
 
     def _on_keyboard_activate(self):
         item = self.results_list.current_item()
@@ -375,7 +371,7 @@ class MainWindow(QMainWindow):
 
     def on_result_clicked(self, item):
         options = self.settings_button.get_option_states()
-        is_combined = options.get('search_in_headwords', False) and options.get('search_in_examples', False) and not options.get('search_in_translations', False)
+        is_combined = self._is_combined(options)
         self._highlight_entry = False
         self.results_list.on_clicked(
             item, formatter,
@@ -391,34 +387,22 @@ class MainWindow(QMainWindow):
         self.current_display_headword = None
         groups = {}
         for result in results:
-            if len(result) > 4 and result[4]:
-                for p in result[4]:
+            if result[5]:
+                for p in result[5]:
                     key = (result[0], p['headword'])
                     if key not in groups:
-                        groups[key] = {'headword': remove_accents(p['headword']), 'htmls': [], 'breaks': [], 'rank': p.get('rank', 7), 'word_pos': p.get('word_pos', 999), 'word_len': p.get('word_len', 999)}
+                        groups[key] = {'headword': remove_accents(p['headword']), 'htmls': [], 'breaks': [], 'rank': p.get('rank', 2)}
                     if p['preview_html'] not in groups[key]['htmls']:
                         groups[key]['htmls'].append(p['preview_html'])
                         groups[key]['breaks'].append(p.get('paragraph_break', False))
-                        r = p.get('rank', 7)
+                        r = p.get('rank', 2)
                         if r < groups[key]['rank']:
                             groups[key]['rank'] = r
-                            groups[key]['word_pos'] = p.get('word_pos', 999)
-                            groups[key]['word_len'] = p.get('word_len', 999)
-                        elif r == groups[key]['rank']:
-                            wp = p.get('word_pos', 999)
-                            if wp < groups[key]['word_pos']:
-                                groups[key]['word_pos'] = wp
-                                groups[key]['word_len'] = p.get('word_len', 999)
-                            elif wp == groups[key]['word_pos']:
-                                wl = p.get('word_len', 999)
-                                if wl < groups[key]['word_len']:
-                                    groups[key]['word_len'] = wl
         if not groups:
             return
         html_parts = ['<body>']
         first_group = True
-        for key in sorted(groups, key=lambda k: (groups[k]['rank'], groups[k]['word_pos'], groups[k]['word_len'], k[1].lower())):
-            g = groups[key]
+        for key, g in sorted(groups.items(), key=lambda kv: (kv[1]['rank'], alphabet_sort_key(kv[1]['headword']))):
             if not first_group:
                 html_parts.append('<br><br>')
             first_group = False
@@ -447,7 +431,6 @@ class MainWindow(QMainWindow):
 
     def display_entry(self, result):
         self.current_display_xml = result[2]
-        self.current_display_xml_id = result[0]
         self.current_display_headword = result[1]
         self.entry_viewer.display_entry(result, formatter)
         self.entry_scroll_manager.last_anchor = None
@@ -468,7 +451,6 @@ class MainWindow(QMainWindow):
     def _restore_preview(self):
         if getattr(self, '_last_preview_html', None):
             self.current_display_xml = None
-            self.current_display_xml_id = None
             self.current_display_headword = None
             self.entry_viewer.display_html(self._last_preview_html)
             self.entry_viewer.navigation_bar.clear()

@@ -8,22 +8,26 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor
 from format.entry_formatter import format_entry
 from theme.widget_styles import ENTRY_STYLESHEET
+from theme.layout_constants import (
+    EDITOR_TOOLBAR_MARGINS, EDITOR_TOOLBAR_SPACING, EDITOR_TOOLBAR_GAP
+)
 from markup.styles import TAG_BUTTON_STYLE
 
 
 TAG_BUTTONS_ROW1 = [
+    ('d', 'd'),
     ('hw', 'hw'),
     ('g', 'g'),
     ('t', 't'),
     ('tp', 'tp'),
     ('ex', 'ex'),
     ('src', 'src'),
+    ('br', 'br'),
+    ('see', 'see'),
 ]
 
 TAG_BUTTONS_ROW2 = [
     ('lvl="1"', 'lvl1'),
-    ('lvl="2"', 'lvl2'),
-    ('lvl="3"', 'lvl3'),
 ]
 
 _TAG_RE = re.compile(r'<(/?)(\w+)[^>]*>')
@@ -165,6 +169,12 @@ class EditorPane(QWidget):
             self._text_edit.setTextCursor(cursor)
             return
 
+        if tag_name == 'br':
+            cursor = self._text_edit.textCursor()
+            cursor.insertText('<br />')
+            self._text_edit.setTextCursor(cursor)
+            return
+
         cursor = self._text_edit.textCursor()
         selected = cursor.selectedText()
         if selected:
@@ -284,15 +294,15 @@ class MarkupEditor(QWidget):
         layout.setSpacing(0)
 
         toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(5, 2, 5, 2)
-        toolbar.setSpacing(2)
+        toolbar.setContentsMargins(*EDITOR_TOOLBAR_MARGINS)
+        toolbar.setSpacing(EDITOR_TOOLBAR_SPACING)
 
         for label, tag_name in TAG_BUTTONS_ROW1:
             btn = TagButton(label, tag_name)
             btn.clicked_with_tag.connect(self._on_tag_clicked)
             toolbar.addWidget(btn)
 
-        toolbar.addSpacing(8)
+        toolbar.addSpacing(EDITOR_TOOLBAR_GAP)
 
         for label, tag_name in TAG_BUTTONS_ROW2:
             btn = TagButton(label, tag_name)

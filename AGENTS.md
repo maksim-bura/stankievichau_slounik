@@ -51,9 +51,10 @@ dictionary_app/
 │   ├── layout_constants.py  # Pixel/metric constants
 │   └── widget_styles.py     # Global + per-widget stylesheets
 ├── utils/
-│   ├── accent_utils.py    # remove_accents, normalize_je, get_text_excluding_src
-│   ├── case_utils.py      # compile_search_regex (accent-insensitive, word-boundary-aware)
-│   └── scroll_manager.py  # Anchor scroll + restore
+│   ├── text_utils.py      # remove_accents, normalize_jo, alphabet_sort_key, get_text_excluding_src
+│   ├── search_regex.py    # compile_search_regex (accent-insensitive, word-boundary-aware)
+│   ├── scroll_manager.py  # Anchor scroll + restore
+│   └── content_rules.py   # Translation/example search exclusion + tier rules
 ├── AGENTS.md             # This file (dictionary app guide)
 ├── AGENTS_markup.md      # Markup app guide
 ├── run.py                # Dictionary app launcher
@@ -87,25 +88,25 @@ dictionary_app/
 | Example preview highlight | Same as indexing |
 
 ### Search Ranking
-Translation and example preview results are sorted by a computed rank tuple `(rank, word_pos, word_len)`:
+Translation and example preview results are classified into three tiers (active when `lvl="1"` markup is present) and sorted within each alphabetically:
 
-| Rank | Match type | Source |
-|---|---|---|
-| 1 | Exact word | `<t lvl="1">` or `<tp lvl="1">` |
-| 2 | Portion of phrase | `<t lvl="1">` or `<tp lvl="1">` |
-| 3 | Exact word | `<t lvl="2">` or `<tp lvl="2">` |
-| 4 | Portion of phrase | `<t lvl="2">` or `<tp lvl="2">` |
-| 5 | Exact word | `<t lvl="3">` or `<tp lvl="3">` |
-| 6 | Portion of phrase | `<t lvl="3">` or `<tp lvl="3">` |
-| 7 | No `lvl` / `<ex>` match | — |
+| Tier | Match type |
+|---|---|
+| 0 | Exact match within `lvl="1"` content — the query spans the entire text of a `<t lvl="1">` / `<tp lvl="1">` |
+| 1 | Partial match within `lvl="1"` content — the query is a substring of such text |
+| 2 | Match outside `lvl="1"` content (bare `<t>`/`<ex>`, or `lvl` 2/3 elements) |
 
-- Both `<t>` (direct `lvl` attribute) and `<tp>` (child element with `lvl`) are evaluated; `min()` picks the best rank
-- `<tp>` defaults to `lvl="1"` when `lvl` is absent
-- Portions sort: primary by word position in the text (earlier wins), secondary by word length (shorter wins)
-- All other preview metadata (sense numbers, grouping, spacing) is identical; ranking only controls sort order
+- Rank is computed per matched element as the `min` tier across the element's own text and any nested `<tp>` child's text (`_tier_for_match`): a `lvl="1"` element yields `0` for a full-span match and `1` for a substring; any other level or no `lvl` attribute yields `2`.
+- Within a tier, preview groups sort alphabetically by preview headword using `alphabet_sort_key` (Belarusian alphabet order, `ґ` after `г` before `д`).
+- The current source data carries no `lvl` attributes (see Source Data State), so every match lands in tier 2 — all alphabetical, no exact/portion split until `lvl` markup is re-introduced.
+- All other preview metadata (sense numbers, grouping, spacing) is identical; ranking only controls sort order.
+
+### Source Data State (`<tp>` / `lvl`)
+- All `data/dictionary/dictionary_*.xml` source files are stripped of every `<tp>` tag and `lvl` attribute — inner text is kept, only bare `<t>` tags remain. This is a **data-only** change.
+- Code support for `<tp>`/`lvl` is retained even though the data no longer uses it: `_compute_t_match_rank` still computes the three ranking tiers (see Search Ranking), `entry_formatter` still maps the `tp` CSS class, and the markup editor still offers a `tp` button and a single `lvl="1"` button (see AGENTS_markup.md → Tag Buttons). These paths are dormant until `<tp>`/`lvl` markup is re-introduced into the data.
 
 ### Preview System
-- Translation previews: sense number (from enclosing `<sense>`) prepended as `<span class="b">`; a preceding `<ex>` with `—` tail is prepended as `<span class="g">…</span>—`. The sibling before that `<ex>` is also kept as leading context, but placed OUTSIDE the `<span class="g">` and rendered via `_format_child_for_preview` so it retains its own element formatting (e.g. a `<t>` stays non-italic), with its tail as separator — so `в лицо. <ex>У вабліччу…</ex>—` reads naturally.
+- Translation previews: sense number prepended as `<span class="{num_tag}">` — `num_tag` is the sense's `<n>` element when present (falling back to `<b>`); when a matched `<t>` is directly preceded by an `<ex>` with `—` tail, the whole `<ex>—<t>` block is emitted as `<span class="g">…</span>—` + the `<t>` preview — no leading context from siblings further back (this avoids leaking unrelated elements like a headword separator `<b>:</b>` into the preview).
 - **Absorbed-`<t>` suppression (translation only):** when a matched `<t>` is immediately followed by an `<ex>` (with `—` tail) whose next sibling is another matched `<t>`, the earlier `<t>` becomes the leading context of the later one and is NOT emitted as its own standalone preview — this avoids duplicating it (e.g. `в лицо` matched twice shows as one `в лицо. У вабліччу… —в лицо мне…` preview).
 - Example previews: trailing `—<t>` appended as `<span class="t">` when pattern detected
 - Multiple matching elements with the same headword within one entry are **grouped** into one preview
@@ -118,7 +119,7 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 - Custom word-boundary lookarounds: `(?<![\w\'\u2019\u02BC-])` / `(?![\w\'\u2019\u02BC-])` — treats punctuation as boundaries, apostrophe and hyphen as word chars
 - Trailing space in query → exact-word match (adds trailing boundary)
 - Multi-word queries: regex `\s+` between word patterns
-- `ё`↔`е` mapping (`normalize_je`): applied only for translation search, not for examples
+- `ё`↔`е` mapping (`normalize_jo`): applied only for translation search, not for examples
 
 ### Accent-Handling Chain
 `remove_accents` is applied at EVERY layer: SQL `normalized_headword` at build time, query normalization, result-list item display text, entry-link matching, and preview headwords. Never drop an accent-strip step on one layer only — it must stay consistent across build, search, and display.
@@ -127,7 +128,8 @@ Translation and example preview results are sorted by a computed rank tuple `(ra
 
 ### Wildcard / LIKE building
 - Headword search builds a SQL `LIKE` pattern from the query: `?` → `_`, `*` → `%`, then wraps with `%`, then re-filters results by the compiled regex on accent-stripped text (regex is authoritative; LIKE only narrows candidates).
-- Empty query returns ALL entries (dictionary + sub_headwords) deduplicated by `(id, headword)`, sorted case-insensitively by `headword.lower()`, with `!SOURCES` filtered out.
+- Both headword-search and empty-query results are sorted by `alphabet_sort_key(headword)` (Belarusian alphabet order, `ґ` after `г` before `д`).
+- Empty query returns ALL entries (dictionary + sub_headwords) deduplicated by `(id, headword)`, with `!SOURCES` filtered out.
 
 ### Entry Formatting
 - `entry_formatter._process_element` is recursive: processes children via `LinkHandler` for linkable tags (`src`, `st`, `see`), CSS‑class‑wraps others

@@ -2,8 +2,9 @@ import copy
 import re
 import sqlite3
 import xml.etree.ElementTree as ElementTree
-from utils.accent_utils import remove_accents, normalize_jo, get_text_excluding_src
-from utils.case_utils import compile_search_regex
+from utils.text_utils import remove_accents, normalize_jo, alphabet_sort_key
+from utils.content_rules import content_text, index_text, d_hw_variants
+from utils.search_regex import compile_search_regex
 from format.entry_formatter import _process_element
 
 
@@ -44,7 +45,7 @@ class SearchEngine:
         return self._search_headwords(text)
 
     def _get_all_entries(self):
-        return [r + (None,) for r in self._search_headwords("")]
+        return self._search_headwords("")
 
     def _search_headwords(self, text):
         conn = self._get_connection()
@@ -54,24 +55,15 @@ class SearchEngine:
 
         if clean_text == "":
             cursor.execute("""
-                SELECT id, headword, full_entry, entry_link, source_file
-                FROM dictionary
-                ORDER BY normalized_headword
-            """)
-            main_results = cursor.fetchall()
-
-            cursor.execute("""
+                SELECT id, headword, full_entry, entry_link, source_file FROM dictionary
+                UNION
                 SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
                 FROM sub_headwords
                 JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
-                ORDER BY sub_headwords.normalized_headword
             """)
-            sub_results = cursor.fetchall()
-
-            combined = main_results + sub_results
-            unique = list({(result[0], result[1]): result for result in combined}.values())
-            unique.sort(key=lambda x: x[1].lower())
-            return [r for r in unique if r[1] != "!SOURCES"]
+            unique = cursor.fetchall()
+            unique.sort(key=lambda x: alphabet_sort_key(x[1]))
+            return [r + (None,) for r in unique if r[1] != "!SOURCES"]
 
         pattern = compile_search_regex(clean_text, exact_words=text.endswith(' '))
 
@@ -80,31 +72,22 @@ class SearchEngine:
         sql_pattern = '%' + sql_pattern.replace(' ', '%') + '%'
 
         cursor.execute("""
-            SELECT id, headword, full_entry, entry_link, source_file
-            FROM dictionary
+            SELECT id, headword, full_entry, entry_link, source_file FROM dictionary
             WHERE normalized_headword LIKE ?
-            ORDER BY normalized_headword
-        """, (sql_pattern,))
-        main_results = cursor.fetchall()
-
-        cursor.execute("""
+            UNION
             SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
             FROM sub_headwords
             JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
             WHERE sub_headwords.normalized_headword LIKE ?
-            ORDER BY sub_headwords.normalized_headword
-        """, (sql_pattern,))
-        sub_results = cursor.fetchall()
+        """, (sql_pattern, sql_pattern))
+        unique = cursor.fetchall()
 
-        combined = main_results + sub_results
-        unique = list({(result[0], result[1]): result for result in combined}.values())
         unique = [r for r in unique if pattern.search(remove_accents(r[1]))]
-        unique.sort(key=lambda x: x[1].lower())
-        return unique
+        unique.sort(key=lambda x: alphabet_sort_key(x[1]))
+        return [r + (None,) for r in unique]
 
     def _search_via_index(self, text, tag_type):
-        use_normalize = tag_type == 't'
-        clean = normalize_jo(remove_accents(text.strip().lower())) if use_normalize else remove_accents(text.strip().lower())
+        clean = index_text(text.strip(), tag_type)
         pattern = compile_search_regex(clean, exact_words=text.endswith(' '))
 
         sql_pattern = clean.replace('?', '_').replace('*', '%')
@@ -122,26 +105,20 @@ class SearchEngine:
             return []
 
         placeholders = ','.join(['?'] * len(entry_ids))
+        params = entry_ids + entry_ids
 
         cursor.execute(f"""
             SELECT id, headword, full_entry, entry_link, source_file FROM dictionary
             WHERE id IN ({placeholders})
-        """, entry_ids)
-        main_results = cursor.fetchall()
-
-        cursor.execute(f"""
+            UNION
             SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
             FROM sub_headwords
             JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
             WHERE dictionary.id IN ({placeholders})
-            ORDER BY sub_headwords.normalized_headword
-        """, entry_ids)
-        sub_results = cursor.fetchall()
-
-        combined = main_results + sub_results
-        unique = list({(r[0], r[1]): r for r in combined}.values())
+        """, params)
+        unique = cursor.fetchall()
         self._annotate_content_matches(unique, tag_type, pattern)
-        return [r for r in unique if r[4]]
+        return [r for r in unique if r[5]]
 
     def _search_translations(self, text):
         return self._search_via_index(text, 't')
@@ -150,27 +127,28 @@ class SearchEngine:
         return self._search_via_index(text, 'ex')
 
     def _annotate_content_matches(self, results, tag, pattern):
+        previews_by_entry = {}
         for i, result in enumerate(results):
-            entry_id, headword, full_entry, entry_link = result[:4]
+            entry_id, headword, full_entry = result[:3]
             clean_headword = remove_accents(headword)
-            root = self.get_parsed_entry(entry_id, full_entry)
-            previews = self._find_content_matches(root, headword, tag, pattern, full_entry)
-            previews = [p for p in previews if remove_accents(p['headword']) == clean_headword or clean_headword in remove_accents(p['headword']).split('|')]
-            results[i] = result[:4] + (previews,)
+            if entry_id not in previews_by_entry:
+                root = self.get_parsed_entry(entry_id, full_entry)
+                previews_by_entry[entry_id] = self._find_content_matches(root, headword, tag, pattern)
+            entry_previews = previews_by_entry[entry_id]
+            previews = [
+                p for p in entry_previews
+                if clean_headword in remove_accents(p['headword']).split('|')
+            ]
+            results[i] = result[:5] + (previews,)
 
-    def _find_content_matches(self, root, headword, tag, pattern, xml_data=None):
+    def _find_content_matches(self, root, headword, tag, pattern):
         parent_map = {c: p for p in root.iter() for c in p}
-        all_elements = list(root.iter())
+        order = list(root.iter())
+        order_pos = {id(el): i for i, el in enumerate(order)}
 
         matched = []
         for element in root.iter(tag):
-            search_text = get_text_excluding_src(
-                element,
-                extra_exclude={'see'} if tag == 't' else None,
-                skip_attrs={'lang': 'vl', 'excl': None} if tag == 't' else (
-                    {'lang': 'ru'} if tag == 'ex' else None
-                )
-            )
+            search_text = content_text(element, tag)
             if not search_text:
                 continue
             normalized_search = normalize_jo(remove_accents(search_text)) if tag == 't' else remove_accents(search_text)
@@ -189,26 +167,22 @@ class SearchEngine:
                     i = siblings.index(el)
                 except ValueError:
                     continue
-                if i + 2 < len(siblings):
-                    nxt = siblings[i + 1]
-                    nxt2 = siblings[i + 2]
-                    if (nxt.tag == 'ex' and nxt.tail and '—' in nxt.tail
-                            and nxt2.tag == 't' and id(nxt2) in matched_ids):
+                if i >= 2:
+                    prev = siblings[i - 1]
+                    prev2 = siblings[i - 2]
+                    if (prev.tag == 'ex' and prev.tail and '—' in prev.tail
+                            and prev2.tag == 't' and id(prev2) in matched_ids):
                         absorbed.add(id(el))
             matched = [el for el in matched if id(el) not in absorbed]
 
         previews = []
         prev_element = None
-        last_xml_end = 0
         for element in matched:
-            paragraph_break = self._detect_preview_break(prev_element, element, xml_data, last_xml_end)
+            paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
 
-            preview_hw = self._find_closest_hw(element, parent_map, all_elements)
-            if preview_hw is None:
-                main_hw = root.find('.//hw')
-                preview_hw = ''.join(main_hw.itertext()).strip() if main_hw is not None else headword
+            preview_hw = self._find_preview_headword(element, parent_map, root, headword)
 
-            rank, word_pos, word_len = self._compute_t_match_rank(element, pattern, tag)
+            rank = self._compute_t_match_rank(element, pattern, tag)
 
             preview_html = self._build_preview_html(element, tag, pattern, parent_map)
             previews.append({
@@ -216,21 +190,18 @@ class SearchEngine:
                 'preview_html': preview_html,
                 'paragraph_break': paragraph_break,
                 'rank': rank,
-                'word_pos': word_pos,
-                'word_len': word_len,
             })
             prev_element = element
         return previews
 
-    def _detect_preview_break(self, prev_element, element, xml_data, last_xml_end):
-        if prev_element is None or xml_data is None:
+    def _has_br_between(self, prev_element, element, order, order_pos):
+        if prev_element is None:
             return False
-        curr_xml = ElementTree.tostring(element, encoding='unicode')
-        curr_pos = xml_data.find(curr_xml, last_xml_end)
-        if curr_pos == -1:
+        prev_idx = order_pos.get(id(prev_element), -1)
+        curr_idx = order_pos.get(id(element), -1)
+        if prev_idx < 0 or curr_idx <= prev_idx:
             return False
-        between = xml_data[last_xml_end:curr_pos]
-        return '<br' in between
+        return any(node.tag == 'br' for node in order[prev_idx + 1:curr_idx])
 
     def _format_child_for_preview(self, child):
         child_copy = copy.deepcopy(child)
@@ -256,6 +227,14 @@ class SearchEngine:
         return False
 
     def _build_preview_html(self, element, tag, pattern, parent_map):
+        highlighted = self._element_preview_content(element, tag, pattern)
+        if tag in ('t', 'ex'):
+            highlighted = self._add_sibling_context(highlighted, element, pattern, parent_map, tag)
+
+        tag_class = 't' if tag == 't' else 'g'
+        return f'<span class="{tag_class}">{highlighted}</span>'
+
+    def _element_preview_content(self, element, tag, pattern):
         segments = []
         excluded_fragments = []
         layout = []
@@ -279,17 +258,9 @@ class SearchEngine:
                 html_parts.append(segments[idx])
             else:
                 html_parts.append(excluded_fragments[idx])
-        highlighted = self._apply_highlight(''.join(html_parts), pattern, normalize=(tag == 't'))
+        return self._apply_highlight(''.join(html_parts), pattern, normalize=(tag == 't'))
 
-        if tag == 't':
-            highlighted = self._add_translation_context(highlighted, element, parent_map)
-        elif tag == 'ex' and element.tail and '—' in element.tail:
-            highlighted = self._add_example_context(highlighted, element, parent_map)
-
-        tag_class = 't' if tag == 't' else 'g'
-        return f'<span class="{tag_class}">{highlighted}</span>'
-
-    def _add_translation_context(self, highlighted, element, parent_map):
+    def _add_sibling_context(self, highlighted, element, pattern, parent_map, tag):
         parent = parent_map.get(element)
         if parent is not None:
             siblings = list(parent)
@@ -297,38 +268,41 @@ class SearchEngine:
                 idx = siblings.index(element)
             except ValueError:
                 idx = -1
-            if idx > 0:
-                prev_sib = siblings[idx - 1]
-                if prev_sib.tag == 'ex' and prev_sib.tail and '—' in prev_sib.tail:
-                    ex_fmt = _process_element(prev_sib, None)
-                    context_prefix = ''
-                    if idx > 1:
-                        earlier = siblings[idx - 2]
-                        context_prefix = self._format_child_for_preview(earlier) + (earlier.tail or '')
-                    highlighted = f'{context_prefix}<span class="g">{ex_fmt}</span>—' + highlighted
+            if tag == 't':
+                if idx > 0:
+                    prev_sib = siblings[idx - 1]
+                    if prev_sib.tag == 'ex' and prev_sib.tail and '—' in prev_sib.tail:
+                        ex_fmt = _process_element(prev_sib, None)
+                        highlighted = f'<span class="g">{ex_fmt}</span>—' + highlighted
 
-        b_html = ''
-        current = element
-        while current in parent_map:
-            current = parent_map[current]
-            if current.tag == 'sense' and current.attrib:
-                sense_b = current.find('b')
-                if sense_b is not None:
-                    b_text = ''.join(sense_b.itertext()).strip()
-                    b_html = f'<span class="b">{b_text}</span> '
-                break
-        highlighted = b_html + highlighted
-        return highlighted
+                sep = element.tail or ''
+                i = idx + 1
+                while i + 1 < len(siblings):
+                    ex_sib = siblings[i]
+                    t_sib = siblings[i + 1]
+                    if not (ex_sib.tag == 'ex' and ex_sib.tail and '—' in ex_sib.tail
+                            and t_sib.tag == 't'):
+                        break
+                    ex_fmt = _process_element(ex_sib, None)
+                    t_fmt = self._element_preview_content(t_sib, 't', pattern)
+                    highlighted += sep + f'<span class="g">{ex_fmt}</span>—<span class="t">{t_fmt}</span>'
+                    sep = t_sib.tail or ''
+                    i += 2
 
-    def _add_example_context(self, highlighted, element, parent_map):
-        parent = parent_map.get(element)
-        if parent is not None:
-            siblings = list(parent)
-            try:
-                idx = siblings.index(element)
-            except ValueError:
-                idx = -1
-            if idx + 1 < len(siblings):
+                sense_num = ''
+                current = element
+                while current in parent_map:
+                    current = parent_map[current]
+                    if current.tag == 'sense' and current.attrib:
+                        num = current.find('n')
+                        if num is None:
+                            num = current.find('b')
+                        if num is not None:
+                            num_text = ''.join(num.itertext()).strip()
+                            sense_num = f'<span class="{num.tag}">{num_text}</span> '
+                        break
+                highlighted = sense_num + highlighted
+            elif tag == 'ex' and element.tail and '—' in element.tail and idx + 1 < len(siblings):
                 next_sib = siblings[idx + 1]
                 if next_sib.tag == 't':
                     t_fmt = _process_element(next_sib, None)
@@ -396,7 +370,7 @@ class SearchEngine:
             for s, e in merged:
                 result_parts.append(part[last:s])
                 result_parts.append(
-                    f'<span style="background-color: #FFF9C4;">{part[s:e]}</span>'
+                    f'<span class="search-highlight">{part[s:e]}</span>'
                 )
                 last = e
             result_parts.append(part[last:])
@@ -431,104 +405,56 @@ class SearchEngine:
                     break
                 if next_open != -1 and next_open < next_close:
                     depth += 1
-                    i = next_open + 5
+                    i = next_open + len('<span')
                 else:
                     depth -= 1
-                    i = next_close + 7
+                    i = next_close + len('</span>')
             saved_list.append(html[start:i])
             result.append(f'\x00A{len(saved_list)-1}\x00')
             pos = i
         return ''.join(result)
 
-    def _find_closest_hw(self, element, parent_map, all_elements):
-        match_sense = None
+    def _find_preview_headword(self, element, parent_map, root, headword):
         current = element
         while current in parent_map:
             current = parent_map[current]
-            if current.tag == 'sense' and current.attrib:
-                match_sense = current
-                break
-        if match_sense is not None:
-            hw_attr = match_sense.get('hw')
-            if hw_attr:
-                return hw_attr
-        try:
-            element_index = all_elements.index(element)
-        except ValueError:
-            return None
-        if match_sense is None:
-            for i in range(element_index - 1, -1, -1):
-                el = all_elements[i]
-                if el.tag == 'hw':
-                    return ''.join(el.itertext()).strip()
-            return None
-        for i in range(element_index - 1, -1, -1):
-            el = all_elements[i]
-            if el.tag == 'hw':
-                current = el
-                while current in parent_map:
-                    current = parent_map[current]
-                    if current is match_sense:
-                        return ''.join(el.itertext()).strip()
-                    if current.tag == 'sense' and current.attrib:
-                        break
-                else:
-                    return ''.join(el.itertext()).strip()
-        return None
+            if current.tag == 'd':
+                variants = d_hw_variants(current)
+                if variants:
+                    return '|'.join(variants)
+        main_hw = root.find('.//hw')
+        if main_hw is not None:
+            text = ''.join(main_hw.itertext()).strip()
+            if text:
+                return text
+        return headword
 
     def _compute_t_match_rank(self, t_element, pattern, tag):
-        if tag != 't':
-            return (7, 0, 0)
-        lvl = t_element.get('lvl')
-        tp_children = [child for child in t_element if child.tag == 'tp']
-        if not lvl and not tp_children:
-            return (7, 0, 0)
         candidates = []
-        if lvl:
-            candidates.append(self._rank_from_level(t_element, lvl, pattern))
-        for tp in tp_children:
-            candidates.append(self._rank_from_tp(tp, pattern))
+        element_level = t_element.get('lvl')
+        element_text = content_text(t_element, tag)
+        if element_text:
+            clean = index_text(element_text, tag)
+            m = pattern.search(clean)
+            if m:
+                candidates.append(self._tier_for_match(m, clean, element_level))
+        for tp in t_element:
+            if tp.tag == 'tp':
+                tp_text = content_text(tp, None)
+                if tp_text:
+                    clean = index_text(tp_text, tag)
+                    m = pattern.search(clean)
+                    if m:
+                        candidates.append(self._tier_for_match(m, clean, tp.get('lvl')))
+        if not candidates:
+            return 2
         return min(candidates)
 
-    def _rank_from_level(self, element, lvl, pattern):
-        text = get_text_excluding_src(element)
-        clean = normalize_jo(remove_accents(text.lower()))
-        m = pattern.search(clean)
-        if not m:
-            return (7, 0, 0)
-        is_exact = m.start() == 0 and m.end() == len(clean)
-        base = 1 if lvl == '1' else 3 if lvl == '2' else 5
-        if is_exact:
-            return (base, 0, 0)
-        return (base + 1,) + self._compute_portion_info(text, clean, m)
-
-    def _rank_from_tp(self, tp, pattern):
-        lvl = tp.get('lvl', '1')
-        text = get_text_excluding_src(tp)
-        clean = normalize_jo(remove_accents(text.lower()))
-        m = pattern.search(clean)
-        if not m:
-            return (7, 0, 0)
-        is_exact = m.start() == 0 and m.end() == len(clean)
-        base = 1 if lvl == '1' else 3 if lvl == '2' else 5
-        if is_exact:
-            return (base, 0, 0)
-        return (base + 1,) + self._compute_portion_info(text, clean, m)
-
-    def _compute_portion_info(self, orig_text, clean_text, match):
-        orig_words = orig_text.split()
-        clean_words = clean_text.split()
-        if not clean_words:
-            return (1, 0)
-        offset = 0
-        for i, cw in enumerate(clean_words):
-            word_end = offset + len(cw)
-            if match.start() < word_end:
-                ow = orig_words[i] if i < len(orig_words) else cw
-                clean_len = len(re.sub(r'\W', '', ow, flags=re.UNICODE))
-                return (0 if i == 0 else 1, clean_len)
-            offset = word_end + 1
-        return (1, 0)
+    def _tier_for_match(self, m, clean, level):
+        if level == '1':
+            exact = m.start() == 0 and m.end() == len(clean)
+            return 0 if exact else 1
+        return 2
 
     def get_entry_by_headword(self, headword):
         conn = self._get_connection()
@@ -541,10 +467,19 @@ class SearchEngine:
         """, (search_headword,))
         result = cursor.fetchone()
         if result:
-            return result[0], result[1], result[2], result[3], result[4]
-        return None, None, None, None, None
+            return result + (None,)
+        cursor.execute("""
+            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
+            FROM sub_headwords
+            JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
+            WHERE sub_headwords.normalized_headword = ?
+        """, (search_headword,))
+        result = cursor.fetchone()
+        if result:
+            return result + (None,)
+        return None, None, None, None, None, None
 
-    def get_entry_by_id(self, entry_link):
+    def get_entry_by_link(self, entry_link):
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -553,4 +488,15 @@ class SearchEngine:
             WHERE entry_link = ?
         """, (entry_link,))
         result = cursor.fetchone()
-        return result
+        return result + (None,) if result else None
+
+    def get_entry_row(self, entry_id):
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, headword, full_entry, entry_link, source_file
+            FROM dictionary
+            WHERE id = ?
+        """, (entry_id,))
+        result = cursor.fetchone()
+        return result + (None,) if result else None
