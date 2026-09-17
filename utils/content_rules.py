@@ -31,7 +31,7 @@ def content_text(element, tag):
     if tag == 't':
         return get_text_excluding_src(element, extra_exclude={'see'}, skip_attrs={'lang': 'vl', 'excl': None})
     if tag == 'ex':
-        return get_text_excluding_src(element, skip_attrs={'lang': 'ru'})
+        return get_text_excluding_src(element, extra_exclude={'t'})
     return get_text_excluding_src(element)
 
 
