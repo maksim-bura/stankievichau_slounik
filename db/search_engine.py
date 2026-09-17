@@ -175,6 +175,42 @@ class SearchEngine:
                         absorbed.add(id(el))
             matched = [el for el in matched if id(el) not in absorbed]
 
+            embedded_groups, embedded_by_sense = self._group_embedded_t_matches(matched, parent_map)
+            if embedded_by_sense:
+                consumed_senses = set()
+                skipped_main_t = set()
+                embedded_previews = []
+                prev_element = None
+                for element in matched:
+                    group = embedded_groups.get(id(element))
+                    if group is not None:
+                        if id(group['sense']) in consumed_senses:
+                            continue
+                        consumed_senses.add(id(group['sense']))
+                        main_t = group['sense'].find('t')
+                        if main_t is not None:
+                            skipped_main_t.add(id(main_t))
+                        paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
+                        preview = self._build_embedded_t_preview(group, pattern, parent_map, root, headword)
+                        preview['paragraph_break'] = paragraph_break
+                        embedded_previews.append(preview)
+                        prev_element = element
+                        continue
+                    if id(element) in skipped_main_t:
+                        continue
+                    paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
+                    preview_hw = self._find_preview_headword(element, parent_map, root, headword)
+                    rank = self._compute_t_match_rank(element, pattern, tag)
+                    preview_html = self._build_preview_html(element, tag, pattern, parent_map)
+                    embedded_previews.append({
+                        'headword': preview_hw,
+                        'preview_html': preview_html,
+                        'paragraph_break': paragraph_break,
+                        'rank': rank,
+                    })
+                    prev_element = element
+                return embedded_previews
+
         previews = []
         prev_element = None
         for element in matched:
@@ -203,6 +239,67 @@ class SearchEngine:
             return False
         return any(node.tag == 'br' for node in order[prev_idx + 1:curr_idx])
 
+    def _group_embedded_t_matches(self, matched, parent_map):
+        by_element = {}
+        by_sense = {}
+        for element in matched:
+            parent = parent_map.get(element)
+            if parent is not None and parent.tag == 'ex':
+                current = parent
+                sense = None
+                while current is not None:
+                    if current.tag == 'sense':
+                        sense = current
+                        break
+                    current = parent_map.get(current)
+                if sense is not None:
+                    sid = id(sense)
+                    group = by_sense.get(sid)
+                    if group is None:
+                        group = {'sense': sense, 'elements': []}
+                        by_sense[sid] = group
+                    group['elements'].append(element)
+                    by_element[id(element)] = group
+        return by_element, by_sense
+
+    def _build_embedded_t_preview(self, group, pattern, parent_map, root, headword):
+        sense = group['sense']
+        elements = group['elements']
+
+        sense_num = ''
+        num = sense.find('n')
+        if num is None:
+            num = sense.find('b')
+        if num is not None:
+            num_text = ''.join(num.itertext()).strip()
+            sense_num = f'<span class="{num.tag}">{num_text}</span> '
+
+        parts = [sense_num]
+        main_t = sense.find('t')
+        if main_t is not None:
+            parts.append(f'<span class="t">{self._element_preview_content(main_t, "t", pattern)}</span>')
+            parts.append(main_t.tail or ' ')
+
+        seen_ex = set()
+        sep = ''
+        for element in elements:
+            ex_el = parent_map.get(element)
+            if ex_el is None or id(ex_el) in seen_ex:
+                continue
+            seen_ex.add(id(ex_el))
+            ex_content = self._element_preview_content(ex_el, 'ex', pattern)
+            parts.append(sep)
+            parts.append(f'<span class="g">{ex_content}</span>')
+            sep = ex_el.tail or ' '
+
+        preview_html = ''.join(parts)
+        first = elements[0]
+        return {
+            'headword': self._find_preview_headword(first, parent_map, root, headword),
+            'preview_html': f'<span class="t">{preview_html}</span>',
+            'rank': self._compute_t_match_rank(first, pattern, 't'),
+        }
+
     def _format_child_for_preview(self, child):
         child_copy = copy.deepcopy(child)
         child_copy.tail = None
@@ -222,8 +319,6 @@ class SearchEngine:
                         return True
                 elif child.get(attr_name) == attr_val:
                     return True
-        if tag == 'ex' and child.get('lang') == 'ru':
-            return True
         return False
 
     def _build_preview_html(self, element, tag, pattern, parent_map):
