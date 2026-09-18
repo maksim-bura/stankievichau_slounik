@@ -41,20 +41,14 @@ dictionary_app/
 │   ├── __init__.py       # strings object from JSON
 │   └── strings.json
 ├── markup/               # Markup app (see AGENTS_markup.md)
-│   ├── __init__.py
-│   ├── main.py           # Markup app entry point
-│   ├── main_window.py    # Markup main window, search, save
-│   ├── editor.py         # Text/Author editor, tag buttons, Backspace logic
-│   ├── checked_state.py  # Per-entry checked persistence
-│   └── styles.py         # Markup-specific styles
 ├── theme/
 │   ├── layout_constants.py  # Pixel/metric constants
 │   └── widget_styles.py     # Global + per-widget stylesheets
 ├── utils/
-│   ├── text_utils.py      # remove_accents, normalize_jo, alphabet_sort_key, get_text_excluding_src
+│   ├── text_utils.py      # remove_accents, normalize_jo, alphabet_sort_key
 │   ├── search_regex.py    # compile_search_regex (accent-insensitive, word-boundary-aware)
 │   ├── scroll_manager.py  # Anchor scroll + restore
-│   └── content_rules.py   # Translation/example search exclusion + tier rules
+│   └── content_rules.py   # get_text_excluding_src, content_text, index_text, d_hw_variants — search exclusion + tier rules
 ├── AGENTS.md             # This file (dictionary app guide)
 ├── AGENTS_markup.md      # Markup app guide
 ├── run.py                # Dictionary app launcher
@@ -110,8 +104,10 @@ Translation and example preview results are classified into three tiers (active 
 - **Absorbed-`<t>` suppression (translation only):** when a matched `<t>` is immediately followed by an `<ex>` (with `—` tail) whose next sibling is another matched `<t>`, the earlier `<t>` becomes the leading context of the later one and is NOT emitted as its own standalone preview — this avoids duplicating it (e.g. `в лицо` matched twice shows as one `в лицо. У вабліччу… —в лицо мне…` preview).
 - Example previews: trailing `—<t>` appended as `<span class="t">` when pattern detected
 - Multiple matching elements with the same headword within one entry are **grouped** into one preview
+- Results are deduplicated by `entry_id`; a deduped row attaches **all** of the entry's matches as previews (across every sub-headword) — the surviving headword is NOT used to filter the preview list
 - Preview spacing: `<br>` between sense previews only when `<br>` exists in the raw XML between matched elements; ` <br><br>` between headword groups
 - Preview headwords are clickable links (`preview:{entry_id}|{headword}`) — clicking opens the full entry with search-query highlighting
+- **Preview headword aggregation (`_find_preview_headword`):** a matched element inside a `<d>` → its ancestor `<d>`'s direct `<hw>` children joined with `|`; otherwise an entry containing NO `<d>` → ALL of the entry's `<hw>`s joined; an entry that has `<d>`s elsewhere but whose matched element is outside one → first `<hw>` only. The results list renders `|` as `, ` and scrolls to the first headword. Works for any number of `<hw>`s in both the d-ful and d-less cases.
 
 ### Search Regex (`compile_search_regex`)
 - Accent-insensitive: every literal character accepts optional combining marks U+0300/U+0301 via `_ACCENT_COMB`
@@ -119,11 +115,11 @@ Translation and example preview results are classified into three tiers (active 
 - Custom word-boundary lookarounds: `(?<![\w\'\u2019\u02BC-])` / `(?![\w\'\u2019\u02BC-])` — treats punctuation as boundaries, apostrophe and hyphen as word chars
 - Trailing space in query → exact-word match (adds trailing boundary)
 - Multi-word queries: regex `\s+` between word patterns
-- `ё`↔`е` mapping (`normalize_jo`): applied only for translation search, not for examples
+- `ё`↔`е` mapping (`normalize_jo`) — see Accent-Handling Chain for where it applies
 
 ### Accent-Handling Chain
 `remove_accents` is applied at EVERY layer: SQL `normalized_headword` at build time, query normalization, result-list item display text, entry-link matching, and preview headwords. Never drop an accent-strip step on one layer only — it must stay consistent across build, search, and display.
-- `normalize_jo` (`ё`→`е`, `Ё`→`Е`) is applied **only** for translation search (`tag='t'`), never for examples. Reference it via `utils/accent_utils.normalize_jo`.
+- `normalize_jo` (`ё`→`е`, `Ё`→`Е`) in `utils/text_utils.py` is applied **only** for translation search (`tag='t'`), never for examples.
 - In `MainWindow.on_search`: `_search_normalize` is set True only when translations-only (translations ON and examples OFF); `_search_in_headwords` mirrors the option. These flags steer which classes get highlighted (see Highlighting).
 
 ### Wildcard / LIKE building
@@ -233,14 +229,12 @@ Translation and example preview results are classified into three tiers (active 
 - Entry opened from preview -> search terms highlighted with `#FFF9C4` background
 - Same-entry see links preserve highlight (`_highlighted_entry_id` matches); different-entry see links clear it
 - Close button on navigation bar -> `_dismiss_highlight()` re-renders without highlight
-- Highlight applied via `SearchEngine._apply_highlight`: concatenates all text parts, applies `finditer` across the full text, maps highlights back to individual parts
-- **Exclusion classes (preserve — `_should_exclude_from_highlight`):**
-  - `src`, `st` always excluded from highlighting.
-  - `see` excluded only in translation context.
-  - `<t>` context: children with `lang="vl"` or any `excl` attribute excluded.
-  - `<ex>` context: children with `lang="ru"` excluded.
+- Highlight applied via `SearchEngine._apply_highlight` — the excluded classes match the Exclusion Rules table (enforced by `_should_exclude_from_highlight`):
+  - protects `<a>` tags and excluded class blocks via `_protect_class_blocks` (manually tracks `<span>` nesting depth to find the matching close)
+  - **preview mechanism:** excluded children are wrapped in `<span class="search-excluded">` and passed as `exclude_classes=[_EXCLUDED_HIGHLIGHT_CLASS]`; protected blocks become `\x00A{idx}\x00` placeholders, so the regex only ever scans the highlightable (indexed-equivalent) text — excluded fragments are rendered but never highlighted
+  - text parts containing a placeholder are sub-split on `(\x00[^\x00]*\x00)` so a protected block never merges adjacent plain text into one skipped part
+  - runs `finditer` across concatenated text parts, maps highlights back to individual parts, restores placeholders twice (to handle nesting)
 - In `MainWindow.display_entry`, the exclude set starts with `hw` **always**. When `_search_normalize` is True (translations-only), `ex` is also excluded. When `_search_in_headwords` is True, `t` is excluded. `<hw>` must NEVER be highlighted in any Belarusian-headword search variant.
-- `_apply_highlight` protects `<a>` tags and excluded class blocks (`_protect_class_blocks` manually tracks `<span>` nesting depth to find the matching close), runs on `(<[^>]*>)`-split text parts, then restores placeholders (twice, to handle nested placeholders).
 
 ### Global Shortcut
 - Ctrl+C copies selection from any QTextEdit via `install_global_copy` in `app/shortcuts/shortcuts.py`
