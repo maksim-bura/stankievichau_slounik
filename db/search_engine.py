@@ -128,6 +128,15 @@ class SearchEngine:
 
     def _annotate_content_matches(self, results, tag, pattern):
         previews_by_entry = {}
+        seen_ids = set()
+        deduped = []
+        for result in results:
+            eid = result[0]
+            if eid in seen_ids:
+                continue
+            seen_ids.add(eid)
+            deduped.append(result)
+        results[:] = deduped
         for i, result in enumerate(results):
             entry_id, headword, full_entry = result[:3]
             clean_headword = remove_accents(headword)
@@ -179,6 +188,10 @@ class SearchEngine:
             if embedded_by_sense:
                 consumed_senses = set()
                 skipped_main_t = set()
+                for group in embedded_by_sense.values():
+                    main_t = group['sense'].find('t')
+                    if main_t is not None:
+                        skipped_main_t.add(id(main_t))
                 embedded_previews = []
                 prev_element = None
                 for element in matched:
@@ -187,9 +200,6 @@ class SearchEngine:
                         if id(group['sense']) in consumed_senses:
                             continue
                         consumed_senses.add(id(group['sense']))
-                        main_t = group['sense'].find('t')
-                        if main_t is not None:
-                            skipped_main_t.add(id(main_t))
                         paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
                         preview = self._build_embedded_t_preview(group, pattern, parent_map, root, headword)
                         preview['paragraph_break'] = paragraph_break
@@ -228,7 +238,13 @@ class SearchEngine:
                 'rank': rank,
             })
             prev_element = element
-        return previews
+        seen_html = set()
+        unique = []
+        for p in previews:
+            if p['preview_html'] not in seen_html:
+                seen_html.add(p['preview_html'])
+                unique.append(p)
+        return unique
 
     def _has_br_between(self, prev_element, element, order, order_pos):
         if prev_element is None:

@@ -402,7 +402,7 @@ class MainWindow(QMainWindow):
             return
         html_parts = ['<body>']
         first_group = True
-        for key, g in sorted(groups.items(), key=lambda kv: (kv[1]['rank'], alphabet_sort_key(kv[1]['headword']))):
+        for key, g in sorted(groups.items(), key=lambda kv: (alphabet_sort_key(kv[1]['headword']),) if not translations_mode else (kv[1]['rank'], alphabet_sort_key(kv[1]['headword']))):
             if not first_group:
                 html_parts.append('<br><br>')
             first_group = False
