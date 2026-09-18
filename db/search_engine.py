@@ -8,6 +8,9 @@ from utils.search_regex import compile_search_regex
 from format.entry_formatter import _process_element
 
 
+_EXCLUDED_HIGHLIGHT_CLASS = 'search-excluded'
+
+
 class SearchEngine:
     def __init__(self, database_path):
         self.database_path = database_path
@@ -139,16 +142,10 @@ class SearchEngine:
         results[:] = deduped
         for i, result in enumerate(results):
             entry_id, headword, full_entry = result[:3]
-            clean_headword = remove_accents(headword)
             if entry_id not in previews_by_entry:
                 root = self.get_parsed_entry(entry_id, full_entry)
                 previews_by_entry[entry_id] = self._find_content_matches(root, headword, tag, pattern)
-            entry_previews = previews_by_entry[entry_id]
-            previews = [
-                p for p in entry_previews
-                if clean_headword in remove_accents(p['headword']).split('|')
-            ]
-            results[i] = result[:5] + (previews,)
+            results[i] = result[:5] + (previews_by_entry[entry_id],)
 
     def _find_content_matches(self, root, headword, tag, pattern):
         parent_map = {c: p for p in root.iter() for c in p}
@@ -326,15 +323,18 @@ class SearchEngine:
     def _should_exclude_from_highlight(self, child, tag):
         if child.tag in ('src', 'st'):
             return True
-        if tag == 't' and child.tag == 'see':
-            return True
         if tag == 't':
+            if child.tag == 'see':
+                return True
             for attr_name, attr_val in (('lang', 'vl'), ('excl', None)):
                 if attr_val is None:
                     if attr_name in child.attrib:
                         return True
                 elif child.get(attr_name) == attr_val:
                     return True
+            return False
+        if tag == 'ex' and child.get('lang') == 'ru':
+            return True
         return False
 
     def _build_preview_html(self, element, tag, pattern, parent_map):
@@ -368,8 +368,12 @@ class SearchEngine:
             if entry_type == 'seg':
                 html_parts.append(segments[idx])
             else:
-                html_parts.append(excluded_fragments[idx])
-        return self._apply_highlight(''.join(html_parts), pattern, normalize=(tag == 't'))
+                html_parts.append(f'<span class="{_EXCLUDED_HIGHLIGHT_CLASS}">{excluded_fragments[idx]}</span>')
+        return self._apply_highlight(
+            ''.join(html_parts), pattern,
+            normalize=(tag == 't'),
+            exclude_classes=[_EXCLUDED_HIGHLIGHT_CLASS],
+        )
 
     def _add_sibling_context(self, highlighted, element, pattern, parent_map, tag):
         parent = parent_map.get(element)
@@ -435,6 +439,16 @@ class SearchEngine:
                 protected = self._protect_class_blocks(protected, cls, all_saved)
 
         parts = re.split(r'(<[^>]*>)', protected)
+
+        expanded = []
+        for part in parts:
+            if not part.startswith('<') and '\x00' in part:
+                for chunk in re.split(r'(\x00[^\x00]*\x00)', part):
+                    if chunk:
+                        expanded.append(chunk)
+            else:
+                expanded.append(part)
+        parts = expanded
 
         text_ranges = []
         concat_pos = 0
@@ -533,11 +547,11 @@ class SearchEngine:
                 variants = d_hw_variants(current)
                 if variants:
                     return '|'.join(variants)
-        main_hw = root.find('.//hw')
-        if main_hw is not None:
-            text = ''.join(main_hw.itertext()).strip()
-            if text:
-                return text
+        all_hws = [''.join(h.itertext()).strip() for h in root.findall('.//hw') if ''.join(h.itertext()).strip()]
+        if all_hws:
+            if root.find('.//d') is None:
+                return '|'.join(all_hws)
+            return all_hws[0]
         return headword
 
     def _compute_t_match_rank(self, t_element, pattern, tag):
