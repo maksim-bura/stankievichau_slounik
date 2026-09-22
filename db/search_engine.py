@@ -3,12 +3,22 @@ import re
 import sqlite3
 import xml.etree.ElementTree as ElementTree
 from utils.text_utils import remove_accents, normalize_jo, alphabet_sort_key
-from utils.content_rules import content_text, index_text, d_hw_variants
+from utils.content_rules import content_text, index_text, d_hw_variants, hw_text_excluding_n
 from utils.search_regex import compile_search_regex
-from format.entry_formatter import _process_element
+from format.entry_formatter import process_element
 
 
 _EXCLUDED_HIGHLIGHT_CLASS = 'search-excluded'
+
+_HEADWORD_ROWS_SQL = """
+    SELECT id, headword, full_entry, entry_link, source_file, sort_headword FROM dictionary
+    {dictionary_where}
+    UNION
+    SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file, sub_headwords.sort_headword
+    FROM sub_headwords
+    JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
+    {sub_headwords_where}
+"""
 
 
 class SearchEngine:
@@ -32,6 +42,13 @@ class SearchEngine:
         root = ElementTree.fromstring(xml_string)
         self._parsed_cache[entry_id] = root
         return root
+
+    def get_main_headword(self, entry_id, xml_string=None):
+        root = self.get_parsed_entry(entry_id, xml_string)
+        element = root.find('.//hw') if root is not None else None
+        if element is None:
+            return ""
+        return ''.join(element.itertext()).strip()
 
     def search(self, text, search_in_headwords=True, search_in_translations=False, search_in_examples=False):
         clean_text = remove_accents(text.strip())
@@ -57,44 +74,37 @@ class SearchEngine:
         clean_text = remove_accents(text.strip())
 
         if clean_text == "":
-            cursor.execute("""
-                SELECT id, headword, full_entry, entry_link, source_file FROM dictionary
-                UNION
-                SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
-                FROM sub_headwords
-                JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
-            """)
+            cursor.execute(_HEADWORD_ROWS_SQL.format(
+                dictionary_where='', sub_headwords_where=''))
             unique = cursor.fetchall()
-            unique.sort(key=lambda x: alphabet_sort_key(x[1]))
-            return [r + (None,) for r in unique if r[1] != "!SOURCES"]
+            unique.sort(key=lambda x: alphabet_sort_key(x[5] or x[1]))
+            return [(r[0], r[1], r[2], r[3], r[4]) + (None,) for r in unique if r[1] != "!SOURCES"]
 
         pattern = compile_search_regex(clean_text, exact_words=text.endswith(' '))
+        sql_pattern = self._like_pattern(clean_text.lower(), collapse_spaces=True)
 
-        sql_text = clean_text.lower()
-        sql_pattern = sql_text.replace('?', '_').replace('*', '%')
-        sql_pattern = '%' + sql_pattern.replace(' ', '%') + '%'
-
-        cursor.execute("""
-            SELECT id, headword, full_entry, entry_link, source_file FROM dictionary
-            WHERE normalized_headword LIKE ?
-            UNION
-            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
-            FROM sub_headwords
-            JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
-            WHERE sub_headwords.normalized_headword LIKE ?
-        """, (sql_pattern, sql_pattern))
+        cursor.execute(_HEADWORD_ROWS_SQL.format(
+            dictionary_where='WHERE normalized_headword LIKE ?',
+            sub_headwords_where='WHERE sub_headwords.normalized_headword LIKE ?',
+        ), (sql_pattern, sql_pattern))
         unique = cursor.fetchall()
 
-        unique = [r for r in unique if pattern.search(remove_accents(r[1]))]
-        unique.sort(key=lambda x: alphabet_sort_key(x[1]))
-        return [r + (None,) for r in unique]
+        unique = [r for r in unique if pattern.search(remove_accents(r[5] or r[1]))]
+        unique.sort(key=lambda x: alphabet_sort_key(x[5] or x[1]))
+        return [(r[0], r[1], r[2], r[3], r[4]) + (None,) for r in unique]
+
+    @staticmethod
+    def _like_pattern(text, collapse_spaces=False):
+        pattern = text.replace('?', '_').replace('*', '%')
+        if collapse_spaces:
+            pattern = pattern.replace(' ', '%')
+        return '%' + pattern + '%'
 
     def _search_via_index(self, text, tag_type):
         clean = index_text(text.strip(), tag_type)
         pattern = compile_search_regex(clean, exact_words=text.endswith(' '))
 
-        sql_pattern = clean.replace('?', '_').replace('*', '%')
-        sql_pattern = '%' + sql_pattern + '%'
+        sql_pattern = self._like_pattern(clean)
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -206,11 +216,12 @@ class SearchEngine:
                     if id(element) in skipped_main_t:
                         continue
                     paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
-                    preview_hw = self._find_preview_headword(element, parent_map, root, headword)
+                    preview_hw, preview_sort = self._preview_hw_fields(element, parent_map, root, headword)
                     rank = self._compute_t_match_rank(element, pattern, tag)
                     preview_html = self._build_preview_html(element, tag, pattern, parent_map)
                     embedded_previews.append({
                         'headword': preview_hw,
+                        'sort_headword': preview_sort,
                         'preview_html': preview_html,
                         'paragraph_break': paragraph_break,
                         'rank': rank,
@@ -223,13 +234,14 @@ class SearchEngine:
         for element in matched:
             paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
 
-            preview_hw = self._find_preview_headword(element, parent_map, root, headword)
+            preview_hw, preview_sort = self._preview_hw_fields(element, parent_map, root, headword)
 
             rank = self._compute_t_match_rank(element, pattern, tag)
 
             preview_html = self._build_preview_html(element, tag, pattern, parent_map)
             previews.append({
                 'headword': preview_hw,
+                'sort_headword': preview_sort,
                 'preview_html': preview_html,
                 'paragraph_break': paragraph_break,
                 'rank': rank,
@@ -279,15 +291,7 @@ class SearchEngine:
         sense = group['sense']
         elements = group['elements']
 
-        sense_num = ''
-        num = sense.find('n')
-        if num is None:
-            num = sense.find('b')
-        if num is not None:
-            num_text = ''.join(num.itertext()).strip()
-            sense_num = f'<span class="{num.tag}">{num_text}</span> '
-
-        parts = [sense_num]
+        parts = [self._sense_number_html(sense)]
         main_t = sense.find('t')
         if main_t is not None:
             parts.append(f'<span class="t">{self._element_preview_content(main_t, "t", pattern)}</span>')
@@ -307,8 +311,10 @@ class SearchEngine:
 
         preview_html = ''.join(parts)
         first = elements[0]
+        preview_hw, preview_sort = self._preview_hw_fields(first, parent_map, root, headword)
         return {
-            'headword': self._find_preview_headword(first, parent_map, root, headword),
+            'headword': preview_hw,
+            'sort_headword': preview_sort,
             'preview_html': f'<span class="t">{preview_html}</span>',
             'rank': self._compute_t_match_rank(first, pattern, 't'),
         }
@@ -318,7 +324,7 @@ class SearchEngine:
         child_copy.tail = None
         wrapper = ElementTree.Element('_wrapper')
         wrapper.append(child_copy)
-        return _process_element(wrapper, None)
+        return process_element(wrapper, None)
 
     def _should_exclude_from_highlight(self, child, tag):
         if child.tag in ('src', 'st'):
@@ -369,7 +375,7 @@ class SearchEngine:
                 html_parts.append(segments[idx])
             else:
                 html_parts.append(f'<span class="{_EXCLUDED_HIGHLIGHT_CLASS}">{excluded_fragments[idx]}</span>')
-        return self._apply_highlight(
+        return self.apply_highlight(
             ''.join(html_parts), pattern,
             normalize=(tag == 't'),
             exclude_classes=[_EXCLUDED_HIGHLIGHT_CLASS],
@@ -387,8 +393,13 @@ class SearchEngine:
                 if idx > 0:
                     prev_sib = siblings[idx - 1]
                     if prev_sib.tag == 'ex' and prev_sib.tail and '—' in prev_sib.tail:
-                        ex_fmt = _process_element(prev_sib, None)
-                        highlighted = f'<span class="g">{ex_fmt}</span>—' + highlighted
+                        ex_fmt = process_element(prev_sib, None)
+                        context = f'<span class="g">{ex_fmt}</span>—'
+                        if idx >= 2 and siblings[idx - 2].tag == 't':
+                            prev_t = siblings[idx - 2]
+                            prev_t_fmt = self._element_preview_content(prev_t, 't', pattern)
+                            context = f'<span class="t">{prev_t_fmt}</span>' + (prev_t.tail or '') + context
+                        highlighted = context + highlighted
 
                 sep = element.tail or ''
                 i = idx + 1
@@ -398,33 +409,52 @@ class SearchEngine:
                     if not (ex_sib.tag == 'ex' and ex_sib.tail and '—' in ex_sib.tail
                             and t_sib.tag == 't'):
                         break
-                    ex_fmt = _process_element(ex_sib, None)
+                    ex_fmt = process_element(ex_sib, None)
                     t_fmt = self._element_preview_content(t_sib, 't', pattern)
                     highlighted += sep + f'<span class="g">{ex_fmt}</span>—<span class="t">{t_fmt}</span>'
                     sep = t_sib.tail or ''
                     i += 2
 
                 sense_num = ''
+                crossed_sub_headword = False
                 current = element
                 while current in parent_map:
                     current = parent_map[current]
+                    if current.tag == 'd':
+                        crossed_sub_headword = True
+                        continue
                     if current.tag == 'sense' and current.attrib:
-                        num = current.find('n')
-                        if num is None:
-                            num = current.find('b')
-                        if num is not None:
-                            num_text = ''.join(num.itertext()).strip()
-                            sense_num = f'<span class="{num.tag}">{num_text}</span> '
+                        if not crossed_sub_headword:
+                            sense_num = self._sense_number_html(current)
                         break
                 highlighted = sense_num + highlighted
             elif tag == 'ex' and element.tail and '—' in element.tail and idx + 1 < len(siblings):
                 next_sib = siblings[idx + 1]
                 if next_sib.tag == 't':
-                    t_fmt = _process_element(next_sib, None)
+                    t_fmt = process_element(next_sib, None)
                     highlighted += f'<span class="t">—{t_fmt}</span>'
         return highlighted
 
-    def _apply_highlight(self, formatted_html, pattern, normalize=True, exclude_classes=None):
+    @staticmethod
+    def _restore_saved_blocks(html, saved_blocks):
+        if not saved_blocks:
+            return html
+        placeholder = re.compile(r'\x00A(\d+)\x00')
+        for _ in range(2):
+            html = placeholder.sub(lambda m: saved_blocks[int(m.group(1))], html)
+        return html
+
+    @staticmethod
+    def _sense_number_html(sense):
+        num = sense.find('n')
+        if num is None:
+            num = sense.find('b')
+        if num is None:
+            return ''
+        num_text = ''.join(num.itertext()).strip()
+        return f'<span class="{num.tag}">{num_text}</span> '
+
+    def apply_highlight(self, formatted_html, pattern, normalize=True, exclude_classes=None):
         all_saved = []
         protected = formatted_html
 
@@ -458,11 +488,7 @@ class SearchEngine:
                 concat_pos += len(part)
 
         if not text_ranges:
-            result = ''.join(parts)
-            for _ in range(2):
-                for j, block in enumerate(all_saved):
-                    result = result.replace(f'\x00A{j}\x00', block)
-            return result
+            return self._restore_saved_blocks(''.join(parts), all_saved)
 
         concatenated = ''.join(parts[r[1]] for r in text_ranges)
         normalized = normalize_jo(concatenated) if normalize else concatenated
@@ -501,11 +527,7 @@ class SearchEngine:
             result_parts.append(part[last:])
             parts[part_idx] = ''.join(result_parts)
 
-        result = ''.join(parts)
-        for _ in range(2):
-            for j, block in enumerate(all_saved):
-                result = result.replace(f'\x00A{j}\x00', block)
-        return result
+        return self._restore_saved_blocks(''.join(parts), all_saved)
 
     def _protect_class_blocks(self, html, class_name, saved_list):
         pattern = re.compile(
@@ -539,20 +561,44 @@ class SearchEngine:
             pos = i
         return ''.join(result)
 
-    def _find_preview_headword(self, element, parent_map, root, headword):
+    def _enclosing_sense(self, element, parent_map):
+        current = element
+        while current in parent_map:
+            current = parent_map[current]
+            if current.tag == 'sense':
+                return current
+        return None
+
+    def _preview_hw_fields(self, element, parent_map, root, headword):
+        display = None
+        sort = None
         current = element
         while current in parent_map:
             current = parent_map[current]
             if current.tag == 'd':
                 variants = d_hw_variants(current)
                 if variants:
-                    return '|'.join(variants)
-        all_hws = [''.join(h.itertext()).strip() for h in root.findall('.//hw') if ''.join(h.itertext()).strip()]
-        if all_hws:
-            if root.find('.//d') is None:
-                return '|'.join(all_hws)
-            return all_hws[0]
-        return headword
+                    display = '|'.join(variants)
+                    sort_variants = d_hw_variants(current, exclude_n=True)
+                    sort = '|'.join(sort_variants) if sort_variants else display
+                    return display, sort
+        if display is None:
+            element_sense = self._enclosing_sense(element, parent_map)
+            relevant = []
+            relevant_sort = []
+            for h in root.findall('.//hw'):
+                text = ''.join(h.itertext()).strip()
+                if not text:
+                    continue
+                hw_sense = self._enclosing_sense(h, parent_map)
+                if hw_sense is None or hw_sense is element_sense:
+                    relevant.append(text)
+                    relevant_sort.append(hw_text_excluding_n(h).strip() or text)
+            if relevant:
+                if root.find('.//d') is None:
+                    return '|'.join(relevant), '|'.join(relevant_sort)
+                return relevant[0], relevant_sort[0]
+        return headword, headword
 
     def _compute_t_match_rank(self, t_element, pattern, tag):
         candidates = []
@@ -594,6 +640,13 @@ class SearchEngine:
         if result:
             return result + (None,)
         cursor.execute("""
+            SELECT id, headword, full_entry, entry_link, source_file
+            FROM dictionary
+        """)
+        for row in cursor.fetchall():
+            if remove_accents(row[1]).lower() == search_headword:
+                return row + (None,)
+        cursor.execute("""
             SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
             FROM sub_headwords
             JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
@@ -602,6 +655,14 @@ class SearchEngine:
         result = cursor.fetchone()
         if result:
             return result + (None,)
+        cursor.execute("""
+            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
+            FROM sub_headwords
+            JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
+        """)
+        for row in cursor.fetchall():
+            if remove_accents(row[1]).lower() == search_headword:
+                return row + (None,)
         return None, None, None, None, None, None
 
     def get_entry_by_link(self, entry_link):

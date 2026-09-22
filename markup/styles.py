@@ -1,73 +1,76 @@
-from theme.widget_styles import FONT_STACK
+from theme.widget_styles import (
+    FONT_STACK, COLOR_BORDER_DEFAULT, COLOR_SELECTED_BG, COLOR_BORDER_SELECTED,
+    COLOR_TOOLTIP_BG,
+)
 
-MARKUP_GLOBAL_STYLE = """
-    QWidget {
-        font-family: @FONT_STACK@;
+MARKUP_GLOBAL_STYLE = f"""
+    QWidget {{
+        font-family: {FONT_STACK};
         font-size: 12pt;
-    }
-    QListWidget {
-        font-family: @FONT_STACK@;
+    }}
+    QListWidget {{
+        font-family: {FONT_STACK};
         font-size: 12pt;
         font-weight: bold;
-    }
-    QLineEdit {
-        font-family: @FONT_STACK@;
+    }}
+    QLineEdit {{
+        font-family: {FONT_STACK};
         font-size: 12pt;
         background-color: white;
-        border: 1px solid #c0c0c0;
+        border: 1px solid {COLOR_BORDER_DEFAULT};
         border-radius: 3px;
         padding: 2px;
-    }
-    QLineEdit:focus {
+    }}
+    QLineEdit:focus {{
         background-color: white;
-    }
-    QToolTip {
-        font-family: @FONT_STACK@;
+    }}
+    QToolTip {{
+        font-family: {FONT_STACK};
         font-size: 12pt;
-        background-color: #ffffcc;
+        background-color: {COLOR_TOOLTIP_BG};
         color: black;
-        border: 1px solid #c0c0c0;
-    }
-    QTabWidget::pane {
-        border-top: 1px solid #c0c0c0;
-    }
-    QTabBar::tab {
+        border: 1px solid {COLOR_BORDER_DEFAULT};
+    }}
+    QTabWidget::pane {{
+        border-top: 1px solid {COLOR_BORDER_DEFAULT};
+    }}
+    QTabBar::tab {{
         padding: 4px 12px;
         margin-right: 2px;
-    }
-    QTabBar::tab:selected {
-        background-color: #edf7fd;
-        border-bottom: 2px solid #7c9ec0;
-    }
-""".replace("@FONT_STACK@", FONT_STACK)
-
-ENTRY_LIST_STYLE = """
-    QListWidget::item {
-        border-left: 3px solid transparent;
-        padding: 1px;
-    }
+    }}
+    QTabBar::tab:selected {{
+        background-color: {COLOR_SELECTED_BG};
+        border-bottom: 2px solid {COLOR_BORDER_SELECTED};
+    }}
 """
 
-CHECKED_TOGGLE_STYLE = """
-    QPushButton {
+ENTRY_LIST_STYLE = f"""
+    QListWidget::item {{
+        border-left: 3px solid transparent;
+        padding: 1px;
+    }}
+"""
+
+CHECKED_TOGGLE_STYLE = f"""
+    QPushButton {{
         border: none;
         background-color: transparent;
         color: black;
         padding: 0px;
-    }
-    QPushButton:hover {
-        color: #7c9ec0;
-    }
+    }}
+    QPushButton:hover {{
+        color: {COLOR_BORDER_SELECTED};
+    }}
 """
 
-TAG_BUTTON_STYLE = """
-    QPushButton {
+TAG_BUTTON_STYLE = f"""
+    QPushButton {{
         border: none;
         background-color: transparent;
         color: black;
         padding: 2px 6px;
-    }
-    QPushButton:hover {
-        color: #7c9ec0;
-    }
+    }}
+    QPushButton:hover {{
+        color: {COLOR_BORDER_SELECTED};
+    }}
 """

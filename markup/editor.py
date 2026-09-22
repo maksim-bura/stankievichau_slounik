@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor
 from format.entry_formatter import format_entry
-from theme.widget_styles import ENTRY_STYLESHEET
+from theme.widget_styles import ENTRY_STYLESHEET, COLOR_HIGHLIGHT_BG
 from theme.layout_constants import (
     EDITOR_TOOLBAR_MARGINS, EDITOR_TOOLBAR_SPACING, EDITOR_TOOLBAR_GAP
 )
@@ -50,7 +50,9 @@ def _find_enclosing_tag_pair(text, pos):
             for i in range(len(stack) - 1, -1, -1):
                 if stack[i]['name'] == tag['name']:
                     open_tag = stack.pop(i)
-                    if open_tag['end'] <= pos <= tag['end']:
+                    if open_tag['start'] <= pos <= tag['end']:
+                        if open_tag['name'] == 'entry':
+                            return None, None
                         return open_tag, tag
                     break
         else:
@@ -65,11 +67,23 @@ def _is_inside_tag(text, pos):
     return False
 
 
-def _is_adjacent_to_tag(text, pos):
-    for m in _TAG_RE.finditer(text):
-        if m.end() == pos or m.start() == pos:
-            return True
-    return False
+def _pair_at_deletion_boundary(text, pos, forward):
+    char_pos = pos if forward else pos - 1
+    if char_pos < 0 or char_pos >= len(text):
+        return None, None
+    ch = text[char_pos]
+    if ch != '>' and ch != '<':
+        return None, None
+    open_tag, close_tag = _find_enclosing_tag_pair(text, pos)
+    if not open_tag or not close_tag:
+        return None, None
+    if forward:
+        if char_pos == open_tag['start'] or char_pos == close_tag['start']:
+            return open_tag, close_tag
+    else:
+        if char_pos == open_tag['end'] - 1 or char_pos == close_tag['end'] - 1:
+            return open_tag, close_tag
+    return None, None
 
 
 class TagButton(QPushButton):
@@ -189,13 +203,22 @@ class EditorPane(QWidget):
 class _TagAwareTextEdit(QTextEdit):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.setAcceptRichText(False)
         self._pending_tag_delete = False
         self._pending_open_tag = None
         self._pending_close_tag = None
 
+    def canInsertFromMimeData(self, source):
+        return source.hasText()
+
+    def insertFromMimeData(self, source):
+        text = source.text()
+        if text:
+            self.insertPlainText(text)
+
     def _highlight_tag_pair(self, open_tag, close_tag):
         fmt = QTextCharFormat()
-        fmt.setBackground(QColor(255, 249, 196))
+        fmt.setBackground(QColor(COLOR_HIGHLIGHT_BG))
 
         sel_open = QTextEdit.ExtraSelection()
         sel_open.format = fmt
@@ -212,7 +235,8 @@ class _TagAwareTextEdit(QTextEdit):
         self.setExtraSelections([sel_open, sel_close])
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Backspace:
+        if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            deleting_forward = event.key() == Qt.Key_Delete
             cursor = self.textCursor()
 
             if self._pending_tag_delete and not cursor.hasSelection():
@@ -246,17 +270,18 @@ class _TagAwareTextEdit(QTextEdit):
             self.setExtraSelections([])
 
             if cursor.hasSelection():
-                selected = cursor.selectedText()
-                m = _PAIR_SELECT_RE.match(selected)
-                if m:
-                    self.blockSignals(True)
-                    content = m.group(2)
-                    cursor.removeSelectedText()
-                    cursor.insertText(content)
-                    self.setTextCursor(cursor)
-                    self.blockSignals(False)
-                    self.textChanged.emit()
-                    return
+                if not deleting_forward:
+                    selected = cursor.selectedText()
+                    m = _PAIR_SELECT_RE.match(selected)
+                    if m:
+                        self.blockSignals(True)
+                        content = m.group(2)
+                        cursor.removeSelectedText()
+                        cursor.insertText(content)
+                        self.setTextCursor(cursor)
+                        self.blockSignals(False)
+                        self.textChanged.emit()
+                        return
                 super().keyPressEvent(event)
                 return
 
@@ -267,14 +292,13 @@ class _TagAwareTextEdit(QTextEdit):
                 super().keyPressEvent(event)
                 return
 
-            if _is_adjacent_to_tag(text, pos):
-                open_tag, close_tag = _find_enclosing_tag_pair(text, pos)
-                if open_tag and close_tag:
-                    self._pending_tag_delete = True
-                    self._pending_open_tag = open_tag
-                    self._pending_close_tag = close_tag
-                    self._highlight_tag_pair(open_tag, close_tag)
-                    return
+            open_tag, close_tag = _pair_at_deletion_boundary(text, pos, forward=deleting_forward)
+            if open_tag and close_tag:
+                self._pending_tag_delete = True
+                self._pending_open_tag = open_tag
+                self._pending_close_tag = close_tag
+                self._highlight_tag_pair(open_tag, close_tag)
+                return
 
         else:
             self._pending_tag_delete = False

@@ -2,6 +2,9 @@ import re
 import html
 from localization import strings
 from utils.search_regex import compile_search_regex
+from utils.constants import (
+    COLLAPSED_TRIANGLE_ENTITY, EXPANDED_TRIANGLE_ENTITY, SCHEME_TOGGLE_SECTION,
+)
 
 
 def build_filtered_html(all_children, collapsed_sections, arrow_marker, search_text=None, marker_anchor=None):
@@ -83,7 +86,8 @@ def _render_section(parts, section, pattern, collapsed_sections):
     h2_elem, h2_br, gabbr_groups, content_groups = _parse_section(section)
 
     is_collapsed = section_id in collapsed_sections
-    button = f'<a class="toggle-btn" href="toggle-section:{section_id}">{"&#9654;" if is_collapsed else "&#9660;"}</a> '
+    button = (f'<a class="toggle-btn" href="{SCHEME_TOGGLE_SECTION}:{section_id}">'
+              f'{COLLAPSED_TRIANGLE_ENTITY if is_collapsed else EXPANDED_TRIANGLE_ENTITY}</a> ')
 
     parts.append(button)
     parts.append(_element_to_html(h2_elem))

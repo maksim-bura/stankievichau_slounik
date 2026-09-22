@@ -23,12 +23,17 @@ from theme.layout_constants import (
     LAYOUT_MARGINS, LAYOUT_SPACING, TOP_LAYOUT_SPACING,
     BUTTON_SIZE, LIST_ITEM_BORDER_WIDTH
 )
+from theme.widget_styles import (
+    COLOR_NORMAL_BG, COLOR_HOVER_BG, COLOR_SELECTED_BG,
+    COLOR_BORDER_DEFAULT, COLOR_BORDER_SELECTED,
+)
+from utils.constants import CHECK_MARK, CHECK_BLANK, FLOPPY_MARKER
 
-_COLOR_NORMAL_BG = QColor(255, 255, 255)
-_COLOR_HOVER_BG = QColor(250, 250, 250)
-_COLOR_SELECTED_BG = QColor(237, 247, 253)
-_COLOR_BORDER_DEFAULT = QColor(192, 192, 192)
-_COLOR_BORDER_SELECTED = QColor(124, 158, 192)
+_COLOR_NORMAL_BG = QColor(COLOR_NORMAL_BG)
+_COLOR_HOVER_BG = QColor(COLOR_HOVER_BG)
+_COLOR_SELECTED_BG = QColor(COLOR_SELECTED_BG)
+_COLOR_BORDER_DEFAULT = QColor(COLOR_BORDER_DEFAULT)
+_COLOR_BORDER_SELECTED = QColor(COLOR_BORDER_SELECTED)
 _COLOR_CHECKED_BG = QColor(200, 247, 197)
 _COLOR_CHECKED_HOVER_BG = QColor(184, 240, 181)
 _COLOR_CHECKED_SELECTED_BG = QColor(124, 191, 122)
@@ -110,6 +115,7 @@ class MarkupMainWindow(QMainWindow):
         self.checked_state.migrate(self.search_engine._get_connection())
         self.current_result = None
         self._has_unsaved = False
+        self._loaded_raw = {}
 
         self.setWindowTitle('Dictionary Markup')
         self.resize(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
@@ -142,14 +148,14 @@ class MarkupMainWindow(QMainWindow):
         self.search_box = SearchBox('Search entries...')
         self.search_box.textChanged.connect(self.on_search)
 
-        self._checked_toggle = QPushButton('\u2b1c')
+        self._checked_toggle = QPushButton(CHECK_BLANK)
         self._checked_toggle.setCheckable(True)
         self._checked_toggle.setFixedSize(BUTTON_SIZE)
         self._checked_toggle.setCursor(Qt.PointingHandCursor)
         self._checked_toggle.setStyleSheet(CHECKED_TOGGLE_STYLE)
         self._checked_toggle.clicked.connect(self._on_checked_toggle)
 
-        self._save_button = QPushButton('\U0001f4be')
+        self._save_button = QPushButton(FLOPPY_MARKER)
         self._save_button.setFixedSize(BUTTON_SIZE)
         self._save_button.setCursor(Qt.PointingHandCursor)
         self._save_button.setStyleSheet(TAG_BUTTON_STYLE)
@@ -267,12 +273,19 @@ class MarkupMainWindow(QMainWindow):
                         self.current_results[i] = (r[0], r[1], fresh, r[3], r[4])
                         break
 
+        raw = self._read_entry_from_source(entry_id, source_file, headword, result[3])
+        if raw is not None:
+            self._loaded_raw[entry_id] = raw.rstrip('\n')
+            xml_text = raw
+        else:
+            self._loaded_raw.pop(entry_id, None)
+
         self.current_result = (result[0], result[1], xml_text, result[3], source_file)
         self.editor.editor.set_entry(result[0], xml_text)
         self._has_unsaved = False
 
         is_checked = self.checked_state.is_checked(source_file, result[3], result[1])
-        self._checked_toggle.setText('\u2705' if is_checked else '\u2b1c')
+        self._checked_toggle.setText(CHECK_MARK if is_checked else CHECK_BLANK)
         self._checked_toggle.setChecked(is_checked)
         self._save_button.hide()
 
@@ -304,10 +317,6 @@ class MarkupMainWindow(QMainWindow):
                     if self._block_matches(block, t_norm):
                         return block
 
-            root = ElementTree.fromstring(content)
-            entries = list(root.iter('entry'))
-            if entries:
-                return ElementTree.tostring(entries[0], encoding='unicode')
         except (ElementTree.ParseError, OSError):
             pass
         return None
@@ -321,8 +330,9 @@ class MarkupMainWindow(QMainWindow):
 
     @staticmethod
     def _block_matches(block, target_norm):
-        for m in re.finditer(r'<hw>([^<]*)</hw>', block):
-            hw_norm = normalize_jo(remove_accents(m.group(1).lower()))
+        for m in re.finditer(r'<hw>(.*?)</hw>', block, re.DOTALL):
+            inner = re.sub(r'<[^>]+>', '', m.group(1))
+            hw_norm = normalize_jo(remove_accents(inner.lower().strip()))
             if hw_norm == target_norm:
                 return True
         return False
@@ -335,7 +345,7 @@ class MarkupMainWindow(QMainWindow):
         source_file = self.current_result[4]
         entry_link = self.current_result[3]
         new_state = self.checked_state.toggle(source_file, entry_link, headword)
-        self._checked_toggle.setText('\u2705' if new_state else '\u2b1c')
+        self._checked_toggle.setText(CHECK_MARK if new_state else CHECK_BLANK)
         self._checked_toggle.setChecked(new_state)
         self.results_box.viewport().update()
 
@@ -352,7 +362,7 @@ class MarkupMainWindow(QMainWindow):
 
         try:
             root = ElementTree.fromstring(new_xml)
-            new_entry_string = ElementTree.tostring(root, encoding='unicode')
+            new_entry_string = ElementTree.tostring(root, encoding='unicode').rstrip('\n')
         except ElementTree.ParseError:
             QMessageBox.warning(self, 'Invalid XML', 'The entry contains invalid XML.')
             return
@@ -367,35 +377,41 @@ class MarkupMainWindow(QMainWindow):
             QMessageBox.warning(self, 'Save Error', f'Source file not found: {source_file}')
             return
 
-        old_entry_string = self._read_entry_from_source(
-            entry_id, source_file,
-            self.current_result[1] if self.current_result else None,
-            self.current_result[3] if self.current_result else None
-        )
-        if not old_entry_string:
-            QMessageBox.warning(self, 'Save Error', 'Could not locate the original entry in the source file.')
-            return
+        headword = self.current_result[1]
+        entry_link = self.current_result[3]
 
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        old_entry_string = old_entry_string.rstrip('\n')
-        new_entry_string = new_entry_string.rstrip('\n')
-
-        if old_entry_string not in content:
+        blocks = re.findall(r'<entry\b.*?</entry>', content, re.DOTALL)
+        if not blocks:
             QMessageBox.warning(self, 'Save Error', 'Could not locate the original entry in the source file.')
             return
 
-        new_content = content.replace(old_entry_string, new_entry_string, 1)
+        old_raw = self._loaded_raw.get(entry_id)
+        if old_raw is None:
+            old_raw = self._read_entry_from_source(entry_id, source_file, headword, entry_link)
 
+        indices = [i for i, b in enumerate(blocks) if b == old_raw] if old_raw else []
+
+        if not indices:
+            QMessageBox.warning(self, 'Save Error', 'Could not locate the original entry in the source file.')
+            return
+        if len(indices) != 1:
+            QMessageBox.warning(self, 'Save Error',
+                'The original entry could not be matched uniquely; no changes were saved.')
+            return
+
+        new_content = content.replace(blocks[indices[0]], new_entry_string, 1)
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
+        self._loaded_raw[entry_id] = new_entry_string
         self._has_unsaved = False
         self.editor.editor._is_modified = False
         self._save_button.hide()
 
-        updated = (entry_id, self.current_result[1], new_entry_string, self.current_result[3], source_file)
+        updated = (entry_id, self.current_result[1], new_entry_string, entry_link, source_file)
         self.current_result = updated
         for i, r in enumerate(self.current_results):
             if r[0] == entry_id:

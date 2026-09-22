@@ -3,11 +3,12 @@ from PySide6.QtCore import Qt
 from localization import strings
 from theme.layout_constants import BUTTON_SIZE
 from theme.widget_styles import MENU_BUTTON_STYLE
+from utils.constants import BOOKS_MARKER
 
 
 class SourcesButton(QPushButton):
     def __init__(self, parent=None):
-        super().__init__("📚", parent)
+        super().__init__(BOOKS_MARKER, parent)
         self.sources_visible = False
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setFixedSize(BUTTON_SIZE)

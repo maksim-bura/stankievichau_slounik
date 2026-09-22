@@ -1,8 +1,10 @@
+import re
 import xml.etree.ElementTree as ElementTree
 from .link_handler import LinkHandler
 from .source_mapper import source_mapper
 from utils.text_utils import remove_accents
 from utils.content_rules import d_hw_variants
+from utils.constants import ARROW_MARKER
 
 
 
@@ -36,7 +38,7 @@ def format_entry(xml_string, is_sources=False):
 
     root = ElementTree.fromstring(xml_string)
     context = _format_context
-    content = _process_element(root, context, is_sources)
+    content = process_element(root, context, is_sources)
 
     html = f"<body>{content}</body>"
 
@@ -61,7 +63,7 @@ def _d_variants(element):
     return [remove_accents(text) for text in d_hw_variants(element)]
 
 
-def _process_element(element, context, is_sources=False, current_variants=None):
+def process_element(element, context, is_sources=False, current_variants=None):
     parts = []
 
     if element.text:
@@ -84,7 +86,7 @@ def _process_element(element, context, is_sources=False, current_variants=None):
 
         is_target_headword = (context and context.subheadword and
                               child.tag == 'hw' and
-                              remove_accents(child.text) == remove_accents(context.subheadword))
+                              remove_accents(''.join(child.itertext()).strip()) == remove_accents(context.subheadword))
 
         if child.tag == 'br':
             parts.append('<br>')
@@ -188,8 +190,7 @@ def _process_element(element, context, is_sources=False, current_variants=None):
             else:
                 hw_attr = child.get('hw')
                 link_attr = child.get('link')
-                link_text = child.text
-                stripped_text = link_text.strip('"\'„“”') if link_text else None
+                see_text = ''.join(child.itertext()).strip().strip('"\'„“”') or child.text
                 if hw_attr:
                     hw_attr = hw_attr.strip('"\'„“”')
                 if link_attr:
@@ -197,17 +198,19 @@ def _process_element(element, context, is_sources=False, current_variants=None):
                 elif hw_attr:
                     link_target = hw_attr
                 else:
-                    link_target = stripped_text
-                link_html = LinkHandler.create_link(child.tag, link_target, display_html=link_text, hw_attr=hw_attr)
+                    link_target = see_text
+                    if any(grand == 'n' for grand in child) and re.match(r'^[,\s]*\d', child.tail or ''):
+                        link_target += (child.tail or '')
+                link_html = LinkHandler.create_link(child.tag, link_target, display_html=see_text, hw_attr=hw_attr)
                 parts.append(f'<span class="see">{link_html}</span>')
         else:
             inner_parts = []
 
             if is_target_headword:
-                inner_parts.append('<span class="headword-arrow">➡️</span>')
+                inner_parts.append(f'<span class="headword-arrow">{ARROW_MARKER}</span>')
 
             if len(child) > 0:
-                inner_parts.append(_process_element(child, context, is_sources, new_variants))
+                inner_parts.append(process_element(child, context, is_sources, new_variants))
             else:
                 if child.text:
                     inner_parts.append(child.text)
@@ -216,13 +219,14 @@ def _process_element(element, context, is_sources=False, current_variants=None):
 
             if is_target_sense:
                 sense_id = f"sense_{sense_attribute}"
-                parts.append(f'<span class="sense-arrow">➡️</span>')
+                parts.append(f'<span class="sense-arrow">{ARROW_MARKER}</span>')
                 parts.append(f'<span id="{sense_id}" class="{tag_class}">{inner_html}</span>' if tag_class else f'<span id="{sense_id}">{inner_html}</span>')
             elif is_sources and child.tag == 'abbr' and child.text:
                 anchor_id = child.text.rstrip(':').rstrip('.')
                 parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}</span>')
-            elif not is_sources and child.tag == 'hw' and child.text:
-                anchor_id = remove_accents(child.text)
+            elif not is_sources and child.tag == 'hw':
+                hw_text = ''.join(child.itertext()).strip() or child.text
+                anchor_id = remove_accents(hw_text)
                 link_attr = child.get('link')
                 comma = ''
                 if child.tail and child.tail.startswith(','):

@@ -35,11 +35,26 @@ def content_text(element, tag):
     return get_text_excluding_src(element)
 
 
-def d_hw_variants(d_element):
+def hw_text_excluding_n(element):
+    parts = []
+    if element.text:
+        parts.append(element.text)
+    for child in element:
+        if child.tag == 'n':
+            if child.tail:
+                parts.append(child.tail)
+            continue
+        parts.append(hw_text_excluding_n(child))
+        if child.tail:
+            parts.append(child.tail)
+    return ''.join(parts)
+
+
+def d_hw_variants(d_element, exclude_n=False):
     variants = []
     for child in d_element:
         if child.tag == 'hw':
-            text = ''.join(child.itertext()).strip()
+            text = (hw_text_excluding_n(child) if exclude_n else ''.join(child.itertext())).strip()
             if text:
                 variants.append(text)
     return variants

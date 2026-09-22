@@ -1,4 +1,5 @@
 import re
+from utils.constants import SCHEME_WORD, SCHEME_SOURCE
 from utils.text_utils import remove_accents
 
 
@@ -31,27 +32,40 @@ class LinkHandler:
     @classmethod
     def parse_link_text(cls, link_text):
         normalized = remove_accents(link_text)
-        match = re.match(r'^(.+?)\s+([\d\s,а-яА-Я]+)$', normalized)
-        if match:
-            word = match.group(1).strip()
-            numbers_str = match.group(2).strip()
-            sense_parts = []
-            for part in re.split(r'[,\s]+', numbers_str):
-                if part.isdigit():
-                    sense_parts.append(int(part))
-                elif part.isalpha() and len(part) == 1:
-                    sense_parts.append(part)
-                else:
-                    for char in part:
-                        if char.isalpha() and len(char) == 1:
-                            sense_parts.append(char)
-            return word, sense_parts
-        return normalized, []
+        tokens = [t for t in re.split(r'[\s,，]+', normalized) if t]
+        if not tokens:
+            return normalized, []
+
+        sense_parts = []
+        i = len(tokens) - 1
+        while i >= 0:
+            token = tokens[i]
+            if token.isdigit():
+                sense_parts.insert(0, int(token))
+                i -= 1
+                continue
+            if re.fullmatch(r'[а-яА-Яa-zA-Z]', token) and not re.fullmatch(r'[ІіIi]', token):
+                sense_parts.insert(0, token)
+                i -= 1
+                continue
+            break
+
+        homonym = ''
+        if i >= 0 and re.fullmatch(r'[ІіIiVvXx]+', tokens[i]):
+            homonym = tokens[i]
+            i -= 1
+
+        word = ' '.join(tokens[:i + 1]).strip()
+        if homonym:
+            word = (word + ' ' if word else '') + homonym
+        return word, sense_parts
 
     @classmethod
     def process_url(cls, url_string):
-        if url_string.startswith("word:"):
-            target = url_string[5:]
+        word_prefix = SCHEME_WORD + ':'
+        source_prefix = SCHEME_SOURCE + ':'
+        if url_string.startswith(word_prefix):
+            target = url_string[len(word_prefix):]
             if '|' in target:
                 parts = target.split('|')
                 word = parts[0]
@@ -64,7 +78,7 @@ class LinkHandler:
                 return ('word', word, sense_parts, entry_id)
             word, sense_parts = cls.parse_link_text(target)
             return ('word', word, sense_parts, None)
-        elif url_string.startswith("source:"):
-            target = url_string[7:]
+        elif url_string.startswith(source_prefix):
+            target = url_string[len(source_prefix):]
             return ('source', target, None, None)
         return (None, None, None, None)

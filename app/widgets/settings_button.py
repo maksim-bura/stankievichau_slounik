@@ -3,17 +3,17 @@ from PySide6.QtGui import QCursor, QFont
 from PySide6.QtWidgets import QPushButton, QSizePolicy, QMenu, QWidgetAction, QLabel, QWidget, QHBoxLayout, QVBoxLayout
 from localization import strings
 from theme.layout_constants import BUTTON_SIZE, SEARCH_BOX_HEIGHT, MENU_OPTION_MARGINS, MENU_INDENT_MARGINS
-from theme.widget_styles import MENU_BUTTON_STYLE
+from theme.widget_styles import MENU_BUTTON_STYLE, COLOR_DISABLED_FG
+from utils.constants import CHECK_MARK, CHECK_BLANK, RADIO_ON, RADIO_OFF, GEAR_MARKER
 
 
-class _CheckOption(QWidget):
-    clicked = Signal(object)
-
-    def __init__(self, text, checked=False, parent=None):
+class _ToggleOption(QWidget):
+    def __init__(self, text, glyph_checked, glyph_unchecked, checked=False, parent=None):
         super().__init__(parent)
         self._checked = checked
-        self._active = True
         self._text = text
+        self._glyph_checked = glyph_checked
+        self._glyph_unchecked = glyph_unchecked
         self._label = QLabel(self)
         layout = QHBoxLayout(self)
         layout.addWidget(self._label)
@@ -22,23 +22,38 @@ class _CheckOption(QWidget):
         self._update_display()
 
     def _update_display(self):
-        prefix = '\u2705' if self._checked else '\u2b1c'
+        prefix = self._glyph_checked if self._checked else self._glyph_unchecked
         self._label.setText(f'{prefix} {self._text}')
-        if not self._active:
-            self._label.setStyleSheet('color: #888888;')
-        else:
-            self._label.setStyleSheet('')
 
     def set_checked(self, checked):
         self._checked = checked
         self._update_display()
 
+    def is_checked(self):
+        return self._checked
+
+    def mouseReleaseEvent(self, event):
+        event.accept()
+
+
+class _CheckOption(_ToggleOption):
+    clicked = Signal(object)
+
+    def __init__(self, text, checked=False, parent=None):
+        self._active = True
+        super().__init__(text, CHECK_MARK, CHECK_BLANK, checked, parent)
+        self._update_display()
+
+    def _update_display(self):
+        super()._update_display()
+        if not self._active:
+            self._label.setStyleSheet(f'color: {COLOR_DISABLED_FG};')
+        else:
+            self._label.setStyleSheet('')
+
     def set_active(self, active):
         self._active = active
         self._update_display()
-
-    def is_checked(self):
-        return self._checked
 
     def mousePressEvent(self, event):
         event.accept()
@@ -47,34 +62,12 @@ class _CheckOption(QWidget):
             self._update_display()
             self.clicked.emit(self)
 
-    def mouseReleaseEvent(self, event):
-        event.accept()
 
-
-class _RadioOption(QWidget):
+class _RadioOption(_ToggleOption):
     toggled = Signal(object)
 
     def __init__(self, text, checked=False, parent=None):
-        super().__init__(parent)
-        self._checked = checked
-        self._text = text
-        self._label = QLabel(self)
-        layout = QHBoxLayout(self)
-        layout.addWidget(self._label)
-        self.setMinimumHeight(SEARCH_BOX_HEIGHT)
-        layout.setContentsMargins(*MENU_OPTION_MARGINS)
-        self._update_display()
-
-    def _update_display(self):
-        prefix = '\U0001f7e2' if self._checked else '\u26aa'
-        self._label.setText(f'{prefix} {self._text}')
-
-    def set_checked(self, checked):
-        self._checked = checked
-        self._update_display()
-
-    def is_checked(self):
-        return self._checked
+        super().__init__(text, RADIO_ON, RADIO_OFF, checked, parent)
 
     def mousePressEvent(self, event):
         event.accept()
@@ -83,15 +76,12 @@ class _RadioOption(QWidget):
             self._update_display()
             self.toggled.emit(self)
 
-    def mouseReleaseEvent(self, event):
-        event.accept()
-
 
 class SettingsButton(QPushButton):
     search_mode_changed = Signal()
 
     def __init__(self, sources_button=None, parent=None):
-        super().__init__("\u2699\ufe0f", parent)
+        super().__init__(GEAR_MARKER, parent)
         self._sources_button = sources_button
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.setFixedSize(BUTTON_SIZE)
@@ -112,41 +102,51 @@ class SettingsButton(QPushButton):
         self.settings_menu.addAction(heading_action)
         self.settings_menu.addSeparator()
 
-        be_data = strings.settings.search_settings.search_in_belarusian
-        ru_label = strings.settings.search_settings.search_in_russian
+        belarusian_data = strings.settings.search_settings.search_in_belarusian
+        russian_label = strings.settings.search_settings.search_in_russian
 
-        self._radio1 = _RadioOption(be_data.label, checked=True)
-        self._radio1.toggled.connect(self._on_radio_toggled)
-        self._radio1_action = QWidgetAction(self.settings_menu)
-        self._radio1_action.setDefaultWidget(self._radio1)
-        self.settings_menu.addAction(self._radio1_action)
+        self._belarusian_radio = _RadioOption(belarusian_data.label, checked=True)
+        self._belarusian_radio.toggled.connect(self._on_radio_toggled)
+        self._belarusian_radio_action = QWidgetAction(self.settings_menu)
+        self._belarusian_radio_action.setDefaultWidget(self._belarusian_radio)
+        self.settings_menu.addAction(self._belarusian_radio_action)
 
-        self._radio2 = _RadioOption(ru_label)
-        self._radio2.toggled.connect(self._on_radio_toggled)
-        self._radio2_action = QWidgetAction(self.settings_menu)
-        self._radio2_action.setDefaultWidget(self._radio2)
-        self.settings_menu.addAction(self._radio2_action)
+        self._russian_radio = _RadioOption(russian_label)
+        self._russian_radio.toggled.connect(self._on_radio_toggled)
+        self._russian_radio_action = QWidgetAction(self.settings_menu)
+        self._russian_radio_action.setDefaultWidget(self._russian_radio)
+        self.settings_menu.addAction(self._russian_radio_action)
 
-        self._sub_options = []
-        self._sub_actions = []
-        self._add_sub_option(be_data.headwords, checked=True)
-        self._add_sub_option(be_data.examples, checked=True)
+        self._scope_actions = []
+        self._add_scope_option(belarusian_data.headwords, checked=True)
+        self._add_scope_option(belarusian_data.examples, checked=True)
 
         self.settings_menu.aboutToHide.connect(self._on_menu_closed)
         self.clicked.connect(self._on_clicked)
 
-    def _add_sub_option(self, text, checked=False):
+    def _add_scope_option(self, text, checked=False):
         option = _CheckOption(text, checked)
         option.layout().setContentsMargins(*MENU_INDENT_MARGINS)
         option.clicked.connect(self._on_sub_option_clicked)
         action = QWidgetAction(self.settings_menu)
         action.setDefaultWidget(option)
-        self.settings_menu.insertAction(self._radio2_action, action)
-        self._sub_options.append(option)
-        self._sub_actions.append(action)
+        self.settings_menu.insertAction(self._russian_radio_action, action)
+        self._scope_actions.append((option, action))
+
+    def _headwords_option(self):
+        return self._scope_actions[0][0]
+
+    def _examples_option(self):
+        return self._scope_actions[1][0]
+
+    def _all_scope_options(self):
+        return [option for option, _ in self._scope_actions]
+
+    def _all_scope_actions(self):
+        return [action for _, action in self._scope_actions]
 
     def get_option_states(self):
-        if self._radio2.is_checked():
+        if self._russian_radio.is_checked():
             return {
                 'search_in_headwords': False,
                 'search_in_translations': True,
@@ -154,35 +154,36 @@ class SettingsButton(QPushButton):
             }
         else:
             return {
-                'search_in_headwords': self._sub_options[0].is_checked(),
+                'search_in_headwords': self._headwords_option().is_checked(),
                 'search_in_translations': False,
-                'search_in_examples': self._sub_options[1].is_checked(),
+                'search_in_examples': self._examples_option().is_checked(),
             }
 
     def _on_radio_toggled(self, radio):
-        if radio is self._radio1:
-            self._radio2.set_checked(False)
+        if radio is self._belarusian_radio:
+            self._russian_radio.set_checked(False)
         else:
-            self._radio1.set_checked(False)
+            self._belarusian_radio.set_checked(False)
         self._update_sub_visibility()
         self.search_mode_changed.emit()
 
     def _update_sub_visibility(self):
-        visible = self._radio1.is_checked()
-        for action in self._sub_actions:
+        visible = self._belarusian_radio.is_checked()
+        for action in self._all_scope_actions():
             if visible:
                 if action not in self.settings_menu.actions():
-                    self.settings_menu.insertAction(self._radio2_action, action)
+                    self.settings_menu.insertAction(self._russian_radio_action, action)
             else:
                 self.settings_menu.removeAction(action)
 
     def _sync_sub_options(self):
-        checked_count = sum(o.is_checked() for o in self._sub_options)
-        for o in self._sub_options:
+        options = self._all_scope_options()
+        checked_count = sum(o.is_checked() for o in options)
+        for o in options:
             o.set_active(not (checked_count == 1 and o.is_checked()))
 
     def _on_sub_option_clicked(self, option):
-        checked_count = sum(o.is_checked() for o in self._sub_options)
+        checked_count = sum(o.is_checked() for o in self._all_scope_options())
         if checked_count == 0:
             option.set_checked(True)
         self._sync_sub_options()
