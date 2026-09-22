@@ -2,7 +2,7 @@ import sqlite3
 import xml.etree.ElementTree as ElementTree
 import os
 from utils.text_utils import remove_accents
-from utils.content_rules import content_text, index_text
+from utils.content_rules import content_text, index_text, hw_text_excluding_n
 
 
 def parse_with_error_handling(file_path):
@@ -62,6 +62,7 @@ def build_database():
         CREATE TABLE dictionary (
             id INTEGER PRIMARY KEY,
             headword TEXT,
+            sort_headword TEXT,
             normalized_headword TEXT,
             full_entry TEXT,
             entry_link TEXT,
@@ -73,6 +74,7 @@ def build_database():
         CREATE TABLE sub_headwords (
             id INTEGER PRIMARY KEY,
             headword TEXT,
+            sort_headword TEXT,
             normalized_headword TEXT,
             main_entry_id INTEGER
         )
@@ -99,13 +101,14 @@ def build_database():
         if not headword:
             return
 
-        normalized_headword = remove_accents(headword).lower()
+        sort_headword = hw_text_excluding_n(headword_element).strip() or headword
+        normalized_headword = remove_accents(sort_headword).lower()
         entry_string = ElementTree.tostring(entry, encoding="unicode")
         entry_link = entry.get('link')
 
         cursor.execute(
-            "INSERT INTO dictionary (headword, normalized_headword, full_entry, entry_link, source_file) VALUES (?, ?, ?, ?, ?)",
-            (headword, normalized_headword, entry_string, entry_link, source_file)
+            "INSERT INTO dictionary (headword, sort_headword, normalized_headword, full_entry, entry_link, source_file) VALUES (?, ?, ?, ?, ?, ?)",
+            (headword, sort_headword, normalized_headword, entry_string, entry_link, source_file)
         )
 
         main_entry_id = cursor.lastrowid
@@ -113,14 +116,16 @@ def build_database():
         all_headwords = entry.findall(".//hw")
         seen_sub_headwords = set()
         for sub_headword_element in all_headwords[1:]:
-            if sub_headword_element.text:
-                sub_normalized = remove_accents(sub_headword_element.text).lower()
+            sub_text = ''.join(sub_headword_element.itertext()).strip()
+            if sub_text:
+                sub_sort = hw_text_excluding_n(sub_headword_element).strip() or sub_text
+                sub_normalized = remove_accents(sub_sort).lower()
                 if sub_normalized in seen_sub_headwords:
                     continue
                 seen_sub_headwords.add(sub_normalized)
                 cursor.execute(
-                    "INSERT INTO sub_headwords (headword, normalized_headword, main_entry_id) VALUES (?, ?, ?)",
-                    (sub_headword_element.text, sub_normalized, main_entry_id)
+                    "INSERT INTO sub_headwords (headword, sort_headword, normalized_headword, main_entry_id) VALUES (?, ?, ?, ?)",
+                    (sub_text, sub_sort, sub_normalized, main_entry_id)
                 )
 
         for t_elem in entry.iter('t'):

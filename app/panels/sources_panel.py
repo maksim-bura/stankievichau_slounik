@@ -10,10 +10,10 @@ from theme.layout_constants import (
 from app.widgets import IconButton, SearchBox, DictTextBrowser
 from theme.widget_styles import ENTRY_STYLESHEET
 from app.panels.sources_renderer import build_filtered_html, compile_search_regex, section_matches
+from utils.constants import ARROW_MARKER, CROSS_MARKER, MAGNIFIER_MARKER, SCHEME_TOGGLE_SECTION
 
 
 class SourcesPanel:
-    ARROW_MARKER = '\u27a1\ufe0f'
 
     def __init__(self, main_window):
         self.main_window = main_window
@@ -42,7 +42,7 @@ class SourcesPanel:
         self.search_line.textChanged.connect(self._on_search)
         search_layout.addWidget(self.search_line, 1)
 
-        self.close_search_button = IconButton("\u274c", flat=True)
+        self.close_search_button = IconButton(CROSS_MARKER, flat=True)
         self.close_search_button.setFixedSize(BUTTON_SIZE)
         self.close_search_button.setVisible(False)
         self.close_search_button.clicked.connect(self.close_search_bar)
@@ -52,7 +52,7 @@ class SourcesPanel:
         self.search_container.setLayout(search_layout)
         self.layout.addWidget(self.search_container)
 
-        self.floating_button = IconButton("\U0001f50d", flat=True)
+        self.floating_button = IconButton(MAGNIFIER_MARKER, flat=True)
         self.floating_button.setFixedSize(BUTTON_SIZE)
         self.floating_button.clicked.connect(self.open_search_bar)
 
@@ -84,12 +84,10 @@ class SourcesPanel:
         self._pre_search_content = None
         self._pre_search_collapsed = None
         if self._all_children:
-            self.content = build_filtered_html(self._all_children, self._collapsed_sections, self.ARROW_MARKER)
-            self.original_content = self.content
+            self.content = build_filtered_html(self._all_children, self._collapsed_sections, ARROW_MARKER)
         else:
-            fallback = "<body>No sources found</body>"
-            self.content = fallback
-            self.original_content = fallback
+            self.content = '<body></body>'
+        self.original_content = self.content
 
     def load_content(self):
         sources_path = os.path.join(
@@ -124,7 +122,7 @@ class SourcesPanel:
 
         text = self.search_line.text() if self.search_visible else None
         marker = None if (self.search_visible and text) else self.current_anchor
-        self.content = build_filtered_html(self._all_children, self._collapsed_sections, self.ARROW_MARKER, search_text=text, marker_anchor=marker)
+        self.content = build_filtered_html(self._all_children, self._collapsed_sections, ARROW_MARKER, search_text=text, marker_anchor=marker)
 
         self.viewer.setHtml(self.content)
         self.viewer.verticalScrollBar().setValue(current_scroll)
@@ -134,8 +132,9 @@ class SourcesPanel:
 
     def _on_anchor_clicked(self, url):
         url_str = url.toString()
-        if url_str.startswith('toggle-section:'):
-            section_id = url_str[len('toggle-section:'):]
+        prefix = SCHEME_TOGGLE_SECTION + ':'
+        if url_str.startswith(prefix):
+            section_id = url_str[len(prefix):]
             self._toggle_section(section_id)
         else:
             self.main_window.on_link_clicked(url)
@@ -165,7 +164,7 @@ class SourcesPanel:
             old_focus = self.main_window.entry_viewer.get_viewer().hasFocus()
             current_scroll = self.viewer.verticalScrollBar().value()
 
-        self.content = build_filtered_html(self._all_children, self._collapsed_sections, self.ARROW_MARKER, marker_anchor=anchor)
+        self.content = build_filtered_html(self._all_children, self._collapsed_sections, ARROW_MARKER, marker_anchor=anchor)
         self.viewer.setHtml(self.content)
 
         if not was_visible:
@@ -202,7 +201,7 @@ class SourcesPanel:
                     if section_matches(child, pattern):
                         self._collapsed_sections.discard(child.get('id'))
 
-            self.content = build_filtered_html(self._all_children, self._collapsed_sections, self.ARROW_MARKER, search_text=text)
+            self.content = build_filtered_html(self._all_children, self._collapsed_sections, ARROW_MARKER, search_text=text)
             self.viewer.setHtml(self.content)
 
     def toggle(self):
@@ -227,5 +226,5 @@ class SourcesPanel:
     def handle_resize(self):
         self.scroll_manager.handle_resize()
 
-    def get_viewer(self):
+    def get_widget(self):
         return self.container

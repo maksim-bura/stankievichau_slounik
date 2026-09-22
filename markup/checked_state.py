@@ -14,7 +14,17 @@ class CheckedState:
     def _load(self):
         if os.path.exists(self._path):
             with open(self._path, 'r', encoding='utf-8') as f:
-                self._states = json.load(f)
+                content = f.read()
+            if not content.strip():
+                self._states = {}
+            else:
+                try:
+                    self._states = json.loads(content)
+                except json.JSONDecodeError:
+                    backup = f'{self._path}.bak'
+                    with open(backup, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    self._states = {}
         else:
             self._states = {}
 

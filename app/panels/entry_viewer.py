@@ -9,6 +9,7 @@ from theme.layout_constants import (
 from app.widgets import IconButton, DictTextBrowser
 from utils.scroll_manager import ScrollManager
 from theme.widget_styles import ENTRY_STYLESHEET, FLAT_BUTTON_STYLE
+from utils.constants import CROSS_MARKER, BACK_ARROW, FORWARD_ARROW
 
 
 class NavigationBar(QWidget):
@@ -26,7 +27,7 @@ class NavigationBar(QWidget):
         layout.setContentsMargins(*BAR_CONTENTS_MARGINS)
         layout.setSpacing(BAR_SPACING)
 
-        self.back_button = QPushButton(f"\u2b05\ufe0f {strings.button.back}")
+        self.back_button = QPushButton(f"{BACK_ARROW} {strings.button.back}")
         self.back_button.setCursor(Qt.PointingHandCursor)
         self.back_button.setFlat(True)
         self.back_button.setStyleSheet(FLAT_BUTTON_STYLE)
@@ -42,14 +43,14 @@ class NavigationBar(QWidget):
         self.button_spacer.setMaximumWidth(NAV_SPACER_MAX_WIDTH)
         self.button_spacer.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
 
-        self.forward_button = QPushButton(f"\u27a1\ufe0f {strings.button.forward}")
+        self.forward_button = QPushButton(f"{FORWARD_ARROW} {strings.button.forward}")
         self.forward_button.setCursor(Qt.PointingHandCursor)
         self.forward_button.setFlat(True)
         self.forward_button.setStyleSheet(FLAT_BUTTON_STYLE)
         self.forward_button.setFixedWidth(NAV_BUTTON_WIDTH)
         self.forward_button.clicked.connect(self.on_forward)
 
-        self.close_button = IconButton("\u274c", flat=True)
+        self.close_button = IconButton(CROSS_MARKER, flat=True)
         self.close_button.setFixedSize(BUTTON_SIZE)
         self.close_button.clicked.connect(self.hide)
 

@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import QTextBrowser
 from theme.layout_constants import DOCUMENT_MARGIN
+from utils.constants import SCHEME_WORD, SCHEME_SOURCE, SCHEME_PREVIEW
 
 
 class DictTextBrowser(QTextBrowser):
@@ -7,7 +8,7 @@ class DictTextBrowser(QTextBrowser):
         super().__init__(parent)
 
     def setSource(self, url):
-        if url.scheme() in ('word', 'source', 'preview'):
+        if url.scheme() in (SCHEME_WORD, SCHEME_SOURCE, SCHEME_PREVIEW):
             return
         super().setSource(url)
 

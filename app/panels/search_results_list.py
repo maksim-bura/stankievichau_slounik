@@ -33,8 +33,14 @@ class SearchResultsList:
             self._widget.addItem(item)
 
         fm = self._widget.fontMetrics()
-        vw = self._widget.viewport().width() - RESULTS_ITEM_PADDING
-        for i in range(self._widget.count()):
+        viewport = self._widget.viewport()
+        rows = self._widget.count()
+        row_height = self._widget.sizeHintForRow(0) if rows else 0
+        if row_height and row_height * rows > viewport.height():
+            vw = viewport.width() - self._widget.verticalScrollBar().sizeHint().width() - RESULTS_ITEM_PADDING
+        else:
+            vw = viewport.width() - RESULTS_ITEM_PADDING
+        for i in range(rows):
             item = self._widget.item(i)
             if fm.horizontalAdvance(item.text()) > vw:
                 item.setToolTip(remove_accents(item.data(Qt.UserRole + 1) or item.text()))
@@ -62,9 +68,7 @@ class SearchResultsList:
                 if entry_link and result[3] != entry_link:
                     continue
 
-                root = self.search_engine.get_parsed_entry(result[0], result[2])
-                main_headword_element = root.find('.//hw')
-                main_headword = main_headword_element.text if main_headword_element is not None else ""
+                main_headword = self.search_engine.get_main_headword(result[0], result[2])
 
                 if result[1] != main_headword:
                     formatter.set_target_subheadword(result[1])

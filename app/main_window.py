@@ -17,7 +17,11 @@ from theme.layout_constants import (
     WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT, SPLITTER_ENTRY_INITIAL,
     SPLITTER_SOURCES_INITIAL, LAYOUT_MARGINS, LAYOUT_SPACING, TOP_LAYOUT_SPACING
 )
-from theme.widget_styles import GLOBAL_STYLE
+from theme.widget_styles import GLOBAL_STYLE, RESULTS_LIST_STYLE
+from utils.constants import SCHEME_PREVIEW
+
+
+_PREVIEW_SENTINEL = '__preview__'
 
 
 class MainWindow(QMainWindow):
@@ -76,7 +80,7 @@ class MainWindow(QMainWindow):
         self.open_entry_by_headword(headword, sense_parts, from_navigation=True)
 
     def open_entry_by_headword(self, headword, sense_parts=None, entry_link=None, from_navigation=False):
-        if headword == '__preview__':
+        if headword == _PREVIEW_SENTINEL:
             self._restore_preview()
             return
 
@@ -109,9 +113,7 @@ class MainWindow(QMainWindow):
                     result_to_display = entry_data
 
         if result_to_display:
-            root = self.search_engine.get_parsed_entry(result_to_display[0], result_to_display[2])
-            main_headword_element = root.find('.//hw')
-            main_headword = remove_accents(main_headword_element.text) if main_headword_element is not None else ""
+            main_headword = remove_accents(self.search_engine.get_main_headword(result_to_display[0], result_to_display[2]))
             compare_to = target_headword
 
             if sense_parts:
@@ -125,7 +127,7 @@ class MainWindow(QMainWindow):
 
             if not from_navigation and result_to_display[1] != old_headword:
                 if old_headword is None and getattr(self, '_last_preview_html', None):
-                    old_headword = '__preview__'
+                    old_headword = _PREVIEW_SENTINEL
                 self.entry_viewer.navigation_bar.push(result_to_display[1], sense_parts, old_headword)
 
             if sense_parts:
@@ -137,11 +139,20 @@ class MainWindow(QMainWindow):
                 self.entry_scroll_manager.scroll_to_anchor(anchor)
             else:
                 self.entry_scroll_manager.scroll_to_anchor(compare_to)
+        else:
+            if not from_navigation and headword != old_headword:
+                if old_headword is None and getattr(self, '_last_preview_html', None):
+                    old_headword = _PREVIEW_SENTINEL
+                self.entry_viewer.navigation_bar.push(headword, sense_parts, old_headword)
+            self.current_display_xml = None
+            self.current_display_headword = None
+            self.entry_viewer.display_html('<body></body>')
 
     def on_link_clicked(self, url):
         url_string = url.toString()
-        if url_string.startswith("preview:"):
-            rest = url_string[8:]
+        preview_prefix = SCHEME_PREVIEW + ':'
+        if url_string.startswith(preview_prefix):
+            rest = url_string[len(preview_prefix):]
             if '%' in rest:
                 from urllib.parse import unquote
                 rest = unquote(rest)
@@ -159,11 +170,9 @@ class MainWindow(QMainWindow):
                 if result:
                     self._highlight_entry = True
                     self._last_preview_html = self.entry_viewer.stored_html
-                    self.entry_viewer.navigation_bar.push(result[1], None, '__preview__')
+                    self.entry_viewer.navigation_bar.push(result[1], None, _PREVIEW_SENTINEL)
                     if anchor:
-                        root = self.search_engine.get_parsed_entry(result[0], result[2])
-                        main_hw = root.find('.//hw')
-                        main_headword = remove_accents(main_hw.text) if main_hw is not None else ""
+                        main_headword = remove_accents(self.search_engine.get_main_headword(result[0], result[2]))
                         if anchor != main_headword:
                             formatter.set_target_subheadword(anchor)
                         else:
@@ -219,24 +228,7 @@ class MainWindow(QMainWindow):
 
         self.results_box = QListWidget()
         self.results_box.setFocusPolicy(Qt.NoFocus)
-        self.results_box.setStyleSheet(
-            "QListWidget::item { border-left: 3px solid transparent; }"
-            "QListWidget::item:hover {"
-            "  border-left: 3px solid #c0c0c0;"
-            "  background: #fafafa;"
-            "  color: black;"
-            "}"
-            "QListWidget::item:selected {"
-            "  border-left: 3px solid #7c9ec0;"
-            "  background: #edf7fd;"
-            "  color: black;"
-            "}"
-            "QListWidget::item:selected:!active {"
-            "  border-left: 3px solid #7c9ec0;"
-            "  background: #edf7fd;"
-            "  color: black;"
-            "}"
-        )
+        self.results_box.setStyleSheet(RESULTS_LIST_STYLE)
         self.results_box.itemClicked.connect(self.on_result_clicked)
         self.results_box.setMinimumWidth(self.results_min_width)
 
@@ -244,7 +236,7 @@ class MainWindow(QMainWindow):
         entry_widget = self.entry_viewer.get_widget()
         entry_widget.setMinimumWidth(self.entry_min_width)
         self.bottom_splitter.addWidget(entry_widget)
-        sources_viewer = self.sources_panel.get_viewer()
+        sources_viewer = self.sources_panel.get_widget()
         sources_viewer.setMinimumWidth(self.sources_min_width)
         self.bottom_splitter.addWidget(sources_viewer)
         self.bottom_splitter.setCollapsible(0, False)
@@ -381,7 +373,7 @@ class MainWindow(QMainWindow):
         if is_combined and getattr(self, '_last_preview_html', None):
             headword = item.data(Qt.UserRole + 1)
             if headword:
-                self.entry_viewer.navigation_bar.push(headword, None, '__preview__')
+                self.entry_viewer.navigation_bar.push(headword, None, _PREVIEW_SENTINEL)
 
     def _show_previews(self, results, translations_mode=False):
         self.current_display_headword = None
@@ -391,7 +383,7 @@ class MainWindow(QMainWindow):
                 for p in result[5]:
                     key = (result[0], p['headword'])
                     if key not in groups:
-                        groups[key] = {'headword': remove_accents(p['headword']), 'htmls': [], 'breaks': [], 'rank': p.get('rank', 2)}
+                        groups[key] = {'headword': remove_accents(p['headword']), 'sort_headword': remove_accents(p.get('sort_headword') or p['headword']), 'htmls': [], 'breaks': [], 'rank': p.get('rank', 2)}
                     if p['preview_html'] not in groups[key]['htmls']:
                         groups[key]['htmls'].append(p['preview_html'])
                         groups[key]['breaks'].append(p.get('paragraph_break', False))
@@ -402,13 +394,13 @@ class MainWindow(QMainWindow):
             return
         html_parts = ['<body>']
         first_group = True
-        for key, g in sorted(groups.items(), key=lambda kv: (alphabet_sort_key(kv[1]['headword']),) if not translations_mode else (kv[1]['rank'], alphabet_sort_key(kv[1]['headword']))):
+        for key, g in sorted(groups.items(), key=lambda kv: (alphabet_sort_key(kv[1]['sort_headword']),) if not translations_mode else (kv[1]['rank'], alphabet_sort_key(kv[1]['sort_headword']))):
             if not first_group:
                 html_parts.append('<br><br>')
             first_group = False
             headword_display = g["headword"].replace("|", ", ")
             anchor_id = g["headword"].split("|")[0]
-            html_parts.append(f'<b><a href="preview:{key[0]}|{anchor_id}">{headword_display}</a></b><br>')
+            html_parts.append(f'<b><a href="{SCHEME_PREVIEW}:{key[0]}|{anchor_id}">{headword_display}</a></b><br>')
             joined = ''
             for j, h in enumerate(g['htmls']):
                 if j > 0:
@@ -443,7 +435,7 @@ class MainWindow(QMainWindow):
                     exclude.add('ex')
                 if self._search_in_headwords:
                     exclude.add('t')
-                highlighted = self.search_engine._apply_highlight(html, self._search_pattern, normalize=self._search_normalize, exclude_classes=exclude or None)
+                highlighted = self.search_engine.apply_highlight(html, self._search_pattern, normalize=self._search_normalize, exclude_classes=exclude or None)
                 self.entry_viewer.display_html(highlighted)
                 self._highlighted_entry_id = result[0]
         self._highlight_entry = False
