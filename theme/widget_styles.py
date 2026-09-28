@@ -9,6 +9,13 @@ COLOR_HIGHLIGHT_BG = '#FFF9C4'
 COLOR_TOOLTIP_BG = '#ffffcc'
 COLOR_DISABLED_FG = '#888888'
 COLOR_MENU_PRESSED_FG = '#1e3a5f'
+COLOR_BUTTON_HOVER = '#ececec'
+COLOR_BUTTON_PRESSED_HOVER = '#e0eefb'
+COLOR_CHECKED_BG = '#c8f7c5'
+COLOR_CHECKED_HOVER_BG = '#b8f0b5'
+COLOR_CHECKED_SELECTED_BG = '#7cbf7a'
+COLOR_CHECKED_BORDER = '#a0d8a0'
+COLOR_TRANSPARENT = '#00000000'
 
 
 def _font_rule(widget, size='12pt'):
@@ -21,6 +28,7 @@ def _font_rule(widget, size='12pt'):
 GLOBAL_STYLE = (
     _font_rule('QWidget') +
     _font_rule('QListWidget') + "    QListWidget {\n    font-weight: bold;\n    }\n" +
+    _font_rule('QListView') + "    QListView {\n    font-weight: bold;\n    }\n" +
     _font_rule('QLineEdit') +
     f"    QLineEdit {{\n"
     f"    background-color: white;\n"
@@ -73,41 +81,35 @@ MENU_BUTTON_STYLE = f"""
         font-size: 12pt;
     }}
     QPushButton[class="menu-button"]:hover {{
-        background-color: #ececec;
+        background-color: {COLOR_BUTTON_HOVER};
     }}
-    QPushButton[class="menu-button"][pressed="true"] {{
-        background-color: {COLOR_SELECTED_BG};
-        color: {COLOR_MENU_PRESSED_FG};
-        border: 2px solid {COLOR_BORDER_SELECTED};
-    }}
-    QPushButton[class="menu-button"][pressed="true"]:hover {{
-        background-color: #e0eefb;
-    }}
+    QPushButton[class="menu-button"][pressed="true"],
     QPushButton[class="menu-button"][pressed="true"][dual="true"] {{
         background-color: {COLOR_SELECTED_BG};
         color: {COLOR_MENU_PRESSED_FG};
         border: 2px solid {COLOR_BORDER_SELECTED};
     }}
+    QPushButton[class="menu-button"][pressed="true"]:hover,
     QPushButton[class="menu-button"][pressed="true"][dual="true"]:hover {{
-        background-color: #e0eefb;
+        background-color: {COLOR_BUTTON_PRESSED_HOVER};
     }}
 """
 
 RESULTS_LIST_STYLE = f"""
-    QListWidget::item {{
+    QListView::item {{
         border-left: 3px solid transparent;
     }}
-    QListWidget::item:hover {{
+    QListView::item:hover {{
         border-left: 3px solid {COLOR_BORDER_DEFAULT};
         background: {COLOR_HOVER_BG};
         color: black;
     }}
-    QListWidget::item:selected {{
+    QListView::item:selected {{
         border-left: 3px solid {COLOR_BORDER_SELECTED};
         background: {COLOR_SELECTED_BG};
         color: black;
     }}
-    QListWidget::item:selected:!active {{
+    QListView::item:selected:!active {{
         border-left: 3px solid {COLOR_BORDER_SELECTED};
         background: {COLOR_SELECTED_BG};
         color: black;

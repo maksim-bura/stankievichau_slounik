@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QBrush, QPalette
-from utils.text_utils import remove_accents, normalize_jo
+from utils.text_utils import remove_accents, normalize_jo_to_je
 from db.build_database import get_source_path
 from app.widgets import SearchBox, ElidingDelegate, select_row, navigate_rows
 from markup.editor import MarkupEditor
@@ -26,6 +26,8 @@ from theme.layout_constants import (
 from theme.widget_styles import (
     COLOR_NORMAL_BG, COLOR_HOVER_BG, COLOR_SELECTED_BG,
     COLOR_BORDER_DEFAULT, COLOR_BORDER_SELECTED,
+    COLOR_CHECKED_BG, COLOR_CHECKED_HOVER_BG, COLOR_CHECKED_SELECTED_BG,
+    COLOR_CHECKED_BORDER, COLOR_TRANSPARENT,
 )
 from utils.constants import CHECK_MARK, CHECK_BLANK, FLOPPY_MARKER
 
@@ -34,21 +36,24 @@ _COLOR_HOVER_BG = QColor(COLOR_HOVER_BG)
 _COLOR_SELECTED_BG = QColor(COLOR_SELECTED_BG)
 _COLOR_BORDER_DEFAULT = QColor(COLOR_BORDER_DEFAULT)
 _COLOR_BORDER_SELECTED = QColor(COLOR_BORDER_SELECTED)
-_COLOR_CHECKED_BG = QColor(200, 247, 197)
-_COLOR_CHECKED_HOVER_BG = QColor(184, 240, 181)
-_COLOR_CHECKED_SELECTED_BG = QColor(124, 191, 122)
-_COLOR_CHECKED_BORDER = QColor(160, 216, 160)
+_COLOR_CHECKED_BG = QColor(COLOR_CHECKED_BG)
+_COLOR_CHECKED_HOVER_BG = QColor(COLOR_CHECKED_HOVER_BG)
+_COLOR_CHECKED_SELECTED_BG = QColor(COLOR_CHECKED_SELECTED_BG)
+_COLOR_CHECKED_BORDER = QColor(COLOR_CHECKED_BORDER)
+_COLOR_TRANSPARENT = QColor(COLOR_TRANSPARENT)
+_COLOR_TEXT = QColor(0, 0, 0)
 
-_HEADWORD_OPTIONS = {
-    'search_in_headwords': True,
-    'search_in_translations': False,
-    'search_in_examples': False,
-}
+_ENTRY_BLOCK_RE = re.compile(r'<entry\b.*?</entry>', re.DOTALL)
+
+
+def find_entry_blocks(content):
+    return _ENTRY_BLOCK_RE.findall(content)
 
 
 class _BorderDelegate(ElidingDelegate):
     def __init__(self, list_widget, checked_state):
         super().__init__(list_widget)
+        self._list = list_widget
         self._checked_state = checked_state
         self._hovered_row = -1
 
@@ -84,7 +89,7 @@ class _BorderDelegate(ElidingDelegate):
                 border = _COLOR_BORDER_DEFAULT
             else:
                 bg = _COLOR_NORMAL_BG
-                border = QColor(0, 0, 0, 0)
+                border = _COLOR_TRANSPARENT
 
         painter.save()
         painter.fillRect(option.rect, bg)
@@ -96,8 +101,8 @@ class _BorderDelegate(ElidingDelegate):
         opt.backgroundBrush = QBrush(bg)
 
         palette = opt.palette
-        palette.setColor(QPalette.Text, QColor(0, 0, 0))
-        palette.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
+        palette.setColor(QPalette.Text, _COLOR_TEXT)
+        palette.setColor(QPalette.HighlightedText, _COLOR_TEXT)
         opt.palette = palette
 
         style = option.widget.style() if option.widget else QApplication.style()
@@ -116,6 +121,8 @@ class MarkupMainWindow(QMainWindow):
         self.current_result = None
         self._has_unsaved = False
         self._loaded_raw = {}
+        self._by_id_headword = {}
+        self._source_cache = {}
 
         self.setWindowTitle('Dictionary Markup')
         self.resize(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
@@ -178,11 +185,11 @@ class MarkupMainWindow(QMainWindow):
         self.results_box.viewport().installEventFilter(self)
 
         self.editor = MarkupEditor()
-        self.editor.editor.setMinimumWidth(ENTRY_MIN_WIDTH)
-        self.editor.editor.content_changed.connect(self._on_content_changed)
+        self.editor.pane.setMinimumWidth(ENTRY_MIN_WIDTH)
+        self.editor.pane.content_changed.connect(self._on_content_changed)
 
         bottom_layout = QHBoxLayout()
-        bottom_layout.setSpacing(0)
+        bottom_layout.setSpacing(LAYOUT_SPACING)
         bottom_layout.setContentsMargins(*LAYOUT_MARGINS)
         bottom_layout.addWidget(self.results_box)
         bottom_layout.addWidget(self.editor)
@@ -213,15 +220,16 @@ class MarkupMainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(MARKUP_GLOBAL_STYLE)
 
     def show_all_entries(self):
-        results = self.search_engine.search('', **_HEADWORD_OPTIONS)
+        results = self.search_engine.search_headwords('')
         self._display_results(results)
 
     def on_search(self, text):
-        results = self.search_engine.search(text.strip(), **_HEADWORD_OPTIONS)
+        results = self.search_engine.search_headwords(text.strip())
         self._display_results(results)
 
     def _display_results(self, results):
         self.current_results = results
+        self._by_id_headword = {(r[0], r[1]): r for r in results}
         self.results_box.clear()
 
         if not results:
@@ -252,36 +260,23 @@ class MarkupMainWindow(QMainWindow):
         if not headword:
             return
 
-        result = None
-        for r in self.current_results:
-            if r[0] == entry_id and r[1] == headword:
-                result = r
-                break
-
+        result = self._by_id_headword.get((entry_id, headword))
         if not result:
             return
 
         source_file = result[4]
-        xml_text = result[2]
+        entry_link = result[3]
 
-        if self._has_unsaved or not xml_text:
-            fresh = self._read_entry_from_source(entry_id, source_file, headword, result[3])
-            if fresh is not None:
-                xml_text = fresh
-                for i, r in enumerate(self.current_results):
-                    if r[0] == entry_id:
-                        self.current_results[i] = (r[0], r[1], fresh, r[3], r[4])
-                        break
-
-        raw = self._read_entry_from_source(entry_id, source_file, headword, result[3])
+        raw = self._read_entry_from_source(entry_id, source_file, headword, entry_link)
         if raw is not None:
             self._loaded_raw[entry_id] = raw.rstrip('\n')
             xml_text = raw
         else:
             self._loaded_raw.pop(entry_id, None)
+            xml_text = self.search_engine.get_full_entry(entry_id) or ''
 
         self.current_result = (result[0], result[1], xml_text, result[3], source_file)
-        self.editor.editor.set_entry(result[0], xml_text)
+        self.editor.pane.set_entry(result[0], xml_text)
         self._has_unsaved = False
 
         is_checked = self.checked_state.is_checked(source_file, result[3], result[1])
@@ -292,50 +287,74 @@ class MarkupMainWindow(QMainWindow):
     def _read_entry_from_source(self, entry_id, source_file, headword=None, entry_link=None):
         if not source_file:
             return None
+        if headword is None and self.current_result and self.current_result[0] == entry_id:
+            headword = self.current_result[1]
+        if entry_link is None and self.current_result and self.current_result[0] == entry_id:
+            entry_link = self.current_result[3]
+
+        loaded = self._load_source_content(source_file)
+        if loaded is None:
+            return None
+        blocks = loaded['blocks']
+        t_norm = normalize_jo_to_je(remove_accents(headword.lower())) if headword else None
+        link_norm = normalize_jo_to_je(remove_accents(entry_link.lower())) if entry_link else None
+
+        if link_norm:
+            for i in loaded['by_link'].get(link_norm, ()):
+                block = blocks[i]
+                if t_norm is None or self._block_matches(block, t_norm):
+                    return block
+
+        if t_norm:
+            for i in loaded['by_headword'].get(t_norm, ()):
+                block = blocks[i]
+                if self._block_matches(block, t_norm):
+                    return block
+        return None
+
+    def _load_source_content(self, source_file):
+        cached = self._source_cache.get(source_file)
+        if cached is not None:
+            return cached
         file_path = get_source_path(source_file)
         if not os.path.exists(file_path):
             return None
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            if headword is None and self.current_result and self.current_result[0] == entry_id:
-                headword = self.current_result[1]
-            if entry_link is None and self.current_result and self.current_result[0] == entry_id:
-                entry_link = self.current_result[3]
-
-            blocks = re.findall(r'<entry\b.*?</entry>', content, re.DOTALL)
-            t_norm = normalize_jo(remove_accents(headword.lower())) if headword else None
-            link_norm = normalize_jo(remove_accents(entry_link.lower())) if entry_link else None
-
-            if link_norm:
-                for block in blocks:
-                    if self._block_link_matches(block, link_norm) and (t_norm is None or self._block_matches(block, t_norm)):
-                        return block
-
-            if t_norm:
-                for block in blocks:
-                    if self._block_matches(block, t_norm):
-                        return block
-
-        except (ElementTree.ParseError, OSError):
-            pass
-        return None
+        except OSError:
+            return None
+        blocks = find_entry_blocks(content)
+        by_link = {}
+        by_headword = {}
+        for i, block in enumerate(blocks):
+            link_norm = self._block_link(block)
+            if link_norm is not None:
+                by_link.setdefault(link_norm, []).append(i)
+            for hw_norm in self._block_headwords(block):
+                by_headword.setdefault(hw_norm, []).append(i)
+        loaded = {'content': content, 'blocks': blocks, 'by_link': by_link, 'by_headword': by_headword}
+        self._source_cache[source_file] = loaded
+        return loaded
 
     @staticmethod
-    def _block_link_matches(block, link_norm):
+    def _block_link(block):
         m = re.search(r'<entry\b[^>]*\blink="([^"]*)"', block)
         if not m:
-            return False
-        return normalize_jo(remove_accents(m.group(1))) == link_norm
+            return None
+        return normalize_jo_to_je(remove_accents(m.group(1)))
+
+    @staticmethod
+    def _block_headwords(block):
+        norms = []
+        for m in re.finditer(r'<hw>(.*?)</hw>', block, re.DOTALL):
+            inner = re.sub(r'<[^>]+>', '', m.group(1))
+            norms.append(normalize_jo_to_je(remove_accents(inner.lower().strip())))
+        return norms
 
     @staticmethod
     def _block_matches(block, target_norm):
-        for m in re.finditer(r'<hw>(.*?)</hw>', block, re.DOTALL):
-            inner = re.sub(r'<[^>]+>', '', m.group(1))
-            hw_norm = normalize_jo(remove_accents(inner.lower().strip()))
-            if hw_norm == target_norm:
-                return True
-        return False
+        return target_norm in MarkupMainWindow._block_headwords(block)
 
     def _on_checked_toggle(self):
         if not self.current_result:
@@ -353,12 +372,12 @@ class MarkupMainWindow(QMainWindow):
         self._save_current()
 
     def _save_current(self):
-        if not self.current_result or not self.editor.editor.is_modified():
+        if not self.current_result or not self.editor.pane.is_modified():
             return
 
         entry_id = self.current_result[0]
         source_file = self.current_result[4]
-        new_xml = self.editor.editor.get_xml()
+        new_xml = self.editor.pane.get_xml()
 
         try:
             root = ElementTree.fromstring(new_xml)
@@ -380,10 +399,9 @@ class MarkupMainWindow(QMainWindow):
         headword = self.current_result[1]
         entry_link = self.current_result[3]
 
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-
-        blocks = re.findall(r'<entry\b.*?</entry>', content, re.DOTALL)
+        loaded = self._load_source_content(source_file)
+        content = loaded['content'] if loaded else None
+        blocks = loaded['blocks'] if loaded else []
         if not blocks:
             QMessageBox.warning(self, 'Save Error', 'Could not locate the original entry in the source file.')
             return
@@ -406,16 +424,18 @@ class MarkupMainWindow(QMainWindow):
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
+        self._source_cache.pop(source_file, None)
         self._loaded_raw[entry_id] = new_entry_string
         self._has_unsaved = False
-        self.editor.editor._is_modified = False
+        self.editor.pane.mark_saved()
         self._save_button.hide()
 
-        updated = (entry_id, self.current_result[1], new_entry_string, entry_link, source_file)
+        updated = (entry_id, self.current_result[1], new_entry_string, entry_link, source_file, None)
         self.current_result = updated
+        self._by_id_headword[(entry_id, updated[1])] = updated
         for i, r in enumerate(self.current_results):
             if r[0] == entry_id:
-                self.current_results[i] = (r[0], r[1], new_entry_string, r[3], r[4])
+                self.current_results[i] = (r[0], r[1], new_entry_string, r[3], r[4], None)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_S and event.modifiers() == Qt.ControlModifier:

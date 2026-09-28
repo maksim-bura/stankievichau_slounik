@@ -1,10 +1,11 @@
-from PySide6.QtCore import Qt, QPoint, QRect, Signal
+from PySide6.QtCore import QPoint, QRect, Signal
 from PySide6.QtGui import QCursor, QFont
-from PySide6.QtWidgets import QPushButton, QSizePolicy, QMenu, QWidgetAction, QLabel, QWidget, QHBoxLayout, QVBoxLayout
+from PySide6.QtWidgets import QMenu, QWidgetAction, QLabel, QWidget, QHBoxLayout
 from localization import strings
-from theme.layout_constants import BUTTON_SIZE, SEARCH_BOX_HEIGHT, MENU_OPTION_MARGINS, MENU_INDENT_MARGINS
-from theme.widget_styles import MENU_BUTTON_STYLE, COLOR_DISABLED_FG
+from theme.layout_constants import SEARCH_BOX_HEIGHT, MENU_OPTION_MARGINS, MENU_INDENT_MARGINS
+from theme.widget_styles import COLOR_DISABLED_FG
 from utils.constants import CHECK_MARK, CHECK_BLANK, RADIO_ON, RADIO_OFF, GEAR_MARKER
+from app.widgets.menu_button import MenuButton
 
 
 class _ToggleOption(QWidget):
@@ -77,18 +78,12 @@ class _RadioOption(_ToggleOption):
             self.toggled.emit(self)
 
 
-class SettingsButton(QPushButton):
+class SettingsButton(MenuButton):
     search_mode_changed = Signal()
 
     def __init__(self, sources_button=None, parent=None):
-        super().__init__(GEAR_MARKER, parent)
+        super().__init__(GEAR_MARKER, strings.tooltip.settings, parent)
         self._sources_button = sources_button
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.setFixedSize(BUTTON_SIZE)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setProperty("class", "menu-button")
-        self.setToolTip(strings.tooltip.settings)
-        self.setStyleSheet(MENU_BUTTON_STYLE)
         self._consume_next_press = False
 
         self.settings_menu = QMenu(self)
