@@ -1,4 +1,4 @@
-from utils.text_utils import normalize_jo, remove_accents
+from utils.text_utils import normalize_jo_to_je, remove_accents
 
 
 def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None):
@@ -29,7 +29,7 @@ def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None):
 
 def content_text(element, tag):
     if tag == 't':
-        return get_text_excluding_src(element, extra_exclude={'see'}, skip_attrs={'lang': 'vl', 'excl': None})
+        return get_text_excluding_src(element, extra_exclude={'see', 'g'}, skip_attrs={'lang': 'vl', 'excl': None})
     if tag == 'ex':
         return get_text_excluding_src(element, extra_exclude={'t'})
     return get_text_excluding_src(element)
@@ -53,7 +53,7 @@ def hw_text_excluding_n(element):
 def d_hw_variants(d_element, exclude_n=False):
     variants = []
     for child in d_element:
-        if child.tag == 'hw':
+        if child.tag == 'hw' and child.get('excl') is None:
             text = (hw_text_excluding_n(child) if exclude_n else ''.join(child.itertext())).strip()
             if text:
                 variants.append(text)
@@ -62,4 +62,4 @@ def d_hw_variants(d_element, exclude_n=False):
 
 def index_text(text, tag):
     clean = remove_accents(text.lower())
-    return normalize_jo(clean) if tag == 't' else clean
+    return normalize_jo_to_je(clean) if tag == 't' else clean

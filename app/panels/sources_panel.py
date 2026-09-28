@@ -5,12 +5,13 @@ from PySide6.QtCore import Qt
 from utils.scroll_manager import ScrollManager
 from localization import strings
 from theme.layout_constants import (
-    BUTTON_SIZE, BAR_CONTENTS_MARGINS, BAR_SPACING, LAYOUT_MARGINS,
+    BUTTON_SIZE, BAR_CONTENTS_MARGINS, BAR_SPACING, LAYOUT_MARGINS, LAYOUT_SPACING,
 )
 from app.widgets import IconButton, SearchBox, DictTextBrowser
 from theme.widget_styles import ENTRY_STYLESHEET
-from app.panels.sources_renderer import build_filtered_html, compile_search_regex, section_matches
-from utils.constants import ARROW_MARKER, CROSS_MARKER, MAGNIFIER_MARKER, SCHEME_TOGGLE_SECTION
+from utils.search_regex import compile_search_regex
+from app.panels.sources_renderer import build_filtered_html, section_matches
+from utils.constants import CROSS_MARKER, MAGNIFIER_MARKER, SCHEME_TOGGLE_SECTION
 
 
 class SourcesPanel:
@@ -26,9 +27,9 @@ class SourcesPanel:
         self.load_content()
 
         self.container = QWidget()
-        self.layout = QVBoxLayout()
-        self.layout.setContentsMargins(*LAYOUT_MARGINS)
-        self.layout.setSpacing(0)
+        self.container_layout = QVBoxLayout()
+        self.container_layout.setContentsMargins(*LAYOUT_MARGINS)
+        self.container_layout.setSpacing(LAYOUT_SPACING)
 
         self.search_container = QWidget()
         self.search_container.setAutoFillBackground(False)
@@ -50,7 +51,7 @@ class SourcesPanel:
         search_layout.addWidget(self.close_search_button)
 
         self.search_container.setLayout(search_layout)
-        self.layout.addWidget(self.search_container)
+        self.container_layout.addWidget(self.search_container)
 
         self.floating_button = IconButton(MAGNIFIER_MARKER, flat=True)
         self.floating_button.setFixedSize(BUTTON_SIZE)
@@ -60,7 +61,7 @@ class SourcesPanel:
         self.viewer_wrapper.setAutoFillBackground(False)
         wrapper_layout = QGridLayout()
         wrapper_layout.setContentsMargins(*LAYOUT_MARGINS)
-        wrapper_layout.setSpacing(0)
+        wrapper_layout.setSpacing(LAYOUT_SPACING)
 
         self.viewer = DictTextBrowser()
         self.viewer.setReadOnly(True)
@@ -73,9 +74,9 @@ class SourcesPanel:
         wrapper_layout.addWidget(self.floating_button, 0, 0, alignment=Qt.AlignTop | Qt.AlignRight)
 
         self.viewer_wrapper.setLayout(wrapper_layout)
-        self.layout.addWidget(self.viewer_wrapper)
+        self.container_layout.addWidget(self.viewer_wrapper)
 
-        self.container.setLayout(self.layout)
+        self.container.setLayout(self.container_layout)
         self.container.hide()
 
         self.scroll_manager = ScrollManager(self.viewer)
@@ -84,7 +85,7 @@ class SourcesPanel:
         self._pre_search_content = None
         self._pre_search_collapsed = None
         if self._all_children:
-            self.content = build_filtered_html(self._all_children, self._collapsed_sections, ARROW_MARKER)
+            self.content = build_filtered_html(self._all_children, self._collapsed_sections)
         else:
             self.content = '<body></body>'
         self.original_content = self.content
@@ -122,7 +123,7 @@ class SourcesPanel:
 
         text = self.search_line.text() if self.search_visible else None
         marker = None if (self.search_visible and text) else self.current_anchor
-        self.content = build_filtered_html(self._all_children, self._collapsed_sections, ARROW_MARKER, search_text=text, marker_anchor=marker)
+        self.content = build_filtered_html(self._all_children, self._collapsed_sections, search_text=text, marker_anchor=marker)
 
         self.viewer.setHtml(self.content)
         self.viewer.verticalScrollBar().setValue(current_scroll)
@@ -164,7 +165,7 @@ class SourcesPanel:
             old_focus = self.main_window.entry_viewer.get_viewer().hasFocus()
             current_scroll = self.viewer.verticalScrollBar().value()
 
-        self.content = build_filtered_html(self._all_children, self._collapsed_sections, ARROW_MARKER, marker_anchor=anchor)
+        self.content = build_filtered_html(self._all_children, self._collapsed_sections, marker_anchor=anchor)
         self.viewer.setHtml(self.content)
 
         if not was_visible:
@@ -201,7 +202,7 @@ class SourcesPanel:
                     if section_matches(child, pattern):
                         self._collapsed_sections.discard(child.get('id'))
 
-            self.content = build_filtered_html(self._all_children, self._collapsed_sections, ARROW_MARKER, search_text=text)
+            self.content = build_filtered_html(self._all_children, self._collapsed_sections, search_text=text)
             self.viewer.setHtml(self.content)
 
     def toggle(self):

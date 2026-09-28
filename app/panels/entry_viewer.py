@@ -141,7 +141,7 @@ class EntryViewer:
 
     def display_entry(self, result, formatter):
         self.stored_html = formatter.format_entry(result[2])
-        self.scroll_manager.cache_state()
+        self.scroll_manager.cache_scroll()
         self.viewer.setHtml(self.stored_html)
         self.scroll_manager.last_anchor = None
 

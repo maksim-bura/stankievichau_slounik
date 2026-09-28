@@ -3,11 +3,12 @@ import html
 from localization import strings
 from utils.search_regex import compile_search_regex
 from utils.constants import (
-    COLLAPSED_TRIANGLE_ENTITY, EXPANDED_TRIANGLE_ENTITY, SCHEME_TOGGLE_SECTION,
+    ARROW_MARKER, COLLAPSED_TRIANGLE_ENTITY, EXPANDED_TRIANGLE_ENTITY,
+    SCHEME_TOGGLE_SECTION,
 )
 
 
-def build_filtered_html(all_children, collapsed_sections, arrow_marker, search_text=None, marker_anchor=None):
+def build_filtered_html(all_children, collapsed_sections, search_text=None, marker_anchor=None):
     pattern = compile_search_regex(search_text) if search_text else None
     parts = ['<body>']
 
@@ -47,7 +48,7 @@ def build_filtered_html(all_children, collapsed_sections, arrow_marker, search_t
 
     if marker_anchor:
         escaped = re.escape(marker_anchor)
-        result = re.sub(f'(<span id="{escaped}"[^>]*>)', f'\\1{arrow_marker}', result, count=1)
+        result = re.sub(f'(<span id="{escaped}"[^>]*>)', f'\\1{ARROW_MARKER}', result, count=1)
 
     return result
 

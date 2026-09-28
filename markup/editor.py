@@ -4,12 +4,13 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
     QTabWidget, QPushButton
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QTextCursor, QTextCharFormat, QColor
 from format.entry_formatter import format_entry
 from theme.widget_styles import ENTRY_STYLESHEET, COLOR_HIGHLIGHT_BG
 from theme.layout_constants import (
-    EDITOR_TOOLBAR_MARGINS, EDITOR_TOOLBAR_SPACING, EDITOR_TOOLBAR_GAP
+    EDITOR_TOOLBAR_MARGINS, EDITOR_TOOLBAR_SPACING,
+    LAYOUT_MARGINS, LAYOUT_SPACING
 )
 from markup.styles import TAG_BUTTON_STYLE
 
@@ -19,29 +20,26 @@ TAG_BUTTONS_ROW1 = [
     ('hw', 'hw'),
     ('g', 'g'),
     ('t', 't'),
-    ('tp', 'tp'),
     ('ex', 'ex'),
     ('src', 'src'),
     ('br', 'br'),
     ('see', 'see'),
 ]
 
-TAG_BUTTONS_ROW2 = [
-    ('lvl="1"', 'lvl1'),
-]
-
 _TAG_RE = re.compile(r'<(/?)(\w+)[^>]*>')
 _PAIR_SELECT_RE = re.compile(r'^(<\w+[^>]*>)(.*)(</\w+>)$')
 
 
-def _find_enclosing_tag_pair(text, pos):
+def _find_tag_pair_at_boundary(text, char_pos):
     tags = []
     for m in _TAG_RE.finditer(text):
+        raw = text[m.start():m.end()]
         tags.append({
             'start': m.start(),
             'end': m.end(),
             'name': m.group(2),
             'closing': m.group(1) == '/',
+            'self_closing': raw.endswith('/>'),
         })
 
     stack = []
@@ -50,14 +48,25 @@ def _find_enclosing_tag_pair(text, pos):
             for i in range(len(stack) - 1, -1, -1):
                 if stack[i]['name'] == tag['name']:
                     open_tag = stack.pop(i)
-                    if open_tag['start'] <= pos <= tag['end']:
-                        if open_tag['name'] == 'entry':
-                            return None, None
+                    if _tag_delimiter_at_boundary(open_tag, tag, char_pos):
                         return open_tag, tag
                     break
         else:
+            if tag['self_closing'] and (
+                char_pos == tag['start'] or char_pos == tag['end'] - 1
+            ):
+                return tag, tag
             stack.append(tag)
     return None, None
+
+
+def _tag_delimiter_at_boundary(open_tag, close_tag, char_pos):
+    return (
+        char_pos == open_tag['start']
+        or char_pos == open_tag['end'] - 1
+        or char_pos == close_tag['start']
+        or char_pos == close_tag['end'] - 1
+    )
 
 
 def _is_inside_tag(text, pos):
@@ -74,16 +83,7 @@ def _pair_at_deletion_boundary(text, pos, forward):
     ch = text[char_pos]
     if ch != '>' and ch != '<':
         return None, None
-    open_tag, close_tag = _find_enclosing_tag_pair(text, pos)
-    if not open_tag or not close_tag:
-        return None, None
-    if forward:
-        if char_pos == open_tag['start'] or char_pos == close_tag['start']:
-            return open_tag, close_tag
-    else:
-        if char_pos == open_tag['end'] - 1 or char_pos == close_tag['end'] - 1:
-            return open_tag, close_tag
-    return None, None
+    return _find_tag_pair_at_boundary(text, char_pos)
 
 
 class TagButton(QPushButton):
@@ -108,8 +108,8 @@ class EditorPane(QWidget):
         self._is_modified = False
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(*LAYOUT_MARGINS)
+        layout.setSpacing(LAYOUT_SPACING)
 
         self._tabs = QTabWidget()
         self._tabs.setTabPosition(QTabWidget.South)
@@ -137,6 +137,11 @@ class EditorPane(QWidget):
         self._text_edit.setPlainText(xml_text)
         self._text_edit.blockSignals(False)
         self._text_edit._pending_tag_delete = False
+        self._text_edit._pending_delete_forward = None
+        self._text_edit._pair_delete_snapshot = None
+        self._text_edit._last_deleted_open = None
+        self._text_edit._last_deleted_close = None
+        self._text_edit._last_deleted_forward = None
         self._text_edit.setExtraSelections([])
         self._render_author()
 
@@ -145,6 +150,9 @@ class EditorPane(QWidget):
 
     def is_modified(self):
         return self._is_modified
+
+    def mark_saved(self):
+        self._is_modified = False
 
     def clear(self):
         self._entry_id = None
@@ -177,12 +185,6 @@ class EditorPane(QWidget):
         self.content_changed.emit()
 
     def insert_tag(self, tag_name):
-        if tag_name.startswith('lvl'):
-            cursor = self._text_edit.textCursor()
-            cursor.insertText(f'lvl="{tag_name[-1]}"')
-            self._text_edit.setTextCursor(cursor)
-            return
-
         if tag_name == 'br':
             cursor = self._text_edit.textCursor()
             cursor.insertText('<br />')
@@ -196,7 +198,7 @@ class EditorPane(QWidget):
             cursor.insertText(replacement)
         else:
             cursor.insertText(f'<{tag_name}></{tag_name}>')
-            cursor.movePosition(QTextCursor.Left, QTextCursor.Move, len(tag_name) + 2)
+            cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.MoveAnchor, len(tag_name) + 2)
             self._text_edit.setTextCursor(cursor)
 
 
@@ -207,6 +209,48 @@ class _TagAwareTextEdit(QTextEdit):
         self._pending_tag_delete = False
         self._pending_open_tag = None
         self._pending_close_tag = None
+        self._pending_delete_forward = None
+        self._pair_delete_snapshot = None
+        self._last_deleted_open = None
+        self._last_deleted_close = None
+        self._last_deleted_forward = None
+        self.cursorPositionChanged.connect(self._reset_pending_tag_delete)
+        self.textChanged.connect(self._check_pair_restore)
+
+    def _reset_pending_tag_delete(self):
+        self.setExtraSelections([])
+        if self._pending_tag_delete:
+            self._pending_tag_delete = False
+            self._pending_open_tag = None
+            self._pending_close_tag = None
+            self._pending_delete_forward = None
+
+    def _check_pair_restore(self):
+        if self._pair_delete_snapshot is None:
+            return
+        if self.toPlainText() == self._pair_delete_snapshot:
+            snapshot = self._pair_delete_snapshot
+            open_tag = self._last_deleted_open
+            close_tag = self._last_deleted_close
+            forward = self._last_deleted_forward
+            self._pair_delete_snapshot = None
+            self._last_deleted_open = None
+            self._last_deleted_close = None
+            self._last_deleted_forward = None
+            if open_tag and close_tag:
+                QTimer.singleShot(
+                    0,
+                    lambda t=snapshot, o=dict(open_tag), c=dict(close_tag), f=forward:
+                        self._apply_restore_highlight(t, o, c, f),
+                )
+
+    def _apply_restore_highlight(self, expected_text, open_tag, close_tag, forward):
+        if self.toPlainText() == expected_text:
+            self._pending_tag_delete = True
+            self._pending_open_tag = open_tag
+            self._pending_close_tag = close_tag
+            self._pending_delete_forward = forward
+            self._highlight_tag_pair(open_tag, close_tag)
 
     def canInsertFromMimeData(self, source):
         return source.hasText()
@@ -241,28 +285,48 @@ class _TagAwareTextEdit(QTextEdit):
 
             if self._pending_tag_delete and not cursor.hasSelection():
                 if self._pending_open_tag and self._pending_close_tag:
-                    self.blockSignals(True)
-                    text = self.toPlainText()
-                    open_tag = self._pending_open_tag
-                    close_tag = self._pending_close_tag
+                    if self._pending_delete_forward != deleting_forward:
+                        self._pending_tag_delete = False
+                        self._pending_open_tag = None
+                        self._pending_close_tag = None
+                        self._pending_delete_forward = None
+                        self.setExtraSelections([])
+                    else:
+                        self.blockSignals(True)
+                        open_tag = self._pending_open_tag
+                        close_tag = self._pending_close_tag
 
-                    cursor.setPosition(close_tag['start'])
-                    cursor.setPosition(close_tag['end'], QTextCursor.KeepAnchor)
-                    cursor.removeSelectedText()
+                        self._pair_delete_snapshot = self.toPlainText()
+                        self._last_deleted_open = dict(open_tag)
+                        self._last_deleted_close = dict(close_tag)
+                        self._last_deleted_forward = deleting_forward
 
-                    cursor.setPosition(open_tag['start'])
-                    cursor.setPosition(open_tag['end'], QTextCursor.KeepAnchor)
-                    cursor.removeSelectedText()
+                        cursor.beginEditBlock()
+                        if open_tag is close_tag:
+                            cursor.setPosition(open_tag['start'])
+                            cursor.setPosition(open_tag['end'], QTextCursor.KeepAnchor)
+                            cursor.removeSelectedText()
+                            cursor.setPosition(open_tag['start'])
+                        else:
+                            cursor.setPosition(close_tag['start'])
+                            cursor.setPosition(close_tag['end'], QTextCursor.KeepAnchor)
+                            cursor.removeSelectedText()
 
-                    cursor.setPosition(open_tag['start'])
-                    self.setTextCursor(cursor)
-                    self.setExtraSelections([])
-                    self._pending_tag_delete = False
-                    self._pending_open_tag = None
-                    self._pending_close_tag = None
-                    self.blockSignals(False)
-                    self.textChanged.emit()
-                    return
+                            cursor.setPosition(open_tag['start'])
+                            cursor.setPosition(open_tag['end'], QTextCursor.KeepAnchor)
+                            cursor.removeSelectedText()
+
+                            cursor.setPosition(open_tag['start'])
+                        cursor.endEditBlock()
+                        self.setTextCursor(cursor)
+                        self.setExtraSelections([])
+                        self._pending_tag_delete = False
+                        self._pending_open_tag = None
+                        self._pending_close_tag = None
+                        self._pending_delete_forward = None
+                        self.blockSignals(False)
+                        self.textChanged.emit()
+                        return
 
             self._pending_tag_delete = False
             self._pending_open_tag = None
@@ -297,6 +361,7 @@ class _TagAwareTextEdit(QTextEdit):
                 self._pending_tag_delete = True
                 self._pending_open_tag = open_tag
                 self._pending_close_tag = close_tag
+                self._pending_delete_forward = deleting_forward
                 self._highlight_tag_pair(open_tag, close_tag)
                 return
 
@@ -304,6 +369,7 @@ class _TagAwareTextEdit(QTextEdit):
             self._pending_tag_delete = False
             self._pending_open_tag = None
             self._pending_close_tag = None
+            self._pending_delete_forward = None
             self.setExtraSelections([])
 
         super().keyPressEvent(event)
@@ -314,8 +380,8 @@ class MarkupEditor(QWidget):
         super().__init__(parent)
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(*LAYOUT_MARGINS)
+        layout.setSpacing(LAYOUT_SPACING)
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(*EDITOR_TOOLBAR_MARGINS)
@@ -326,21 +392,14 @@ class MarkupEditor(QWidget):
             btn.clicked_with_tag.connect(self._on_tag_clicked)
             toolbar.addWidget(btn)
 
-        toolbar.addSpacing(EDITOR_TOOLBAR_GAP)
-
-        for label, tag_name in TAG_BUTTONS_ROW2:
-            btn = TagButton(label, tag_name)
-            btn.clicked_with_tag.connect(self._on_tag_clicked)
-            toolbar.addWidget(btn)
-
         toolbar.addStretch()
 
         layout.addLayout(toolbar)
+        self.pane = EditorPane()
 
-        self.editor = EditorPane()
-        layout.addWidget(self.editor)
+        layout.addWidget(self.pane)
 
         self.setLayout(layout)
 
     def _on_tag_clicked(self, tag_name):
-        self.editor.insert_tag(tag_name)
+        self.pane.insert_tag(tag_name)

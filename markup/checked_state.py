@@ -45,13 +45,6 @@ class CheckedState:
         self.save()
         return self._states[key]
 
-    def set_checked(self, source_file, entry_link, headword, value):
-        self._states[self._key(source_file, entry_link, headword)] = value
-        self.save()
-
-    def get_all_checked(self):
-        return {k: v for k, v in self._states.items() if v}
-
     def migrate(self, conn):
         try:
             rows = conn.execute(
