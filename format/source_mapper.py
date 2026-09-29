@@ -53,6 +53,11 @@ class SourceMapper:
             if variant in self._space_prefixed_only:
                 if match.start() > 0 and text[match.start() - 1] != ' ':
                     continue
+            if len(variant) == 1:
+                if match.start() > 0 and text[match.start() - 1].isalpha():
+                    continue
+                if match.end() < len(text) and text[match.end()].isalpha():
+                    continue
             abbr = self._variant_to_abbr[variant]
             matches.append((abbr, variant))
         return matches

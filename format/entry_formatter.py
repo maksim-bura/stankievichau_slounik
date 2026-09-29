@@ -9,7 +9,7 @@ from utils.constants import ARROW_MARKER, SENSE_ANCHOR_PREFIX
 
 _ITALIC_TEXT_TAGS = {'g', 'ex', 'i', 'st', 'see'}
 
-_PLAIN_PAREN_TAGS = _ITALIC_TEXT_TAGS | {'hw'}
+_PLAIN_PAREN_TAGS = _ITALIC_TEXT_TAGS | {'hw', 'lang'}
 
 _PAREN_WRAP_RE = re.compile(r'[()]')
 
@@ -117,10 +117,20 @@ def _plain_parens(text):
 
 
 class FormatContext:
-    def __init__(self, subheadword=None, senses=None, headword=None):
+    def __init__(self, subheadword=None, senses=None, headword=None, entry_link=None, sub_headword_ids=None):
         self.subheadword = subheadword
         self.senses = senses
         self.headword = headword
+        self.entry_link = entry_link
+        self.sub_headword_ids = sub_headword_ids or frozenset()
+
+    def anchor_for(self, element, text):
+        link_attr = element.get('link')
+        if link_attr:
+            return f'{self.entry_link}#{link_attr}' if self.entry_link else link_attr
+        if id(element) in self.sub_headword_ids and self.entry_link:
+            return f'{self.entry_link}#{text}'
+        return None
 
 
 _format_context = None
@@ -145,6 +155,15 @@ _FORMAT_CACHE_MAX_SIZE = 512
 _format_cache = OrderedDict()
 
 
+def _sub_headword_ids(root):
+    headword_elements = [element for element in root.iter() if element.tag == 'hw']
+    primary = next(
+        (h for h in headword_elements if h.get('excl') is None),
+        headword_elements[0] if headword_elements else None
+    )
+    return frozenset(id(h) for h in headword_elements if h is not primary)
+
+
 def format_entry(xml_string, is_sources=False):
     global _format_context
     if not is_sources and _format_context is None:
@@ -154,7 +173,9 @@ def format_entry(xml_string, is_sources=False):
             return cached
 
     root = ElementTree.fromstring(xml_string)
-    context = _format_context
+    context = _format_context or FormatContext()
+    context.entry_link = root.get('link')
+    context.sub_headword_ids = _sub_headword_ids(root)
     content = process_element(root, context, is_sources)
 
     html = f"<body>{content}</body>"
@@ -233,6 +254,8 @@ def process_element(element, context, is_sources=False, current_variants=None):
                         inner_html_parts.append(f'<b>{inner_child.text}</b>')
                     elif inner_child.tag == 'i':
                         inner_html_parts.append(f'<i>{inner_child.text}</i>')
+                    elif inner_child.tag == 'p':
+                        inner_html_parts.append(f'<span class="p">{inner_child.text}</span>')
                     else:
                         if inner_child.text:
                             inner_html_parts.append(inner_child.text)
@@ -356,17 +379,18 @@ def process_element(element, context, is_sources=False, current_variants=None):
                 parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}</span>')
             elif not is_sources and child.tag == 'hw':
                 hw_text = ''.join(child.itertext()).strip() or child.text
-                anchor_id = remove_accents(hw_text)
                 link_attr = child.get('link')
                 sep = ''
                 if child.tail and child.tail.startswith((',', ':', ';')):
                     sep = child.tail[0]
                     child.tail = child.tail[1:]
+                    if sep == ',' and child.tail.startswith(','):
+                        sep += ','
+                        child.tail = child.tail[1:]
 
-                if link_attr:
-                    parts.append(f'<span id="{link_attr}" class="{tag_class}">{inner_html}{sep}</span>' if tag_class else f'<span id="{link_attr}">{inner_html}{sep}</span>')
-                else:
-                    parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}{sep}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}{sep}</span>')
+                fragment_anchor = context.anchor_for(child, hw_text) if context is not None else None
+                anchor_id = fragment_anchor or link_attr or remove_accents(hw_text)
+                parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}{sep}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}{sep}</span>')
             elif tag_class:
                 parts.append(f'<span class="{tag_class}">{inner_html}</span>')
             else:

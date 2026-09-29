@@ -77,7 +77,7 @@ class MainWindow(QMainWindow):
     def open_entry_by_headword_nav(self, headword, sense_parts):
         self.open_entry_by_headword(headword, sense_parts, from_navigation=True)
 
-    def open_entry_by_headword(self, headword, sense_parts=None, entry_link=None, from_navigation=False):
+    def open_entry_by_headword(self, headword, sense_parts=None, entry_link=None, from_navigation=False, from_word_link=False):
         if headword == _PREVIEW_SENTINEL:
             self._restore_preview()
             return
@@ -88,9 +88,15 @@ class MainWindow(QMainWindow):
 
         if entry_link:
             result_to_display = self.results_list.find_by_link(entry_link)
+            if not result_to_display and '#' in entry_link:
+                entry_part = entry_link.split('#', 1)[0]
+                result_to_display = self.results_list.find_by_link(entry_part)
             if not result_to_display:
                 entry_data = self.search_engine.get_entry_by_link(entry_link)
-                if entry_data:
+                if not entry_data[0] and '#' in entry_link:
+                    entry_part = entry_link.split('#', 1)[0]
+                    entry_data = self.search_engine.get_entry_by_link(entry_part)
+                if entry_data[0]:
                     result_to_display = entry_data
         else:
             result_to_display = self.results_list.find_by_headword(headword)
@@ -110,6 +116,8 @@ class MainWindow(QMainWindow):
                 formatter.set_target_senses(sense_parts, headword)
             elif compare_to != main_headword:
                 formatter.set_target_subheadword(compare_to)
+            elif from_word_link:
+                formatter.set_target_subheadword(compare_to)
             else:
                 formatter.clear_target()
 
@@ -125,8 +133,7 @@ class MainWindow(QMainWindow):
                 if anchor_id:
                     self.entry_scroll_manager.scroll_to_anchor(anchor_id)
             elif entry_link and '#' in entry_link:
-                anchor = entry_link.split('#')[1]
-                self.entry_scroll_manager.scroll_to_anchor(anchor)
+                self.entry_scroll_manager.scroll_to_anchor(entry_link)
             else:
                 self.entry_scroll_manager.scroll_to_anchor(compare_to)
         else:
@@ -172,7 +179,7 @@ class MainWindow(QMainWindow):
         link_type, target, sense_parts, entry_link = LinkHandler.process_url(url_string)
 
         if link_type == 'word' and target:
-            self.open_entry_by_headword(target, sense_parts, entry_link, from_navigation=False)
+            self.open_entry_by_headword(target, sense_parts, entry_link, from_navigation=False, from_word_link=True)
         elif link_type == 'source' and target:
             self.open_source(target)
 

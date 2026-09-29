@@ -134,8 +134,10 @@ class HighlightFormatter:
             if pattern.search(normalized_search):
                 matched.append(element)
 
+        emitted_sense_ids = set()
+        matched_ids = {id(el) for el in matched}
+
         if tag == 't':
-            matched_ids = {id(el) for el in matched}
             absorbed = set()
             for el in matched:
                 parent = parent_map.get(el)
@@ -153,6 +155,7 @@ class HighlightFormatter:
                             and prev2.tag == 't' and id(prev2) in matched_ids):
                         absorbed.add(id(el))
             matched = [el for el in matched if id(el) not in absorbed]
+            matched_ids = {id(el) for el in matched}
 
             embedded_groups, embedded_by_sense = self._group_embedded_t_matches(matched, parent_map)
             if embedded_by_sense:
@@ -170,6 +173,7 @@ class HighlightFormatter:
                         if id(group['sense']) in consumed_senses:
                             continue
                         consumed_senses.add(id(group['sense']))
+                        emitted_sense_ids.add(id(group['sense']))
                         paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
                         preview = self._build_embedded_t_preview(group, pattern, parent_map, root, headword)
                         preview['paragraph_break'] = paragraph_break
@@ -180,7 +184,11 @@ class HighlightFormatter:
                         continue
                     paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
                     preview_hw, preview_sort = self._preview_hw_fields(element, parent_map, root, headword)
-                    preview_html = self._build_preview_html(element, tag, pattern, parent_map)
+                    sense_num, sense_id = self._sense_number_for(element, parent_map)
+                    suppress = sense_id is not None and sense_id in emitted_sense_ids
+                    preview_html = self._build_preview_html(element, tag, pattern, parent_map, add_sense_num=not suppress, matched_ids=matched_ids)
+                    if not suppress and sense_num:
+                        emitted_sense_ids.add(sense_id)
                     embedded_previews.append({
                         'headword': preview_hw,
                         'sort_headword': preview_sort,
@@ -197,7 +205,11 @@ class HighlightFormatter:
 
             preview_hw, preview_sort = self._preview_hw_fields(element, parent_map, root, headword)
 
-            preview_html = self._build_preview_html(element, tag, pattern, parent_map)
+            sense_num, sense_id = self._sense_number_for(element, parent_map)
+            suppress = sense_id is not None and sense_id in emitted_sense_ids
+            preview_html = self._build_preview_html(element, tag, pattern, parent_map, add_sense_num=not suppress, matched_ids=matched_ids)
+            if not suppress and sense_num:
+                emitted_sense_ids.add(sense_id)
             previews.append({
                 'headword': preview_hw,
                 'sort_headword': preview_sort,
@@ -289,6 +301,8 @@ class HighlightFormatter:
         if tag == 't':
             if child.tag in ('see', 'g'):
                 return True
+            if child.tag == 'lang':
+                return child.get('code') in ('vl', 'la') or 'excl' in child.attrib
             for attr_name, attr_val in (('lang', 'vl'), ('excl', None)):
                 if attr_val is None:
                     if attr_name in child.attrib:
@@ -296,14 +310,34 @@ class HighlightFormatter:
                 elif child.get(attr_name) == attr_val:
                     return True
             return False
-        if tag == 'ex' and child.get('lang') == 'ru':
-            return True
+        if tag == 'ex':
+            if child.tag == 'lang':
+                return child.get('code') == 'ru'
+            if child.get('lang') == 'ru':
+                return True
         return False
 
-    def _build_preview_html(self, element, tag, pattern, parent_map):
+    def _sense_number_for(self, element, parent_map):
+        sense_num = ''
+        sense_id = None
+        crossed_sub_headword = False
+        current = element
+        while current in parent_map:
+            current = parent_map[current]
+            if current.tag == 'd':
+                crossed_sub_headword = True
+                continue
+            if current.tag == 'sense' and current.attrib:
+                if not crossed_sub_headword:
+                    sense_num = self._sense_number_html(current)
+                    sense_id = id(current)
+                break
+        return sense_num, sense_id
+
+    def _build_preview_html(self, element, tag, pattern, parent_map, add_sense_num=True, matched_ids=None):
         highlighted = self._element_preview_content(element, tag, pattern)
         if tag in ('t', 'ex'):
-            highlighted = self._add_sibling_context(highlighted, element, pattern, parent_map, tag)
+            highlighted = self._add_sibling_context(highlighted, element, pattern, parent_map, tag, add_sense_num, matched_ids)
 
         tag_class = 't' if tag == 't' else 'g'
         return f'<span class="{tag_class}">{highlighted}</span>'
@@ -338,7 +372,7 @@ class HighlightFormatter:
             exclude_classes=[EXCLUDED_HIGHLIGHT_CLASS],
         )
 
-    def _add_sibling_context(self, highlighted, element, pattern, parent_map, tag):
+    def _add_sibling_context(self, highlighted, element, pattern, parent_map, tag, add_sense_num=True, matched_ids=None):
         parent = parent_map.get(element)
         if parent is not None:
             siblings = list(parent)
@@ -352,10 +386,14 @@ class HighlightFormatter:
                     if prev_sib.tag == 'ex' and prev_sib.tail and '—' in prev_sib.tail:
                         ex_fmt = process_element(prev_sib, None)
                         context = f'<span class="g">{ex_fmt}</span>—'
-                        if idx >= 2 and siblings[idx - 2].tag == 't':
-                            prev_t = siblings[idx - 2]
-                            prev_t_fmt = self._element_preview_content(prev_t, 't', pattern)
-                            context = f'<span class="t">{prev_t_fmt}</span>' + (prev_t.tail or '') + context
+                        j = idx - 2
+                        while j >= 0 and siblings[j].tag == 'ex':
+                            j -= 1
+                        if j >= 0 and siblings[j].tag == 't':
+                            if not (matched_ids and id(siblings[j]) in matched_ids):
+                                prev_t = siblings[j]
+                                prev_t_fmt = self._element_preview_content(prev_t, 't', pattern)
+                                context = f'<span class="t">{prev_t_fmt}</span>' + (prev_t.tail or '') + context
                         highlighted = context + highlighted
 
                 sep = element.tail or ''
@@ -366,25 +404,18 @@ class HighlightFormatter:
                     if not (ex_sib.tag == 'ex' and ex_sib.tail and '—' in ex_sib.tail
                             and t_sib.tag == 't'):
                         break
+                    t_search = normalize_jo_to_je(remove_accents(content_text(t_sib, 't')))
+                    if not pattern.search(t_search):
+                        break
                     ex_fmt = process_element(ex_sib, None)
                     t_fmt = self._element_preview_content(t_sib, 't', pattern)
                     highlighted += sep + f'<span class="g">{ex_fmt}</span>—<span class="t">{t_fmt}</span>'
                     sep = t_sib.tail or ''
                     i += 2
 
-                sense_num = ''
-                crossed_sub_headword = False
-                current = element
-                while current in parent_map:
-                    current = parent_map[current]
-                    if current.tag == 'd':
-                        crossed_sub_headword = True
-                        continue
-                    if current.tag == 'sense' and current.attrib:
-                        if not crossed_sub_headword:
-                            sense_num = self._sense_number_html(current)
-                        break
-                highlighted = sense_num + highlighted
+                if add_sense_num:
+                    sense_num, _ = self._sense_number_for(element, parent_map)
+                    highlighted = sense_num + highlighted
             elif tag == 'ex' and element.tail and '—' in element.tail and idx + 1 < len(siblings):
                 next_sib = siblings[idx + 1]
                 if next_sib.tag == 't':
@@ -447,6 +478,8 @@ class HighlightFormatter:
 def _restore_saved_blocks(html, saved_blocks):
     if not saved_blocks:
         return html
-    return _SAVED_BLOCK_PLACEHOLDER_RE.sub(
-        lambda m: saved_blocks[int(m.group(1))], html
-    )
+    for _ in range(2):
+        html = _SAVED_BLOCK_PLACEHOLDER_RE.sub(
+            lambda m: saved_blocks[int(m.group(1))], html
+        )
+    return html
