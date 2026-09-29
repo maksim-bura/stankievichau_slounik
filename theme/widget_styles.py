@@ -125,7 +125,8 @@ ENTRY_STYLESHEET = f"""
         text-align: justify;
     }}
     .hw {{ font-weight: bold; font-style: normal; }}
-    .g, .ex, .i {{ font-style: italic; }}
+    .g, .ex {{ font-style: italic; }}
+    .i {{ font-style: italic; font-weight: normal; }}
     .st {{ font-style: italic; }}
     .t {{ font-style: normal; }}
 

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QBrush, QPalette
 from utils.text_utils import remove_accents, normalize_jo_to_je
-from db.build_database import get_source_path
+from db.build_database import build_database, get_source_path
 from app.widgets import SearchBox, ElidingDelegate, select_row, navigate_rows
 from markup.editor import MarkupEditor
 from markup.checked_state import CheckedState
@@ -28,8 +28,9 @@ from theme.widget_styles import (
     COLOR_BORDER_DEFAULT, COLOR_BORDER_SELECTED,
     COLOR_CHECKED_BG, COLOR_CHECKED_HOVER_BG, COLOR_CHECKED_SELECTED_BG,
     COLOR_CHECKED_BORDER, COLOR_TRANSPARENT,
+    MENU_BUTTON_STYLE,
 )
-from utils.constants import CHECK_MARK, CHECK_BLANK, FLOPPY_MARKER
+from utils.constants import CHECK_MARK, CHECK_BLANK, FLOPPY_MARKER, RELOAD_MARKER, DUPLICATES_MARKER
 
 _COLOR_NORMAL_BG = QColor(COLOR_NORMAL_BG)
 _COLOR_HOVER_BG = QColor(COLOR_HOVER_BG)
@@ -119,6 +120,7 @@ class MarkupMainWindow(QMainWindow):
         self.checked_state = CheckedState()
         self.checked_state.migrate(self.search_engine._get_connection())
         self.current_result = None
+        self.current_results = []
         self._has_unsaved = False
         self._loaded_raw = {}
         self._by_id_headword = {}
@@ -155,6 +157,23 @@ class MarkupMainWindow(QMainWindow):
         self.search_box = SearchBox('Search entries...')
         self.search_box.textChanged.connect(self.on_search)
 
+        self._duplicates_toggle = QPushButton(DUPLICATES_MARKER)
+        self._duplicates_toggle.setCheckable(True)
+        self._duplicates_toggle.setFixedSize(BUTTON_SIZE)
+        self._duplicates_toggle.setCursor(Qt.PointingHandCursor)
+        self._duplicates_toggle.setProperty("class", "menu-button")
+        self._duplicates_toggle.setStyleSheet(MENU_BUTTON_STYLE)
+        self._duplicates_toggle.setToolTip('Show only duplicates')
+        self._duplicates_toggle.clicked.connect(self._on_duplicates_toggle)
+        self._update_duplicates_pressed()
+
+        self._rebuild_button = QPushButton(RELOAD_MARKER)
+        self._rebuild_button.setFixedSize(BUTTON_SIZE)
+        self._rebuild_button.setCursor(Qt.PointingHandCursor)
+        self._rebuild_button.setStyleSheet(TAG_BUTTON_STYLE)
+        self._rebuild_button.setToolTip('Rebuild database')
+        self._rebuild_button.clicked.connect(self._on_rebuild)
+
         self._checked_toggle = QPushButton(CHECK_BLANK)
         self._checked_toggle.setCheckable(True)
         self._checked_toggle.setFixedSize(BUTTON_SIZE)
@@ -170,6 +189,8 @@ class MarkupMainWindow(QMainWindow):
         self._save_button.hide()
 
         top_layout.addWidget(self.search_box, 1)
+        top_layout.addWidget(self._duplicates_toggle)
+        top_layout.addWidget(self._rebuild_button)
         top_layout.addWidget(self._checked_toggle)
         top_layout.addWidget(self._save_button)
 
@@ -229,13 +250,14 @@ class MarkupMainWindow(QMainWindow):
 
     def _display_results(self, results):
         self.current_results = results
-        self._by_id_headword = {(r[0], r[1]): r for r in results}
+        displayed = self._duplicate_filter(results) if self._duplicates_toggle.isChecked() else results
+        self._by_id_headword = {(r[0], r[1], r[3]): r for r in displayed}
         self.results_box.clear()
 
-        if not results:
+        if not displayed:
             return
 
-        for r in results:
+        for r in displayed:
             item = QListWidgetItem(remove_accents(r[1]))
             item.setData(Qt.UserRole, r[3])
             item.setData(Qt.UserRole + 1, r[1])
@@ -243,8 +265,48 @@ class MarkupMainWindow(QMainWindow):
             item.setData(Qt.UserRole + 3, r[4])
             self.results_box.addItem(item)
 
-        if results:
+        if displayed:
             select_row(self.results_box, 0)
+
+    def _duplicate_filter(self, results):
+        by_text = {}
+        for r in results:
+            by_text.setdefault(remove_accents(r[1]), []).append(r)
+
+        unresolved = []
+        for rows in by_text.values():
+            if len(rows) < 2:
+                continue
+            for exact_rows in self._group_by_exact_headword(rows):
+                if len(exact_rows) < 2:
+                    continue
+                if self._is_resolved_duplicates(exact_rows):
+                    continue
+                unresolved.extend(exact_rows)
+        return unresolved
+
+    @staticmethod
+    def _group_by_exact_headword(rows):
+        by_exact = {}
+        for r in rows:
+            by_exact.setdefault(r[1], []).append(r)
+        return list(by_exact.values())
+
+    @staticmethod
+    def _is_resolved_duplicates(rows):
+        if len(rows) < 2:
+            return False
+        links = {r[3] for r in rows}
+        return all(r[3] for r in rows) and len(links) == len(rows)
+
+    def _update_duplicates_pressed(self):
+        self._duplicates_toggle.setProperty("pressed", "true" if self._duplicates_toggle.isChecked() else "false")
+        self._duplicates_toggle.style().unpolish(self._duplicates_toggle)
+        self._duplicates_toggle.style().polish(self._duplicates_toggle)
+
+    def _on_duplicates_toggle(self):
+        self._update_duplicates_pressed()
+        self._display_results(self.current_results)
 
     def _on_activate(self):
         item = self.results_box.currentItem()
@@ -257,13 +319,19 @@ class MarkupMainWindow(QMainWindow):
 
         entry_id = item.data(Qt.UserRole + 2)
         headword = item.data(Qt.UserRole + 1)
+        entry_link = item.data(Qt.UserRole)
         if not headword:
             return
 
-        result = self._by_id_headword.get((entry_id, headword))
+        result = self._by_id_headword.get((entry_id, headword, entry_link))
         if not result:
             return
 
+        self._load_result(result)
+
+    def _load_result(self, result):
+        entry_id = result[0]
+        headword = result[1]
         source_file = result[4]
         entry_link = result[3]
 
@@ -296,8 +364,8 @@ class MarkupMainWindow(QMainWindow):
         if loaded is None:
             return None
         blocks = loaded['blocks']
-        t_norm = normalize_jo_to_je(remove_accents(headword.lower())) if headword else None
-        link_norm = normalize_jo_to_je(remove_accents(entry_link.lower())) if entry_link else None
+        t_norm = normalize_jo_to_je(remove_accents(headword)) if headword else None
+        link_norm = normalize_jo_to_je(remove_accents(entry_link)) if entry_link else None
 
         if link_norm:
             for i in loaded['by_link'].get(link_norm, ()):
@@ -331,6 +399,8 @@ class MarkupMainWindow(QMainWindow):
             link_norm = self._block_link(block)
             if link_norm is not None:
                 by_link.setdefault(link_norm, []).append(i)
+            for sub_link_norm in self._block_sub_links(block):
+                by_link.setdefault(sub_link_norm, []).append(i)
             for hw_norm in self._block_headwords(block):
                 by_headword.setdefault(hw_norm, []).append(i)
         loaded = {'content': content, 'blocks': blocks, 'by_link': by_link, 'by_headword': by_headword}
@@ -338,18 +408,47 @@ class MarkupMainWindow(QMainWindow):
         return loaded
 
     @staticmethod
-    def _block_link(block):
+    def _block_raw_link(block):
         m = re.search(r'<entry\b[^>]*\blink="([^"]*)"', block)
-        if not m:
+        return m.group(1) if m else None
+
+    @classmethod
+    def _block_link(cls, block):
+        raw = cls._block_raw_link(block)
+        if not raw:
             return None
-        return normalize_jo_to_je(remove_accents(m.group(1)))
+        return normalize_jo_to_je(remove_accents(raw))
+
+    @classmethod
+    def _block_sub_links(cls, block):
+        entry_link = cls._block_raw_link(block)
+        if not entry_link:
+            return []
+        links = []
+        seen_primary = False
+        for m in re.finditer(r'<hw\b([^>]*)>(.*?)</hw>', block, re.DOTALL):
+            attrs = m.group(1)
+            if 'excl=' in attrs:
+                continue
+            if not seen_primary:
+                seen_primary = True
+                continue
+            descriptor = re.search(r'\blink="([^"]*)"', attrs)
+            if descriptor:
+                fragment = descriptor.group(1)
+            else:
+                fragment = re.sub(r'<[^>]+>', '', m.group(2)).strip()
+            if not fragment:
+                continue
+            links.append(normalize_jo_to_je(remove_accents(f'{entry_link}#{fragment}')))
+        return links
 
     @staticmethod
     def _block_headwords(block):
         norms = []
-        for m in re.finditer(r'<hw>(.*?)</hw>', block, re.DOTALL):
+        for m in re.finditer(r'<hw\b[^>]*>(.*?)</hw>', block, re.DOTALL):
             inner = re.sub(r'<[^>]+>', '', m.group(1))
-            norms.append(normalize_jo_to_je(remove_accents(inner.lower().strip())))
+            norms.append(normalize_jo_to_je(remove_accents(inner.strip())))
         return norms
 
     @staticmethod
@@ -370,6 +469,42 @@ class MarkupMainWindow(QMainWindow):
 
     def _on_save(self):
         self._save_current()
+
+    def _on_rebuild(self):
+        if self._has_unsaved:
+            self._save_current()
+            if self._has_unsaved:
+                return
+
+        search_text = self.search_box.text().strip()
+        current = self.current_result
+
+        self.search_engine.close()
+
+        try:
+            build_database()
+        except Exception as exc:
+            self.search_engine.close()
+            QMessageBox.warning(self, 'Rebuild Error', f'Database rebuild failed:\n{exc}')
+            return
+
+        self._source_cache.clear()
+        self._refresh_after_rebuild(search_text, current)
+
+    def _refresh_after_rebuild(self, search_text, current):
+        self.show_all_entries() if not search_text else self.on_search(search_text)
+
+        if current and current[4]:
+            result = self._find_current_result()
+            if result is not None:
+                self._load_result(result)
+
+    def _find_current_result(self):
+        current = self.current_result
+        for r in self.current_results:
+            if r[4] == current[4] and r[1] == current[1] and r[3] == current[3]:
+                return r
+        return None
 
     def _save_current(self):
         if not self.current_result or not self.editor.pane.is_modified():
@@ -432,7 +567,7 @@ class MarkupMainWindow(QMainWindow):
 
         updated = (entry_id, self.current_result[1], new_entry_string, entry_link, source_file, None)
         self.current_result = updated
-        self._by_id_headword[(entry_id, updated[1])] = updated
+        self._by_id_headword[(entry_id, updated[1], entry_link)] = updated
         for i, r in enumerate(self.current_results):
             if r[0] == entry_id:
                 self.current_results[i] = (r[0], r[1], new_entry_string, r[3], r[4], None)

@@ -22,8 +22,10 @@ TAG_BUTTONS_ROW1 = [
     ('t', 't'),
     ('ex', 'ex'),
     ('src', 'src'),
+    ('st', 'st'),
     ('br', 'br'),
     ('see', 'see'),
+    ('i', 'i'),
 ]
 
 _TAG_RE = re.compile(r'<(/?)(\w+)[^>]*>')

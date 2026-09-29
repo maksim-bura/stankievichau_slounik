@@ -1,7 +1,7 @@
 from utils.text_utils import normalize_jo_to_je, remove_accents
 
 
-def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None):
+def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None, skip_lang_codes=None):
     parts = []
     if element.text:
         parts.append(element.text)
@@ -19,6 +19,8 @@ def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None):
                 elif child.get(attr_name) == attr_val:
                     skip = True
                     break
+        if not skip and skip_lang_codes and child.tag == 'lang' and child.get('code') in skip_lang_codes:
+            skip = True
         if not skip:
             if child.text:
                 parts.append(child.text)
@@ -29,9 +31,12 @@ def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None):
 
 def content_text(element, tag):
     if tag == 't':
-        return get_text_excluding_src(element, extra_exclude={'see', 'g'}, skip_attrs={'lang': 'vl', 'excl': None})
+        return get_text_excluding_src(
+            element, extra_exclude={'see', 'g', 'ex'},
+            skip_attrs={'lang': 'vl', 'excl': None}, skip_lang_codes={'vl', 'la'},
+        )
     if tag == 'ex':
-        return get_text_excluding_src(element, extra_exclude={'t'})
+        return get_text_excluding_src(element, extra_exclude={'t'}, skip_lang_codes={'ru'})
     return get_text_excluding_src(element)
 
 

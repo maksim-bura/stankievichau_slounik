@@ -72,9 +72,9 @@ class LinkHandler:
                 word, sense_parts = cls.parse_link_text(word)
                 return ('word', word, sense_parts, hw)
             if '#' in target:
-                entry_id, anchor = target.split('#', 1)
+                anchor = target.split('#', 1)[1]
                 word, sense_parts = cls.parse_link_text(anchor)
-                return ('word', word, sense_parts, entry_id)
+                return ('word', word, sense_parts, target)
             word, sense_parts = cls.parse_link_text(target)
             return ('word', word, sense_parts, None)
         elif url_string.startswith(source_prefix):

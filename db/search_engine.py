@@ -16,8 +16,10 @@ _TRIGRAM_MIN_SPAN = 3
 _HEADWORD_ROWS_SQL = """
     SELECT id, headword, NULL AS full_entry, entry_link, source_file, sort_headword, normalized_headword FROM dictionary
     {dictionary_where}
-    UNION
-    SELECT dictionary.id, sub_headwords.headword, NULL AS full_entry, dictionary.entry_link, dictionary.source_file, sub_headwords.sort_headword, sub_headwords.normalized_headword
+    UNION ALL
+    SELECT dictionary.id, sub_headwords.headword, NULL AS full_entry,
+           COALESCE(sub_headwords.link, dictionary.entry_link),
+           dictionary.source_file, sub_headwords.sort_headword, sub_headwords.normalized_headword
     FROM sub_headwords
     JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
     {sub_headwords_where}
@@ -27,7 +29,9 @@ _ENTRY_ROWS_SQL = """
     SELECT id, headword, full_entry, entry_link, source_file FROM dictionary
     WHERE id IN ({placeholders})
     UNION
-    SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, dictionary.entry_link, dictionary.source_file
+    SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry,
+           COALESCE(sub_headwords.link, dictionary.entry_link),
+           dictionary.source_file
     FROM sub_headwords
     JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
     WHERE dictionary.id IN ({placeholders})
@@ -46,6 +50,13 @@ class SearchEngine:
         if self._connection is None:
             self._connection = sqlite3.connect(self.database_path)
         return self._connection
+
+    def close(self):
+        if self._connection is not None:
+            self._connection.close()
+            self._connection = None
+        self._parsed_cache.clear()
+        self._preview_cache.clear()
 
     def get_parsed_entry(self, entry_id, xml_string=None):
         if entry_id in self._parsed_cache:
@@ -111,14 +122,15 @@ class SearchEngine:
             if sub_ids:
                 placeholders = ','.join(['?'] * len(sub_ids))
                 cursor.execute(f"""
-                    SELECT dictionary.id, sub_headwords.headword, NULL AS full_entry, dictionary.entry_link,
+                    SELECT dictionary.id, sub_headwords.headword, NULL AS full_entry,
+                           COALESCE(sub_headwords.link, dictionary.entry_link),
                            dictionary.source_file, sub_headwords.sort_headword, sub_headwords.normalized_headword
                     FROM sub_headwords
                     JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
                     WHERE sub_headwords.id IN ({placeholders})
                 """, sub_ids)
                 rows.extend(cursor.fetchall())
-            unique = [r for r in rows if pattern.search(r[6])]
+            unique = [r for r in rows if pattern.search(remove_accents(r[1]))]
             unique.sort(key=lambda x: alphabet_sort_key(x[5] or x[1]))
             return [(r[0], r[1], r[2], r[3], r[4]) + (None,) for r in unique]
 
@@ -130,7 +142,7 @@ class SearchEngine:
         ), (sql_pattern, sql_pattern))
         unique = cursor.fetchall()
 
-        unique = [r for r in unique if pattern.search(r[6])]
+        unique = [r for r in unique if pattern.search(remove_accents(r[1]))]
         unique.sort(key=lambda x: alphabet_sort_key(x[5] or x[1]))
         return [(r[0], r[1], r[2], r[3], r[4]) + (None,) for r in unique]
 
@@ -305,7 +317,21 @@ class SearchEngine:
         return None, None, None, None, None, None
 
     def get_entry_by_link(self, entry_link):
-        return self._get_entry_row("entry_link = ?", entry_link)
+        result = self._get_entry_row("entry_link = ?", entry_link)
+        if result:
+            return result
+        cursor = self._get_connection().cursor()
+        cursor.execute("""
+            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry,
+                   sub_headwords.link, dictionary.source_file
+            FROM sub_headwords
+            JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
+            WHERE sub_headwords.link = ?
+        """, (entry_link,))
+        result = cursor.fetchone()
+        if result:
+            return result + (None,)
+        return None, None, None, None, None, None
 
     def get_full_entry(self, entry_id):
         conn = self._get_connection()

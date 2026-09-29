@@ -13,7 +13,7 @@ _DICTIONARY_INSERT_SQL = (
 )
 _SUB_HEADWORD_INSERT_SQL = (
     "INSERT INTO sub_headwords (headword, sort_headword, normalized_headword, "
-    "normalized_plain_headword, main_entry_id) VALUES (?, ?, ?, ?, ?)"
+    "normalized_plain_headword, main_entry_id, link) VALUES (?, ?, ?, ?, ?, ?)"
 )
 _CONTENT_INDEX_INSERT_SQL = (
     "INSERT INTO content_index (entry_id, tag_type, searchable_text) VALUES (?, ?, ?)"
@@ -22,6 +22,9 @@ _BATCH_SIZE = 10000
 
 _SQLITE_SYNCHRONOUS_OFF = "PRAGMA synchronous = OFF"
 _SQLITE_CACHE_SIZE_KIB = "PRAGMA cache_size = -20000"
+
+_SCHEMA_VERSION_KEY = 'schema_version'
+_SCHEMA_VERSION = 2
 
 
 def parse_xml_file(file_path):
@@ -85,6 +88,35 @@ def stale_source_files():
     return stale
 
 
+def _schema_is_current(cursor):
+    rows = cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sub_headwords'").fetchall()
+    if not rows:
+        return False
+    columns = {row[1] for row in cursor.execute("PRAGMA table_info(sub_headwords)")}
+    if 'link' not in columns:
+        return False
+    meta = cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'").fetchall()
+    if not meta:
+        return False
+    row = cursor.execute("SELECT value FROM schema_meta WHERE key = ?", (_SCHEMA_VERSION_KEY,)).fetchone()
+    return bool(row) and row[0] == str(_SCHEMA_VERSION)
+
+
+def database_schema_is_current(db_path):
+    if not os.path.exists(db_path):
+        return False
+    try:
+        connection = sqlite3.connect(db_path)
+    except sqlite3.Error:
+        return False
+    try:
+        return _schema_is_current(connection.cursor())
+    except sqlite3.Error:
+        return False
+    finally:
+        connection.close()
+
+
 def build_database(file_names=None):
     paths = get_paths()
     os.makedirs(paths['build_dir'], exist_ok=True)
@@ -99,6 +131,10 @@ def build_database(file_names=None):
     cursor = connection.cursor()
     cursor.execute(_SQLITE_SYNCHRONOUS_OFF)
     cursor.execute(_SQLITE_CACHE_SIZE_KIB)
+
+    if not rebuild_all and not _schema_is_current(cursor):
+        rebuild_all = True
+        file_names = get_source_names() + ['sources.xml']
 
     if rebuild_all:
 
@@ -128,7 +164,8 @@ def build_database(file_names=None):
                 sort_headword TEXT,
                 normalized_headword TEXT,
                 normalized_plain_headword TEXT,
-                main_entry_id INTEGER
+                main_entry_id INTEGER,
+                link TEXT
             )
         """)
 
@@ -147,6 +184,17 @@ def build_database(file_names=None):
         cursor.execute("CREATE INDEX idx_dictionary_plain ON dictionary(normalized_plain_headword)")
         cursor.execute("CREATE INDEX idx_sub_normalized ON sub_headwords(normalized_headword)")
         cursor.execute("CREATE INDEX idx_sub_plain ON sub_headwords(normalized_plain_headword)")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
+        cursor.execute(
+            "INSERT OR REPLACE INTO schema_meta(key, value) VALUES (?, ?)",
+            (_SCHEMA_VERSION_KEY, str(_SCHEMA_VERSION)),
+        )
 
     dict_rows = []
     sub_rows = []
@@ -245,13 +293,18 @@ def insert_entry(entry, source_file, main_entry_id):
             continue
         sub_text = ''.join(sub_headword_element.itertext()).strip()
         if sub_text:
+            descriptor = sub_headword_element.get('link')
+            fragment = descriptor if descriptor else sub_text
+            sub_link = f'{entry_link}#{fragment}' if entry_link else None
             sub_sort = hw_text_excluding_n(sub_headword_element).strip() or sub_text
             sub_normalized = remove_accents(sub_sort).lower()
-            if sub_normalized in seen_sub_headwords:
-                continue
-            seen_sub_headwords.add(sub_normalized)
+            if descriptor is not None:
+                dedup_key = (sub_normalized, descriptor)
+                if dedup_key in seen_sub_headwords:
+                    continue
+                seen_sub_headwords.add(dedup_key)
             sub_rows.append(
-                (sub_text, sub_sort, sub_normalized, remove_accents(sub_text).lower(), main_entry_id)
+                (sub_text, sub_sort, sub_normalized, remove_accents(sub_text).lower(), main_entry_id, sub_link)
             )
 
     content_rows = []
