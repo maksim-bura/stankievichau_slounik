@@ -1,11 +1,11 @@
-from PySide6.QtWidgets import QStyle, QStyleOptionFrame, QProxyStyle, QTextBrowser
+from PySide6.QtWidgets import QStyle, QStyleOptionFrame, QProxyStyle, QTextBrowser, QTextEdit
 from theme.layout_constants import DOCUMENT_MARGIN
 from utils.constants import SCHEME_WORD, SCHEME_SOURCE, SCHEME_PREVIEW
 
 
 class NoBlueFocusFrameStyle(QProxyStyle):
     def drawPrimitive(self, element, option, painter, widget=None):
-        if element == QStyle.PrimitiveElement.PE_Frame and isinstance(widget, QTextBrowser):
+        if element == QStyle.PrimitiveElement.PE_Frame and isinstance(widget, QTextEdit):
             opt = QStyleOptionFrame(option)
             opt.state &= ~QStyle.StateFlag.State_HasFocus
             return super().drawPrimitive(element, opt, painter, widget)

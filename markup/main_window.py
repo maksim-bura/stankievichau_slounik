@@ -4,10 +4,10 @@ import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QListWidget, QListWidgetItem, QApplication, QPushButton, QMessageBox,
-    QStyleOptionViewItem, QStyle
+    QStyleOptionViewItem, QStyle, QMenu, QWidgetAction, QLabel
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QBrush, QPalette
+from PySide6.QtCore import Qt, QPoint, QEvent, QRect
+from PySide6.QtGui import QColor, QBrush, QPalette, QCursor
 from utils.text_utils import remove_accents, normalize_jo_to_je
 from db.build_database import build_database, get_source_path
 from app.widgets import SearchBox, ElidingDelegate, select_row, navigate_rows
@@ -15,13 +15,15 @@ from markup.editor import MarkupEditor
 from markup.checked_state import CheckedState
 from markup.styles import (
     MARKUP_GLOBAL_STYLE, ENTRY_LIST_STYLE,
-    CHECKED_TOGGLE_STYLE, TAG_BUTTON_STYLE
+    CHECKED_TOGGLE_STYLE, REBUILD_BUTTON_STYLE
 )
+from localization import strings
 from theme.layout_constants import (
     RESULTS_MIN_WIDTH, ENTRY_MIN_WIDTH,
     WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT,
     LAYOUT_MARGINS, LAYOUT_SPACING, TOP_LAYOUT_SPACING,
-    BUTTON_SIZE, LIST_ITEM_BORDER_WIDTH
+    BUTTON_SIZE, LIST_ITEM_BORDER_WIDTH,
+    MENU_OPTION_MARGINS, SEARCH_BOX_HEIGHT
 )
 from theme.widget_styles import (
     COLOR_NORMAL_BG, COLOR_HOVER_BG, COLOR_SELECTED_BG,
@@ -49,6 +51,22 @@ _ENTRY_BLOCK_RE = re.compile(r'<entry\b.*?</entry>', re.DOTALL)
 
 def find_entry_blocks(content):
     return _ENTRY_BLOCK_RE.findall(content)
+
+
+class _MenuCommandOption(QWidget):
+    def __init__(self, text, callback, parent=None):
+        super().__init__(parent)
+        self._callback = callback
+        label = QLabel(text, self)
+        layout = QHBoxLayout(self)
+        layout.addWidget(label)
+        layout.setContentsMargins(*MENU_OPTION_MARGINS)
+        self.setMinimumHeight(SEARCH_BOX_HEIGHT)
+
+    def mousePressEvent(self, event):
+        event.accept()
+        if event.button() == Qt.LeftButton:
+            self._callback()
 
 
 class _BorderDelegate(ElidingDelegate):
@@ -126,7 +144,7 @@ class MarkupMainWindow(QMainWindow):
         self._by_id_headword = {}
         self._source_cache = {}
 
-        self.setWindowTitle('Dictionary Markup')
+        self.setWindowTitle(strings.markup.window.title)
         self.resize(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
 
         self.setup_ui()
@@ -154,7 +172,7 @@ class MarkupMainWindow(QMainWindow):
         top_layout = QHBoxLayout()
         top_layout.setSpacing(TOP_LAYOUT_SPACING)
 
-        self.search_box = SearchBox('Search entries...')
+        self.search_box = SearchBox(strings.markup.toolbar.search_placeholder)
         self.search_box.textChanged.connect(self.on_search)
 
         self._duplicates_toggle = QPushButton(DUPLICATES_MARKER)
@@ -163,15 +181,15 @@ class MarkupMainWindow(QMainWindow):
         self._duplicates_toggle.setCursor(Qt.PointingHandCursor)
         self._duplicates_toggle.setProperty("class", "menu-button")
         self._duplicates_toggle.setStyleSheet(MENU_BUTTON_STYLE)
-        self._duplicates_toggle.setToolTip('Show only duplicates')
+        self._duplicates_toggle.setToolTip(strings.markup.toolbar.duplicates_tooltip)
         self._duplicates_toggle.clicked.connect(self._on_duplicates_toggle)
         self._update_duplicates_pressed()
 
         self._rebuild_button = QPushButton(RELOAD_MARKER)
         self._rebuild_button.setFixedSize(BUTTON_SIZE)
         self._rebuild_button.setCursor(Qt.PointingHandCursor)
-        self._rebuild_button.setStyleSheet(TAG_BUTTON_STYLE)
-        self._rebuild_button.setToolTip('Rebuild database')
+        self._rebuild_button.setStyleSheet(REBUILD_BUTTON_STYLE)
+        self._rebuild_button.setToolTip(strings.markup.toolbar.rebuild_tooltip)
         self._rebuild_button.clicked.connect(self._on_rebuild)
 
         self._checked_toggle = QPushButton(CHECK_BLANK)
@@ -180,13 +198,30 @@ class MarkupMainWindow(QMainWindow):
         self._checked_toggle.setCursor(Qt.PointingHandCursor)
         self._checked_toggle.setStyleSheet(CHECKED_TOGGLE_STYLE)
         self._checked_toggle.clicked.connect(self._on_checked_toggle)
+        self._update_checked_pressed()
+
+        self._checked_menu = QMenu(self)
+        _menu_option = _MenuCommandOption(
+            strings.markup.checked_menu.uncheck_all, self._on_uncheck_all
+        )
+        _menu_option_action = QWidgetAction(self._checked_menu)
+        _menu_option_action.setDefaultWidget(_menu_option)
+        self._checked_menu.addAction(_menu_option_action)
+        self._checked_menu.aboutToHide.connect(self._on_checked_menu_closed)
+        self._checked_menu_consume = False
+        self._checked_toggle.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._checked_toggle.customContextMenuRequested.connect(
+            self._on_checked_menu_requested
+        )
+        self._checked_toggle.installEventFilter(self)
 
         self._save_button = QPushButton(FLOPPY_MARKER)
         self._save_button.setFixedSize(BUTTON_SIZE)
         self._save_button.setCursor(Qt.PointingHandCursor)
-        self._save_button.setStyleSheet(TAG_BUTTON_STYLE)
+        self._save_button.setStyleSheet(REBUILD_BUTTON_STYLE)
         self._save_button.clicked.connect(self._on_save)
         self._save_button.hide()
+        self._checked_toggle.hide()
 
         top_layout.addWidget(self.search_box, 1)
         top_layout.addWidget(self._duplicates_toggle)
@@ -223,7 +258,13 @@ class MarkupMainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
     def eventFilter(self, obj, event):
-        if obj == self.results_box.viewport():
+        if obj == self._checked_toggle:
+            if (event.type() == QEvent.MouseButtonPress
+                    and self._checked_menu_consume):
+                self._checked_menu_consume = False
+                return True
+        if (getattr(self, 'results_box', None) is not None
+                and obj == self.results_box.viewport()):
             if event.type() == event.Type.MouseMove:
                 pos = event.position()
                 item = self.results_box.itemAt(pos.toPoint())
@@ -304,6 +345,16 @@ class MarkupMainWindow(QMainWindow):
         self._duplicates_toggle.style().unpolish(self._duplicates_toggle)
         self._duplicates_toggle.style().polish(self._duplicates_toggle)
 
+    def _update_checked_pressed(self):
+        checked = self._checked_toggle.isChecked()
+        self._checked_toggle.setProperty("pressed", "true" if checked else "false")
+        self._checked_toggle.style().unpolish(self._checked_toggle)
+        self._checked_toggle.style().polish(self._checked_toggle)
+        self._checked_toggle.setToolTip(
+            strings.markup.toolbar.entry_unchecked_tooltip if checked
+            else strings.markup.toolbar.entry_checked_tooltip
+        )
+
     def _on_duplicates_toggle(self):
         self._update_duplicates_pressed()
         self._display_results(self.current_results)
@@ -313,10 +364,43 @@ class MarkupMainWindow(QMainWindow):
         if item:
             self.on_result_clicked(item)
 
-    def on_result_clicked(self, item):
-        if self._has_unsaved:
-            self._save_current()
+    def _confirm_leave(self):
+        if not self._has_unsaved:
+            return True
 
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(strings.markup.leave_dialog.title)
+        box.setText(strings.markup.leave_dialog.body)
+        save_btn = box.addButton(strings.markup.leave_dialog.save, QMessageBox.AcceptRole)
+        leave_btn = box.addButton(strings.markup.leave_dialog.cancel, QMessageBox.DestructiveRole)
+        cancel_btn = box.addButton(strings.markup.leave_dialog.back, QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_btn)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is save_btn:
+            if self.editor.pane.is_modified() and self.current_result:
+                self._save_current()
+                if self.editor.pane.is_modified():
+                    return False
+            return True
+        if clicked is leave_btn:
+            return True
+        return False
+
+    def _restore_selection_to_current(self):
+        current = self.current_result
+        if not current:
+            return
+        for i in range(self.results_box.count()):
+            item = self.results_box.item(i)
+            if (item.data(Qt.UserRole + 2), item.data(Qt.UserRole + 1),
+                    item.data(Qt.UserRole)) == (current[0], current[1], current[3]):
+                self.results_box.setCurrentItem(item)
+                return
+
+    def on_result_clicked(self, item):
         entry_id = item.data(Qt.UserRole + 2)
         headword = item.data(Qt.UserRole + 1)
         entry_link = item.data(Qt.UserRole)
@@ -325,6 +409,14 @@ class MarkupMainWindow(QMainWindow):
 
         result = self._by_id_headword.get((entry_id, headword, entry_link))
         if not result:
+            return
+
+        current = self.current_result
+        if current and (current[0], current[1], current[3]) == (entry_id, headword, entry_link):
+            return
+
+        if not self._confirm_leave():
+            self._restore_selection_to_current()
             return
 
         self._load_result(result)
@@ -350,7 +442,9 @@ class MarkupMainWindow(QMainWindow):
         is_checked = self.checked_state.is_checked(source_file, result[3], result[1])
         self._checked_toggle.setText(CHECK_MARK if is_checked else CHECK_BLANK)
         self._checked_toggle.setChecked(is_checked)
+        self._update_checked_pressed()
         self._save_button.hide()
+        self._checked_toggle.show()
 
     def _read_entry_from_source(self, entry_id, source_file, headword=None, entry_link=None):
         if not source_file:
@@ -399,8 +493,6 @@ class MarkupMainWindow(QMainWindow):
             link_norm = self._block_link(block)
             if link_norm is not None:
                 by_link.setdefault(link_norm, []).append(i)
-            for sub_link_norm in self._block_sub_links(block):
-                by_link.setdefault(sub_link_norm, []).append(i)
             for hw_norm in self._block_headwords(block):
                 by_headword.setdefault(hw_norm, []).append(i)
         loaded = {'content': content, 'blocks': blocks, 'by_link': by_link, 'by_headword': by_headword}
@@ -408,40 +500,16 @@ class MarkupMainWindow(QMainWindow):
         return loaded
 
     @staticmethod
-    def _block_raw_link(block):
-        m = re.search(r'<entry\b[^>]*\blink="([^"]*)"', block)
+    def _block_raw_id(block):
+        m = re.search(r'<entry\b[^>]*\bid="([^"]*)"', block)
         return m.group(1) if m else None
 
     @classmethod
     def _block_link(cls, block):
-        raw = cls._block_raw_link(block)
+        raw = cls._block_raw_id(block)
         if not raw:
             return None
         return normalize_jo_to_je(remove_accents(raw))
-
-    @classmethod
-    def _block_sub_links(cls, block):
-        entry_link = cls._block_raw_link(block)
-        if not entry_link:
-            return []
-        links = []
-        seen_primary = False
-        for m in re.finditer(r'<hw\b([^>]*)>(.*?)</hw>', block, re.DOTALL):
-            attrs = m.group(1)
-            if 'excl=' in attrs:
-                continue
-            if not seen_primary:
-                seen_primary = True
-                continue
-            descriptor = re.search(r'\blink="([^"]*)"', attrs)
-            if descriptor:
-                fragment = descriptor.group(1)
-            else:
-                fragment = re.sub(r'<[^>]+>', '', m.group(2)).strip()
-            if not fragment:
-                continue
-            links.append(normalize_jo_to_je(remove_accents(f'{entry_link}#{fragment}')))
-        return links
 
     @staticmethod
     def _block_headwords(block):
@@ -465,16 +533,40 @@ class MarkupMainWindow(QMainWindow):
         new_state = self.checked_state.toggle(source_file, entry_link, headword)
         self._checked_toggle.setText(CHECK_MARK if new_state else CHECK_BLANK)
         self._checked_toggle.setChecked(new_state)
+        self._update_checked_pressed()
+        self.results_box.viewport().update()
+
+    def _on_checked_menu_requested(self, _pos):
+        self._checked_menu_consume = False
+        self._checked_toggle.setProperty('pressed', 'menu')
+        self._checked_toggle.style().unpolish(self._checked_toggle)
+        self._checked_toggle.style().polish(self._checked_toggle)
+        self._checked_menu.popup(
+            self._checked_toggle.mapToGlobal(QPoint(0, self._checked_toggle.height()))
+        )
+
+    def _on_checked_menu_closed(self):
+        btn_rect = QRect(
+            self._checked_toggle.mapToGlobal(QPoint(0, 0)),
+            self._checked_toggle.size(),
+        )
+        self._checked_menu_consume = btn_rect.contains(QCursor.pos())
+        self._update_checked_pressed()
+
+    def _on_uncheck_all(self):
+        self._checked_menu.close()
+        self.checked_state.uncheck_all()
+        self._checked_toggle.setText(CHECK_BLANK)
+        self._checked_toggle.setChecked(False)
+        self._update_checked_pressed()
         self.results_box.viewport().update()
 
     def _on_save(self):
         self._save_current()
 
     def _on_rebuild(self):
-        if self._has_unsaved:
-            self._save_current()
-            if self._has_unsaved:
-                return
+        if not self._confirm_leave():
+            return
 
         search_text = self.search_box.text().strip()
         current = self.current_result
@@ -518,7 +610,8 @@ class MarkupMainWindow(QMainWindow):
             root = ElementTree.fromstring(new_xml)
             new_entry_string = ElementTree.tostring(root, encoding='unicode').rstrip('\n')
         except ElementTree.ParseError:
-            QMessageBox.warning(self, 'Invalid XML', 'The entry contains invalid XML.')
+            QMessageBox.warning(self, strings.markup.invalid_xml_dialog.title,
+                strings.markup.invalid_xml_dialog.body)
             return
 
         if not source_file:
@@ -580,10 +673,14 @@ class MarkupMainWindow(QMainWindow):
             super().keyPressEvent(event)
 
     def _on_content_changed(self):
-        self._has_unsaved = True
-        self._save_button.show()
+        self._has_unsaved = self.editor.pane.is_modified()
+        if self._has_unsaved:
+            self._save_button.show()
+        else:
+            self._save_button.hide()
 
     def closeEvent(self, event):
-        if self._has_unsaved:
-            self._save_current()
+        if not self._confirm_leave():
+            event.ignore()
+            return
         event.accept()

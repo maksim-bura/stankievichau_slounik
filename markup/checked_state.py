@@ -45,6 +45,10 @@ class CheckedState:
         self.save()
         return self._states[key]
 
+    def uncheck_all(self):
+        self._states.clear()
+        self.save()
+
     def migrate(self, conn):
         try:
             rows = conn.execute(

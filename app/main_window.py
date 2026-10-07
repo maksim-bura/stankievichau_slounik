@@ -12,7 +12,7 @@ import format.entry_formatter as formatter
 from localization import strings
 from app.widgets import SourcesButton, SettingsButton, SearchBox, InsertLetterGButton, INSERT_LETTER_G
 from app.shortcuts.shortcuts import install_global_copy
-from app.panels import SearchResultsList, EntryViewer, SourcesPanel, SourcesToggle
+from app.panels import SearchResultsList, EntryViewer, SourcesPanel, SourcesToggle, same_senses
 from theme.layout_constants import (
     RESULTS_MIN_WIDTH, ENTRY_MIN_WIDTH, SOURCES_MIN_WIDTH,
     WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT, SPLITTER_ENTRY_INITIAL,
@@ -32,6 +32,9 @@ class MainWindow(QMainWindow):
         self.search_engine = search_engine
         self.current_display_xml = None
         self.current_display_headword = None
+        self.current_display_row_id = None
+        self.current_display_senses = None
+        self.current_display_target = None
         self.sources_panel = SourcesPanel(self)
         self.sources_visible = False
         self.sources_toggle = SourcesToggle(self)
@@ -74,31 +77,49 @@ class MainWindow(QMainWindow):
             self._initial_shown = True
             self.show_all_entries()
 
-    def open_entry_by_headword_nav(self, headword, sense_parts):
-        self.open_entry_by_headword(headword, sense_parts, from_navigation=True)
+    def open_entry_by_headword_nav(self, headword, sense_parts, entry_row_id=None, target=None):
+        self.open_entry_by_headword(headword, sense_parts, from_navigation=True,
+                                    entry_row_id=entry_row_id, target_subheadword=target)
 
-    def open_entry_by_headword(self, headword, sense_parts=None, entry_link=None, from_navigation=False, from_word_link=False):
+    def open_entry_by_headword(self, headword, sense_parts=None, target_hw=None, from_navigation=False, from_word_link=False, entry_row_id=None, target_subheadword=None):
         if headword == _PREVIEW_SENTINEL:
             self._restore_preview()
             return
 
         target_headword = remove_accents(headword)
         result_to_display = None
+        resolved_id_headword = None
+        target_anchor = None
         old_headword = self.current_display_headword
+        old_row_id = self.current_display_row_id
+        old_senses = self.current_display_senses
+        old_target = self.current_display_target
 
-        if entry_link:
-            result_to_display = self.results_list.find_by_link(entry_link)
-            if not result_to_display and '#' in entry_link:
-                entry_part = entry_link.split('#', 1)[0]
-                result_to_display = self.results_list.find_by_link(entry_part)
-            if not result_to_display:
-                entry_data = self.search_engine.get_entry_by_link(entry_link)
-                if not entry_data[0] and '#' in entry_link:
-                    entry_part = entry_link.split('#', 1)[0]
-                    entry_data = self.search_engine.get_entry_by_link(entry_part)
-                if entry_data[0]:
-                    result_to_display = entry_data
-        else:
+        if entry_row_id is not None:
+            entry_data = self.search_engine.get_entry_by_id(entry_row_id)
+            if entry_data[0]:
+                result_to_display = entry_data
+
+        if target_hw and result_to_display is None:
+            # <see entry="E" [hw="H"]>text</see> renders as word:E|H
+            entry_data = self.search_engine.get_entry_by_link(headword)
+            if entry_data[0]:
+                result_to_display = entry_data
+            else:
+                result_to_display = self.results_list.find_by_headword(headword)
+                if not result_to_display:
+                    result_to_display = self.results_list.find_by_clean_headword(target_headword)
+                if not result_to_display:
+                    entry_data = self.search_engine.get_entry_by_headword(headword)
+                    if entry_data[0]:
+                        result_to_display = entry_data
+            if result_to_display:
+                scoped_text, scoped_anchor = self.search_engine.get_entry_sub_headword(
+                    result_to_display[0], target_hw)
+                if scoped_text:
+                    resolved_id_headword = scoped_text
+                    target_anchor = scoped_anchor
+        elif result_to_display is None:
             result_to_display = self.results_list.find_by_headword(headword)
             if not result_to_display:
                 result_to_display = self.results_list.find_by_clean_headword(target_headword)
@@ -106,43 +127,67 @@ class MainWindow(QMainWindow):
                 entry_data = self.search_engine.get_entry_by_headword(headword)
                 if entry_data[0]:
                     result_to_display = entry_data
+            if not result_to_display and from_word_link:
+                entry_data = self.search_engine.get_entry_by_xml_id(headword)
+                if entry_data[0]:
+                    result_to_display = entry_data
+                    resolved_id_headword = entry_data[1]
 
         if result_to_display:
             result_to_display = self.search_engine.materialize_result(result_to_display) or result_to_display
             main_headword = remove_accents(self.search_engine.get_main_headword(result_to_display[0], result_to_display[2]))
             compare_to = target_headword
+            highlight_word = resolved_id_headword or compare_to
 
-            if sense_parts:
+            if from_navigation and target_subheadword is not None:
+                formatter.set_target_subheadword(target_subheadword)
+                applied_target = target_subheadword
+            elif sense_parts:
                 formatter.set_target_senses(sense_parts, headword)
-            elif compare_to != main_headword:
-                formatter.set_target_subheadword(compare_to)
-            elif from_word_link:
-                formatter.set_target_subheadword(compare_to)
+                applied_target = None
+            elif not from_navigation and highlight_word and highlight_word != main_headword:
+                formatter.set_target_subheadword(highlight_word)
+                applied_target = highlight_word
             else:
                 formatter.clear_target()
+                applied_target = None
 
             self.display_entry(result_to_display)
+            self.current_display_senses = list(sense_parts) if sense_parts else None
+            self.current_display_target = applied_target
 
-            if not from_navigation and result_to_display[1] != old_headword:
+            entry_changed = result_to_display[0] != old_row_id \
+                or result_to_display[1] != old_headword
+            target_changed = applied_target != old_target
+            senses_changed = not same_senses(sense_parts, old_senses)
+            if not from_navigation and (entry_changed or target_changed or senses_changed):
                 if old_headword is None and getattr(self, '_last_preview_html', None):
                     old_headword = _PREVIEW_SENTINEL
-                self.entry_viewer.navigation_bar.push(result_to_display[1], sense_parts, old_headword)
+                self.entry_viewer.navigation_bar.push(result_to_display[1], sense_parts, old_headword,
+                                                      result_to_display[0], old_row_id,
+                                                      applied_target, old_target, old_senses)
 
             if sense_parts:
                 anchor_id = f"{SENSE_ANCHOR_PREFIX}{sense_parts[0]}" if sense_parts else None
                 if anchor_id:
                     self.entry_scroll_manager.scroll_to_anchor(anchor_id)
-            elif entry_link and '#' in entry_link:
-                self.entry_scroll_manager.scroll_to_anchor(entry_link)
+            elif target_anchor:
+                self.entry_scroll_manager.scroll_to_anchor(target_anchor)
             else:
                 self.entry_scroll_manager.scroll_to_anchor(compare_to)
         else:
-            if not from_navigation and headword != old_headword:
+            if not from_navigation and (headword != old_headword
+                                        or not same_senses(sense_parts, old_senses)):
                 if old_headword is None and getattr(self, '_last_preview_html', None):
                     old_headword = _PREVIEW_SENTINEL
-                self.entry_viewer.navigation_bar.push(headword, sense_parts, old_headword)
+                self.entry_viewer.navigation_bar.push(headword, sense_parts, old_headword,
+                                                      None, old_row_id, None, old_target,
+                                                      old_senses)
             self.current_display_xml = None
             self.current_display_headword = None
+            self.current_display_row_id = None
+            self.current_display_senses = None
+            self.current_display_target = None
             self.entry_viewer.display_html('<body></body>')
 
     def on_link_clicked(self, url):
@@ -163,7 +208,7 @@ class MainWindow(QMainWindow):
                     result = self.search_engine.materialize_result(result) or result
                     self._highlight_entry = True
                     self._last_preview_html = self.entry_viewer.stored_html
-                    self.entry_viewer.navigation_bar.push(result[1], None, _PREVIEW_SENTINEL)
+                    self.entry_viewer.navigation_bar.push(result[1], None, _PREVIEW_SENTINEL, result[0])
                     if anchor:
                         main_headword = remove_accents(self.search_engine.get_main_headword(result[0], result[2]))
                         if anchor != main_headword:
@@ -176,10 +221,11 @@ class MainWindow(QMainWindow):
                     if anchor:
                         self.entry_scroll_manager.scroll_to_anchor(anchor)
             return
-        link_type, target, sense_parts, entry_link = LinkHandler.process_url(url_string)
+        link_type, target, sense_parts, target_hw = LinkHandler.process_url(url_string)
 
         if link_type == 'word' and target:
-            self.open_entry_by_headword(target, sense_parts, entry_link, from_navigation=False, from_word_link=True)
+            self.open_entry_by_headword(target, sense_parts, target_hw,
+                                        from_navigation=False, from_word_link=True)
         elif link_type == 'source' and target:
             self.open_source(target)
 
@@ -342,6 +388,9 @@ class MainWindow(QMainWindow):
                 self._set_results_visible(True)
                 self.current_display_xml = None
                 self.current_display_headword = None
+                self.current_display_row_id = None
+                self.current_display_senses = None
+                self.current_display_target = None
                 self.entry_viewer.clear()
 
     def _insert_letter_g(self):
@@ -369,18 +418,27 @@ class MainWindow(QMainWindow):
         options = self.settings_button.get_option_states()
         is_combined = self._is_combined(options)
         self._highlight_entry = False
-        self.results_list.on_clicked(
+        old_target = self.current_display_target
+        old_senses = self.current_display_senses
+        applied_target = self.results_list.on_clicked(
             index, formatter,
             lambda r: self.display_entry(r),
             self.entry_scroll_manager.scroll_to_anchor
         )
+        self.current_display_target = applied_target
         if is_combined and getattr(self, '_last_preview_html', None):
-            headword = index.data(Qt.UserRole + 1)
-            if headword:
-                self.entry_viewer.navigation_bar.push(headword, None, _PREVIEW_SENTINEL)
+            if self.current_display_row_id is not None:
+                self.entry_viewer.navigation_bar.push(
+                    self.current_display_headword, None, _PREVIEW_SENTINEL,
+                    self.current_display_row_id, None,
+                    applied_target, old_target, old_senses)
+        self.current_display_senses = None
 
     def _show_previews(self, results, translations_mode=False):
         self.current_display_headword = None
+        self.current_display_row_id = None
+        self.current_display_senses = None
+        self.current_display_target = None
         groups = {}
         for result in results:
             if result[5]:
@@ -427,6 +485,7 @@ class MainWindow(QMainWindow):
             result = self.search_engine.materialize_result(result) or result
         self.current_display_xml = result[2]
         self.current_display_headword = result[1]
+        self.current_display_row_id = result[0]
         self.entry_viewer.display_entry(result, formatter)
         should_highlight = self._highlight_entry or (self._search_pattern and self._highlighted_entry_id == result[0])
         if should_highlight and self._search_pattern:
@@ -446,5 +505,8 @@ class MainWindow(QMainWindow):
         if getattr(self, '_last_preview_html', None):
             self.current_display_xml = None
             self.current_display_headword = None
+            self.current_display_row_id = None
+            self.current_display_senses = None
+            self.current_display_target = None
             self.entry_viewer.display_html(self._last_preview_html)
             self.entry_viewer.navigation_bar.clear()

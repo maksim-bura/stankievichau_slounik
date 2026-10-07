@@ -142,16 +142,20 @@ class SearchResultsList:
             if result is None:
                 return
 
-        self._present_clicked(result, clicked_clean, formatter, display_entry, scroll_to_anchor)
+        return self._present_clicked(result, clicked_clean, formatter, display_entry,
+                                     scroll_to_anchor)
 
     def _present_clicked(self, result, clicked_clean, formatter, display_entry, scroll_to_anchor):
         main_headword = self.search_engine.get_main_headword(result[0], result[2])
 
         if result[1] != main_headword:
             formatter.set_target_subheadword(result[1])
+            applied_target = result[1]
         else:
             formatter.clear_target()
+            applied_target = None
 
         display_entry(result)
         scroll_to_anchor(clicked_clean)
         self.navigation_bar.clear()
+        return applied_target

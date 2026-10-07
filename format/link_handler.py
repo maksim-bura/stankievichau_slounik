@@ -1,7 +1,12 @@
 import re
+from urllib.parse import unquote
+
 from utils.constants import SCHEME_WORD, SCHEME_SOURCE
 from utils.text_utils import remove_accents
 from .source_mapper import source_mapper
+
+_HOMONYM_NUMERAL_RE = re.compile(r'[ІіIiVvXxХхУу]+')
+_SENSE_LETTER_RE = re.compile(r'[а-яА-Яa-zA-Z]')
 
 
 class LinkHandler:
@@ -12,7 +17,7 @@ class LinkHandler:
     }
 
     @classmethod
-    def create_link(cls, tag_name, link_target, display_html=None, hw_attr=None):
+    def create_link(cls, tag_name, link_target, display_html=None):
         if display_html is None:
             display_html = link_target
 
@@ -20,8 +25,7 @@ class LinkHandler:
         if tag_info:
             if tag_info['action'] == 'source':
                 link_target = source_mapper.get_abbreviation(link_target)
-            target = hw_attr if hw_attr else link_target
-            return f'<a href="{tag_info["action"]}:{target}" class="{tag_info["css_class"]}">{display_html}</a>'
+            return f'<a href="{tag_info["action"]}:{link_target}" class="{tag_info["css_class"]}">{display_html}</a>'
         return display_html
 
     @classmethod
@@ -43,14 +47,14 @@ class LinkHandler:
                 sense_parts.insert(0, int(token))
                 i -= 1
                 continue
-            if re.fullmatch(r'[а-яА-Яa-zA-Z]', token) and not re.fullmatch(r'[ІіIi]', token):
+            if _SENSE_LETTER_RE.fullmatch(token) and not _HOMONYM_NUMERAL_RE.fullmatch(token):
                 sense_parts.insert(0, token)
                 i -= 1
                 continue
             break
 
         homonym = ''
-        if i >= 0 and re.fullmatch(r'[ІіIiVvXx]+', tokens[i]):
+        if i >= 0 and _HOMONYM_NUMERAL_RE.fullmatch(tokens[i]):
             homonym = tokens[i]
             i -= 1
 
@@ -64,17 +68,12 @@ class LinkHandler:
         word_prefix = SCHEME_WORD + ':'
         source_prefix = SCHEME_SOURCE + ':'
         if url_string.startswith(word_prefix):
-            target = url_string[len(word_prefix):]
+            # QUrl percent-encodes the entry/target separator as %7C
+            target = unquote(url_string[len(word_prefix):])
             if '|' in target:
-                parts = target.split('|')
-                word = parts[0]
-                hw = parts[1] if len(parts) > 1 else None
-                word, sense_parts = cls.parse_link_text(word)
-                return ('word', word, sense_parts, hw)
-            if '#' in target:
-                anchor = target.split('#', 1)[1]
-                word, sense_parts = cls.parse_link_text(anchor)
-                return ('word', word, sense_parts, target)
+                entry, _sep, target_hw = target.partition('|')
+                entry, sense_parts = cls.parse_link_text(entry)
+                return ('word', entry, sense_parts, target_hw or None)
             word, sense_parts = cls.parse_link_text(target)
             return ('word', word, sense_parts, None)
         elif url_string.startswith(source_prefix):

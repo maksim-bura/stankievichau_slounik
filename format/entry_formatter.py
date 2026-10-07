@@ -117,20 +117,10 @@ def _plain_parens(text):
 
 
 class FormatContext:
-    def __init__(self, subheadword=None, senses=None, headword=None, entry_link=None, sub_headword_ids=None):
+    def __init__(self, subheadword=None, senses=None, headword=None):
         self.subheadword = subheadword
         self.senses = senses
         self.headword = headword
-        self.entry_link = entry_link
-        self.sub_headword_ids = sub_headword_ids or frozenset()
-
-    def anchor_for(self, element, text):
-        link_attr = element.get('link')
-        if link_attr:
-            return f'{self.entry_link}#{link_attr}' if self.entry_link else link_attr
-        if id(element) in self.sub_headword_ids and self.entry_link:
-            return f'{self.entry_link}#{text}'
-        return None
 
 
 _format_context = None
@@ -151,17 +141,12 @@ def clear_target():
     _format_context = None
 
 
+def get_target_subheadword():
+    return _format_context.subheadword if _format_context else None
+
+
 _FORMAT_CACHE_MAX_SIZE = 512
 _format_cache = OrderedDict()
-
-
-def _sub_headword_ids(root):
-    headword_elements = [element for element in root.iter() if element.tag == 'hw']
-    primary = next(
-        (h for h in headword_elements if h.get('excl') is None),
-        headword_elements[0] if headword_elements else None
-    )
-    return frozenset(id(h) for h in headword_elements if h is not primary)
 
 
 def format_entry(xml_string, is_sources=False):
@@ -174,8 +159,6 @@ def format_entry(xml_string, is_sources=False):
 
     root = ElementTree.fromstring(xml_string)
     context = _format_context or FormatContext()
-    context.entry_link = root.get('link')
-    context.sub_headword_ids = _sub_headword_ids(root)
     content = process_element(root, context, is_sources)
 
     html = f"<body>{content}</body>"
@@ -340,22 +323,30 @@ def process_element(element, context, is_sources=False, current_variants=None):
                 else:
                     parts.append('')
             else:
+                entry_attr = child.get('entry')
                 hw_attr = child.get('hw')
-                link_attr = child.get('link')
-                display_text = ''.join(child.itertext()).strip() or child.text
+                display_text = ''.join(child.itertext()).strip() or child.text or ''
                 see_text = display_text.strip('"\'„“”') or display_text
+                if entry_attr:
+                    entry_attr = entry_attr.strip('"\'„“”')
                 if hw_attr:
                     hw_attr = hw_attr.strip('"\'„“”')
-                if link_attr:
-                    link_target = link_attr
+                if entry_attr:
+                    # <see entry="E">text</see>        -> word:E|text  (hw located by text)
+                    # <see entry="E" hw="H">text</see> -> word:E|H     (hw located by id)
+                    link_target = '%s|%s' % (entry_attr, hw_attr or see_text)
                 elif hw_attr:
                     link_target = hw_attr
                 else:
                     link_target = see_text
-                    if any(grand == 'n' for grand in child) and re.match(r'^[,\s]*\d', child.tail or ''):
+                    if see_text and any(grand == 'n' for grand in child) \
+                            and re.match(r'^[,\s]*\d', child.tail or ''):
                         link_target += (child.tail or '')
-                link_html = LinkHandler.create_link(child.tag, link_target, display_html=_plain_parens(display_text) or display_text, hw_attr=hw_attr)
-                parts.append(f'<span class="see">{link_html}</span>')
+                if link_target:
+                    link_html = LinkHandler.create_link(child.tag, link_target, display_html=_plain_parens(display_text) or display_text)
+                    parts.append(f'<span class="see">{link_html}</span>')
+                else:
+                    parts.append(f'<span class="see">{_plain_parens(display_text)}</span>')
         else:
             inner_parts = []
 
@@ -379,7 +370,6 @@ def process_element(element, context, is_sources=False, current_variants=None):
                 parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}</span>')
             elif not is_sources and child.tag == 'hw':
                 hw_text = ''.join(child.itertext()).strip() or child.text
-                link_attr = child.get('link')
                 sep = ''
                 if child.tail and child.tail.startswith((',', ':', ';')):
                     sep = child.tail[0]
@@ -388,8 +378,7 @@ def process_element(element, context, is_sources=False, current_variants=None):
                         sep += ','
                         child.tail = child.tail[1:]
 
-                fragment_anchor = context.anchor_for(child, hw_text) if context is not None else None
-                anchor_id = fragment_anchor or link_attr or remove_accents(hw_text)
+                anchor_id = child.get('id') or remove_accents(hw_text)
                 parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}{sep}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}{sep}</span>')
             elif tag_class:
                 parts.append(f'<span class="{tag_class}">{inner_html}</span>')

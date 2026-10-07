@@ -8,12 +8,13 @@ from utils.content_rules import content_text, index_text, hw_text_excluding_n
 
 _DICTIONARY_INSERT_SQL = (
     "INSERT INTO dictionary (id, headword, sort_headword, normalized_headword, "
-    "normalized_plain_headword, full_entry, entry_link, source_file) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    "normalized_plain_headword, full_entry, entry_link, hw_xml_id, source_file) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _SUB_HEADWORD_INSERT_SQL = (
     "INSERT INTO sub_headwords (headword, sort_headword, normalized_headword, "
-    "normalized_plain_headword, main_entry_id, link) VALUES (?, ?, ?, ?, ?, ?)"
+    "normalized_plain_headword, main_entry_id, link, hw_xml_id) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?)"
 )
 _CONTENT_INDEX_INSERT_SQL = (
     "INSERT INTO content_index (entry_id, tag_type, searchable_text) VALUES (?, ?, ?)"
@@ -24,7 +25,7 @@ _SQLITE_SYNCHRONOUS_OFF = "PRAGMA synchronous = OFF"
 _SQLITE_CACHE_SIZE_KIB = "PRAGMA cache_size = -20000"
 
 _SCHEMA_VERSION_KEY = 'schema_version'
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def parse_xml_file(file_path):
@@ -93,7 +94,10 @@ def _schema_is_current(cursor):
     if not rows:
         return False
     columns = {row[1] for row in cursor.execute("PRAGMA table_info(sub_headwords)")}
-    if 'link' not in columns:
+    if 'link' not in columns or 'hw_xml_id' not in columns:
+        return False
+    dict_columns = {row[1] for row in cursor.execute("PRAGMA table_info(dictionary)")}
+    if 'hw_xml_id' not in dict_columns:
         return False
     meta = cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'").fetchall()
     if not meta:
@@ -153,6 +157,7 @@ def build_database(file_names=None):
                 normalized_plain_headword TEXT,
                 full_entry TEXT,
                 entry_link TEXT,
+                hw_xml_id TEXT,
                 source_file TEXT
             )
         """)
@@ -165,7 +170,8 @@ def build_database(file_names=None):
                 normalized_headword TEXT,
                 normalized_plain_headword TEXT,
                 main_entry_id INTEGER,
-                link TEXT
+                link TEXT,
+                hw_xml_id TEXT
             )
         """)
 
@@ -277,11 +283,13 @@ def insert_entry(entry, source_file, main_entry_id):
     sort_headword = hw_text_excluding_n(headword_element).strip() or headword
     normalized_headword = remove_accents(sort_headword).lower()
     entry_string = ElementTree.tostring(entry, encoding="unicode")
-    entry_link = entry.get('link')
+    entry_xml_id = entry.get('id')
+    main_hw_xml_id = headword_element.get('id')
 
     dict_row = (
         main_entry_id, headword, sort_headword, normalized_headword,
-        remove_accents(headword).lower(), entry_string, entry_link, source_file
+        remove_accents(headword).lower(), entry_string, entry_xml_id,
+        main_hw_xml_id, source_file
     )
 
     sub_rows = []
@@ -293,9 +301,8 @@ def insert_entry(entry, source_file, main_entry_id):
             continue
         sub_text = ''.join(sub_headword_element.itertext()).strip()
         if sub_text:
-            descriptor = sub_headword_element.get('link')
-            fragment = descriptor if descriptor else sub_text
-            sub_link = f'{entry_link}#{fragment}' if entry_link else None
+            descriptor = sub_headword_element.get('id')
+            sub_link = entry_xml_id
             sub_sort = hw_text_excluding_n(sub_headword_element).strip() or sub_text
             sub_normalized = remove_accents(sub_sort).lower()
             if descriptor is not None:
@@ -304,7 +311,8 @@ def insert_entry(entry, source_file, main_entry_id):
                     continue
                 seen_sub_headwords.add(dedup_key)
             sub_rows.append(
-                (sub_text, sub_sort, sub_normalized, remove_accents(sub_text).lower(), main_entry_id, sub_link)
+                (sub_text, sub_sort, sub_normalized, remove_accents(sub_text).lower(),
+                 main_entry_id, sub_link, sub_headword_element.get('id'))
             )
 
     content_rows = []

@@ -12,6 +12,10 @@ from theme.widget_styles import ENTRY_STYLESHEET, FLAT_BUTTON_STYLE
 from utils.constants import CROSS_MARKER, BACK_ARROW, FORWARD_ARROW
 
 
+def same_senses(a, b):
+    return list(a or ()) == list(b or ())
+
+
 class NavigationBar(QWidget):
     def __init__(self, parent, open_callback):
         super().__init__(parent)
@@ -72,30 +76,43 @@ class NavigationBar(QWidget):
     def on_back(self):
         if self.current_index > 0:
             self.current_index -= 1
-            self.open_callback(self.navigation_stack[self.current_index]['headword'],
-                              self.navigation_stack[self.current_index]['sense_parts'])
+            entry = self.navigation_stack[self.current_index]
+            self.open_callback(entry['headword'], entry['sense_parts'],
+                               entry.get('entry_row_id'), entry.get('target'))
             self.update_buttons()
 
     def on_forward(self):
         if self.current_index < len(self.navigation_stack) - 1:
             self.current_index += 1
-            self.open_callback(self.navigation_stack[self.current_index]['headword'],
-                              self.navigation_stack[self.current_index]['sense_parts'])
+            entry = self.navigation_stack[self.current_index]
+            self.open_callback(entry['headword'], entry['sense_parts'],
+                               entry.get('entry_row_id'), entry.get('target'))
             self.update_buttons()
 
-    def push(self, headword, sense_parts, old_headword):
-        if headword == old_headword:
+    def push(self, headword, sense_parts, old_headword, entry_row_id=None, old_row_id=None,
+             target=None, old_target=None, old_senses=None):
+        if headword == old_headword and entry_row_id == old_row_id \
+                and target == old_target and same_senses(sense_parts, old_senses):
             return
 
-        if self.current_index < len(self.navigation_stack) - 1:
-            self.navigation_stack = self.navigation_stack[:self.current_index + 1]
+        stack = self.navigation_stack[:self.current_index + 1]
 
-        if not self.navigation_stack and old_headword is not None:
-            self.navigation_stack.append({'headword': old_headword, 'sense_parts': None})
-            self.current_index = 0
+        # The tip must be the entry we are actually leaving. It can be stale:
+        # opening an entry from the search results calls display_entry()
+        # directly, so push() never runs and the tip is left behind.
+        tip = stack[-1] if stack else None
+        if tip is None or tip['headword'] != old_headword \
+                or tip.get('entry_row_id') != old_row_id \
+                or not same_senses(tip.get('sense_parts'), old_senses):
+            stack = [] if old_headword is None else stack + [{
+                'headword': old_headword, 'sense_parts': old_senses, 'entry_row_id': old_row_id,
+                'target': old_target,
+            }]
 
-        self.navigation_stack.append({'headword': headword, 'sense_parts': sense_parts})
-        self.current_index = len(self.navigation_stack) - 1
+        stack.append({'headword': headword, 'sense_parts': sense_parts,
+                      'entry_row_id': entry_row_id, 'target': target})
+        self.navigation_stack = stack
+        self.current_index = len(stack) - 1
         self.setVisible(len(self.navigation_stack) > 1)
         self.update_buttons()
 

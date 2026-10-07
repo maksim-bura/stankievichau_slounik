@@ -36,7 +36,7 @@ The launcher (`run_markup.py`) constructs `QApplication` first, then `MarkupMain
 - Keyboard nav: search box Up/Down signals route to `navigate_rows`; Enter triggers `_on_activate` → simulated click
 
 ### Checked State
-- Per-item key = `"{source_file}:{entry_link}:{headword}"` — keyed on source file + entry link (not just entry_id) so collided/deduped headwords and sub-headwords stay independent
+- Per-item key = `"{source_file}:{entry_link}:{headword}"` — keyed on source file + entry XML ID (not just entry_id) so collided/deduped headwords and sub-headwords stay independent
 - Persisted to `build/markup_checked.json` via `CheckedState`
 - `CheckedState.save()` called on every toggle (real-time persistence); writes UTF-8 with `ensure_ascii=False` (keeps Cyrillic) and `indent=2`, creating `build/` via `os.makedirs(exist_ok=True)` if missing.
 - `CheckedState._load()` is resilient: an empty state file loads as `{}`; a corrupt (JSON-decode-failing) file is backed up to `{path}.bak` and the state resets to `{}` instead of crashing the app.
@@ -69,7 +69,7 @@ The launcher (`run_markup.py`) constructs `QApplication` first, then `MarkupMain
 - Style: `TAG_BUTTON_STYLE` (transparent bg, no border, padding 2px 6px)
 
 ### Backspace/Delete Logic (`_TagAwareTextEdit.keyPressEvent`)
-1. **Inside a tag** (`_is_inside_tag`): normal character deletion (both keys)
+1. **Inside a tag** (`_is_inside_tag`): normal character deletion (both keys), EXCEPT when the deleted char is inside the tag NAME and the tag has a structural partner → mirrored rename (see Tag Name Renaming below)
 2. **At a tag boundary** (`_pair_at_deletion_boundary`): the pair is highlighted (yellow, `COLOR_HIGHLIGHT_BG` from `theme/widget_styles.py`) and pending; the second press of the same operation removes both tags, keeping inner content. Highlight triggers ONLY when the character about to be deleted is a tag delimiter of the open/close pair:
    - **Backspace** next to the `>` of the opening tag (cursor right after `<t>`) or the `>` of the closing tag (cursor right after `</t>`)
    - **Delete** next to the `<` of the opening tag (cursor right before `<t>`) or the `<` of the closing tag (cursor right before `</t>`)
@@ -85,6 +85,17 @@ The launcher (`run_markup.py`) constructs `QApplication` first, then `MarkupMain
 - **Deletion mechanics (preserve):** when deleting a pending pair, the CLOSE tag is removed FIRST, then the OPEN tag (removing close-then-open avoids shifting the other tag's char offsets). The two removals are wrapped in `cursor.beginEditBlock()`/`endEditBlock()`, so a single Ctrl+Z undoes BOTH tags (not one at a time). Signals are blocked during the batch edit, then `textChanged` is emitted manually so the save button appears.
 - **Undo restores, highlights, AND re-arms the deletion:** at deletion time the pre-deletion text is snapshotted (`_pair_delete_snapshot`) along with the removed tag spans and the key direction (`_last_deleted_forward`). A `textChanged` handler compares the document against the snapshot; when it matches (i.e. the pair-delete macro was undone), it re-arms the full pending state (`_pending_tag_delete`/`_pending_open_tag`/`_pending_close_tag`/`_pending_delete_forward`) and highlights both tags — so ONE next press of the same Backspace/Delete key deletes the pair again (Ctrl+Z + 1 press, not Ctrl+Z + 2). The highlight/re-arm is applied deferred via `QTimer.singleShot(0, …)` (re-checking the text still matches) because Qt emits a trailing `cursorPositionChanged` after `textChanged` during undo that would otherwise wipe the state synchronously. Direction guard still applies after undo: pressing the OPPOSITE key resets and re-detects. Snapshot is cleared once matched, reset in `set_entry()`, and overwritten by each new pair-deletion; typing between delete and undo does NOT trigger it (undo of the typing produces non-matching text).
 
+### Tag Name Renaming (`_TagAwareTextEdit` open↔close mirroring)
+
+Editing characters inside a tag's NAME updates the structurally paired partner tag on every keystroke (live, per keystroke):
+
+- **What triggers it:** a name character (ASCII letters/digits/`_`) is inserted, deleted (Backspace/Delete), or replaces a selection lying entirely within the tag NAME region (between `<`/`</` and the first non-name char). Edits to attributes, to `<`/`>` delimiters, or outside tags never mirror; the insertion point must be inside the name inclusive of its end (so appending at the name end mirrors, but typing a space right after the name does not).
+- **Partner resolution:** structural stack pairing — `_scan_tags()` scans `<…>` spans (tolerating EMPTY names so the `<></>` transient works; `</>` is a closing tag, NOT self-closing) and `_partner_tag()` matches open/close by name like `_find_tag_pair_at_boundary`, so nested same-name tags (`<t><t>…</t></t>`) resolve deterministically (inner↔inner, outer↔outer). Self-closing tags (`<br />`) and tags with no structural partner are never mirrored (normal typing/deletion applies).
+- **Empty-name transient:** deleting a name down to `<></>` and retyping keeps mirroring (both sides are tracked while empty), so a full rename (Backspace-to-empty + retype) stays in sync at every step.
+- **One undo step:** the typed change and its partner mirror run inside a single `beginEditBlock()`/`endEditBlock()` block (`_apply_synced_name`), so ONE Ctrl+Z reverts BOTH tags.
+- **Caret stays at the typed location:** the mirror edit never moves the caret to the partner; the caret shifts only if the partner's mirror edit sits before it in the document (partner index offset is computed from the main edit's net length change, incl. the adjacent-pair case where the closing tag starts exactly at the opening tag's `end`).
+- **Not hijacked:** Ctrl/Meta-modified Backspace/Delete (e.g. word delete) and non-name characters fall through to plain `QTextEdit` handling; the pair-delete/selection flows above are unaffected (the sync hooks are the inside-tag delete branch and the plain-insert branch of `keyPressEvent`).
+
 **Resolution of inner/outer tags at any given boundary is deterministic:**
 - At a boundary SHARED by an inner and outer tag (e.g. the cursor sits between `<d>` and `<hw>`), the direction decides: Backspace (deleting the `>`) targets the outer tag; Delete (deleting the `<`) targets the inner tag. This is because the rule is "which tag's delimiter char is being deleted."
 - At a boundary NOT shared (e.g. cursor before `<g>` inside a `<t>`, or right after `</g>`), the tag at the exact cursor boundary wins, so the inner `<g>` is highlighted/deleted while the outer `<t>` is untouched. Previously this returned the OUTERMOST pair; the boundary-based rewrite now prefers the exact-boundary tag instead.
@@ -99,7 +110,8 @@ The launcher (`run_markup.py`) constructs `QApplication` first, then `MarkupMain
   4. `content.replace(block, new_entry_string, 1)` replaces that unique block in place; everything else (blank lines between entries, other entries' original markup such as `<br></br>`) is preserved untouched.
   5. After a successful write: updates `_loaded_raw[entry_id]` to the new block, sets `_has_unsaved = False`, directly sets `editor.pane._is_modified = False` (bypass, since textChanged normally re-marks dirty), hides the save button.
   6. Updates **all** `current_results` entries sharing the same `entry_id` (main + sub-headwords all show the saved version), preserving each row's own headword/link/source_file
-- `_read_entry_from_source(entry_id, source_file, headword=None, entry_link=None)`: matches a raw `<entry>` block by `link` attribute (`_block_link_matches`) and/or headword (`_block_matches`, accent- and ё-normalized, case-preserving). Returns `None` if nothing matches or on `ParseError`/`OSError` — it NEVER falls back to the first entry in the file.
+- `_read_entry_from_source(entry_id, source_file, headword=None, entry_link=None)`: matches a raw `<entry>` block by **entry XML ID** (`entry_link`, normalized accent- and ё-insensitively and looked up in the `by_link` index) and/or by headword (`_block_matches`, accent- and ё-normalized, case-preserving). Returns `None` if nothing matches or on `ParseError`/`OSError` — it NEVER falls back to the first entry in the file.
+- **`entry_link` is the owning entry's own `<hw id>` and holds no `#H` suffix.** The markup app uses the same ID-only scheme as the dictionary app (see AGENTS.md → Cross-Reference IDs): `sub_headwords.link` is the parent entry's ID, and sub-headword identity comes from `headword` plus `hw_xml_id`, never from a compound link. The `_block_sub_links()` helper of the old `E#H` scheme is gone; raw block indexing keys on the entry ID alone.
 - `_block_matches(block, target_norm)` compares every `<hw>` text in a block (accent- and ё-normalized, case-preserving) — handles entries with multiple `<hw>` (sub-headwords). Case is preserved because the dictionary keeps case-distinct headwords as separate entries (`Юр` vs `юр` each get their own block). `excl` variants are still matched (an entry is loadable via either its indexed or excluded headword).
 - `<hw excl="true">` (an excluded headword variant, see AGENTS.md → `<hw excl="true">`) does NOT become a `dictionary`/`sub_headwords` row, so it never appears in the entry list here either — the entry is listed under its remaining (first non-excl) `<hw>` only.
 - Ctrl+S shortcut (`keyPressEvent`)
@@ -113,7 +125,7 @@ The launcher (`run_markup.py`) constructs `QApplication` first, then `MarkupMain
 - Checked toggle button updated on entry load; save button hidden on entry load
 
 ### Entry List Order
-- The list shows search-engine results in `search_engine` order (empty query = full dictionary UNION sub_headwords, sorted by `utils.text_utils.alphabet_sort_key` applied to the DB `sort_headword` column — headword text with embedded `<n>` homonym content stripped, so `ґале́ра ІІ` sorts by `ґале́ра`).
+- The list shows search-engine results in `search_engine` order (empty query = full dictionary `UNION ALL` sub_headwords — duplicates are shown as separate rows by design, see AGENTS.md Search Modes — sorted by `utils.text_utils.alphabet_sort_key` applied to the DB `sort_headword` column — headword text with embedded `<n>` homonym content stripped, so `ґале́ра ІІ` sorts by `ґале́ра`).
 - Collation rules (see `alphabet_sort_key`): compares by Belarusian alphabet (ґ after г, before д); combining accents (U+0300/U+0301) are skipped so accented words collate by base letters; word breaks (space, hyphen) are strong dividers ranked BELOW all letters (hyphen before space), so a multi-word entry groups right after its single headword — `ґаз, ґаз сьвяціць, ґаза, ґазавая ґрана́та, …`; among equal prefixes, shorter words come first (shorter-first).
 
 ## Writing Conventions

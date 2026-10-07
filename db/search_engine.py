@@ -79,6 +79,22 @@ class SearchEngine:
             return ""
         return ''.join(element.itertext()).strip()
 
+    def entry_has_sub_headwords(self, entry_id, xml_string=None):
+        root = self.get_parsed_entry(entry_id, xml_string)
+        if root is None:
+            return False
+        found_main = False
+        for element in root.iter('hw'):
+            if element.get('excl') is not None:
+                continue
+            if not ''.join(element.itertext()).strip():
+                continue
+            if not found_main:
+                found_main = True
+                continue
+            return True
+        return False
+
     def search(self, text, search_in_headwords=True, search_in_translations=False, search_in_examples=False):
         if not text.strip():
             return self._search_headwords("")
@@ -332,6 +348,60 @@ class SearchEngine:
         if result:
             return result + (None,)
         return None, None, None, None, None, None
+
+    def get_entry_by_xml_id(self, xml_id):
+        """Resolve a bare <see hw="..."> reference against <hw id="...">."""
+        if not xml_id:
+            return None, None, None, None, None, None
+        cursor = self._get_connection().cursor()
+        cursor.execute(
+            "SELECT id, headword, full_entry, entry_link, source_file "
+            "FROM dictionary WHERE hw_xml_id = ?",
+            (xml_id,),
+        )
+        result = cursor.fetchone()
+        if result:
+            return result + (None,)
+        cursor.execute("""
+            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry,
+                   dictionary.entry_link, dictionary.source_file
+            FROM sub_headwords
+            JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
+            WHERE sub_headwords.hw_xml_id = ?
+        """, (xml_id,))
+        result = cursor.fetchone()
+        if result:
+            return result + (None,)
+        return None, None, None, None, None, None
+
+    def get_entry_sub_headword(self, entry_row_id, target):
+        """Resolve the target of a ``<see entry="E">`` reference.
+
+        The target is matched against a sub-headword's ``<hw id>`` first and
+        against its de-accented text second, so ``<see entry="E">TEXT</see>``
+        and ``<see entry="E" hw="H">TEXT</see>`` share one code path.
+        Returns ``(text, anchor_id)`` or ``(None, None)``. Matching stays
+        inside the entry, so a homonym elsewhere can never be picked up.
+        An ambiguous de-accented text match returns ``(None, None)``; the
+        author must then use the explicit ``hw`` attribute.
+        """
+        if not entry_row_id or not target:
+            return None, None
+        target_norm = remove_accents(target).lower()
+        cursor = self._get_connection().cursor()
+        cursor.execute(
+            "SELECT headword, hw_xml_id FROM sub_headwords WHERE main_entry_id = ?",
+            (entry_row_id,),
+        )
+        text_matches = []
+        for headword, hw_xml_id in cursor.fetchall():
+            if hw_xml_id and hw_xml_id == target:
+                return headword, hw_xml_id
+            if remove_accents(headword).lower() == target_norm:
+                text_matches.append((headword, hw_xml_id or remove_accents(headword)))
+        if len(text_matches) == 1:
+            return text_matches[0]
+        return None, None
 
     def get_full_entry(self, entry_id):
         conn = self._get_connection()

@@ -16,6 +16,7 @@ class _StringsGroup:
 class Strings:
     _instance = None
     _strings = {}
+    _files = ('strings.json', 'markup_strings.json')
 
     def __new__(cls):
         if cls._instance is None:
@@ -24,9 +25,12 @@ class Strings:
         return cls._instance
 
     def _load(self):
-        json_path = os.path.join(os.path.dirname(__file__), 'strings.json')
-        with open(json_path, 'r', encoding='utf-8') as file:
-            self._strings = json.load(file)
+        base_dir = os.path.dirname(__file__)
+        self._strings = {}
+        for name in self._files:
+            json_path = os.path.join(base_dir, name)
+            with open(json_path, 'r', encoding='utf-8') as file:
+                self._strings.update(json.load(file))
 
     def get(self, key, default=None):
         return self._strings.get(key, default)
