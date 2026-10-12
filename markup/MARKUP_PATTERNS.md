@@ -113,11 +113,11 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label (`Уме�
 - Homonym cross-refs carry the numeral inside `<see>`: `<i>См. <see>грыжа <n>ІІ</n>, 1, 2</see>.</i>` (H), `собир. к <see>брус 1, 2, 3, 4</see>` (B).
 - `<see>` headword spelling must match the linked entry's headword (accents allowed; normalization is accent-stripped). When the raw's cross-ref is OCR-mangled, normalize it back to the dictionary's headword spelling (e.g. `Кажа-мЯКа` → `кажамяка`).
 
-## 7. Homonyms and `link` attributes
+## 7. Homonyms and disambiguating IDs
 
-- **Homonym numerals** (`гале́ра І`, `ґале́ра ІІ`, `ґен І`, `ґен ІІ`): the numeral is marked-up as `<n>І</n>` INSIDE `<hw>`: `<hw>гале́ра <n>І</n></hw>`. No `link` attribute is needed — indexing strips the `<n>` content (AGENTS.md → Collation Rules), and distinct entries keep stable file order.
-- **Distinct lexemes that share the same plain headword** (homographs) get a `link` on the `<entry>` and/or `<hw>`/`<see>`: `абора` → `<entry link="абора_бечевка">` and `<entry link="абора_хлев">`, sub-forms `<hw link="абора_бечевка#аборына">`, cross-refs `<see link="абора_бечевка#аборка">` (see dictionary_A.xml).
-- Same-file homograph pairs are the ONLY plain-headword collision found in the corpus (`абора` ×2 in dictionary_A.xml, resolved with `link`). Distinct lexemes that share a spelling AND a file but are NOT linked would collide on lookup — that is why every such pair gets `link` (see previous bullet).
+- **Homonym numerals** (`гале́ра І`, `ґале́ра ІІ`, `ґен І`, `ґен ІІ`): the numeral is marked-up as `<n>І</n>` INSIDE `<hw>`: `<hw>гале́ра <n>І</n></hw>`. Indexing strips the `<n>` content (AGENTS.md → Collation Rules), and distinct entries keep stable file order.
+- **Distinct lexemes that share the same plain headword** (homographs) get a unique `id` on the `<entry>`: `абора` → `<entry id="абора_бечевка">` and `<entry id="абора_хлев">`. Sub-headword anchors carry `<hw id="…">`; cross-references use `<see entry="ID">TEXT</see>` or, to pin a sub-headword, `<see entry="ID" hw="H">TEXT</see>` (see dictionary_A.xml). There is NO `link` attribute and NO `#`-fragment scheme — both are removed; do not reintroduce them (AGENTS.md → Word-URL forms).
+- Same-file homograph pairs are the ONLY plain-headword collision found in the corpus (`абора` ×2 in dictionary_A.xml, disambiguated by entry `id`). Distinct lexemes that share a spelling AND a file but lack a unique id would collide on lookup — that is why every such pair gets an `id`.
 
 ## 8. OCR transcription rules (raw → XML)
 

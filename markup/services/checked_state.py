@@ -6,7 +6,7 @@ from utils.text_utils import remove_accents
 class CheckedState:
     def __init__(self):
         self._path = os.path.join(
-            os.path.dirname(__file__), '..', 'build', 'markup_checked.json'
+            os.path.dirname(__file__), 'build', 'markup_checked.json'
         )
         self._states = {}
         self._load()

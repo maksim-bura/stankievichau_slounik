@@ -258,7 +258,7 @@ class MainWindow(QMainWindow):
         self.settings_button = SettingsButton(sources_button=self.sources_button)
         self.settings_button.search_mode_changed.connect(self._on_search_mode_changed)
 
-        self.search_box = SearchBox(strings.placeholder.entries_search)
+        self.search_box = SearchBox(strings.search_boxes.entries.placeholder)
         self.search_box.textChanged.connect(self.on_search)
 
         self.insert_letter_g_button = InsertLetterGButton()

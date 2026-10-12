@@ -2,10 +2,11 @@ import sqlite3
 import xml.etree.ElementTree as ElementTree
 from collections import OrderedDict
 
-from utils.text_utils import remove_accents, alphabet_sort_key
+from utils.text_utils import remove_accents, alphabet_sort_key, normalize_jo_to_je
 from utils.content_rules import index_text
 from utils.search_regex import compile_search_regex
 from utils.constants import SOURCES_PSEUDO_HEADWORD
+from utils.xml_schema import ATTR_EXCL
 from format.highlight_formatter import HighlightFormatter
 
 
@@ -85,7 +86,7 @@ class SearchEngine:
             return False
         found_main = False
         for element in root.iter('hw'):
-            if element.get('excl') is not None:
+            if element.get(ATTR_EXCL) is not None:
                 continue
             if not ''.join(element.itertext()).strip():
                 continue
@@ -192,7 +193,10 @@ class SearchEngine:
 
     def _search_via_index(self, text, tag_type):
         clean = index_text(text.strip(), tag_type)
-        pattern = compile_search_regex(clean, exact_words=text.endswith(' '))
+        pattern_text = remove_accents(text.strip())
+        if tag_type == 't':
+            pattern_text = normalize_jo_to_je(pattern_text)
+        pattern = compile_search_regex(pattern_text, exact_words=text.endswith(' '))
 
         entry_ids = self._candidate_entry_ids(clean, tag_type)
         if not entry_ids:
@@ -301,35 +305,43 @@ class SearchEngine:
         return result + (None,) if result else None
 
     def get_entry_by_headword(self, headword):
-        search_headword = remove_accents(headword).lower()
-        result = self._get_entry_row("normalized_headword = ?", search_headword)
-        if result:
-            return result
-        result = self._get_entry_row("normalized_plain_headword = ?", search_headword)
-        if result:
-            return result
+        exact = remove_accents(headword)
+        search_lower = exact.lower()
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT dictionary.id, sub_headwords.headword, dictionary.entry_link, dictionary.source_file
-            FROM sub_headwords
-            JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
-            WHERE sub_headwords.normalized_headword = ?
-        """, (search_headword,))
-        result = cursor.fetchone()
-        if result:
-            return self.get_entry_by_id(result[0])
-        cursor.execute("""
-            SELECT dictionary.id, sub_headwords.headword, dictionary.entry_link, dictionary.source_file
-            FROM sub_headwords
-            JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
-            WHERE sub_headwords.normalized_plain_headword = ?
-        """, (search_headword,))
-        result = cursor.fetchone()
-        if result:
-            full_row = self.get_entry_by_id(result[0])
-            if full_row:
-                return (full_row[0], result[1], full_row[2], full_row[3], full_row[4], None)
+
+        candidates = []
+
+        for where_clause in ("normalized_headword = ?", "normalized_plain_headword = ?"):
+            cursor.execute(
+                "SELECT id, headword, full_entry, entry_link, source_file "
+                "FROM dictionary WHERE " + where_clause,
+                (search_lower,),
+            )
+            candidates.extend((row[1], row + (None,)) for row in cursor.fetchall())
+
+        for where_clause, pack_plain in (
+                ("sub_headwords.normalized_headword = ?", False),
+                ("sub_headwords.normalized_plain_headword = ?", True)):
+            cursor.execute("""
+                SELECT dictionary.id, sub_headwords.headword, dictionary.entry_link,
+                       dictionary.source_file
+                FROM sub_headwords
+                JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
+                WHERE """ + where_clause, (search_lower,))
+            for entry_id, sub_headword, entry_link, source_file in cursor.fetchall():
+                full_row = self.get_entry_by_id(entry_id)
+                if full_row is None:
+                    continue
+                if pack_plain:
+                    row = (full_row[0], sub_headword, full_row[2], full_row[3], full_row[4], None)
+                    candidates.append((sub_headword, row))
+                else:
+                    candidates.append((sub_headword, full_row))
+
+        for matched_text, row in candidates:
+            if remove_accents(matched_text) == exact:
+                return row
         return None, None, None, None, None, None
 
     def get_entry_by_link(self, entry_link):
@@ -382,25 +394,27 @@ class SearchEngine:
         and ``<see entry="E" hw="H">TEXT</see>`` share one code path.
         Returns ``(text, anchor_id)`` or ``(None, None)``. Matching stays
         inside the entry, so a homonym elsewhere can never be picked up.
-        An ambiguous de-accented text match returns ``(None, None)``; the
-        author must then use the explicit ``hw`` attribute.
+        Text matches are CASE-EXACT: ``Юрка`` and ``юрка`` are distinct,
+        and a target whose exact case has no sub-headword (or more than
+        one) returns ``(None, None)``; the author must then use the
+        explicit ``hw`` attribute.
         """
         if not entry_row_id or not target:
             return None, None
-        target_norm = remove_accents(target).lower()
+        target_exact = remove_accents(target)
         cursor = self._get_connection().cursor()
         cursor.execute(
             "SELECT headword, hw_xml_id FROM sub_headwords WHERE main_entry_id = ?",
             (entry_row_id,),
         )
-        text_matches = []
+        exact_matches = []
         for headword, hw_xml_id in cursor.fetchall():
             if hw_xml_id and hw_xml_id == target:
                 return headword, hw_xml_id
-            if remove_accents(headword).lower() == target_norm:
-                text_matches.append((headword, hw_xml_id or remove_accents(headword)))
-        if len(text_matches) == 1:
-            return text_matches[0]
+            if remove_accents(headword) == target_exact:
+                exact_matches.append((headword, hw_xml_id or remove_accents(headword)))
+        if len(exact_matches) == 1:
+            return exact_matches[0]
         return None, None
 
     def get_full_entry(self, entry_id):

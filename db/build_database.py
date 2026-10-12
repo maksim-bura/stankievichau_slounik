@@ -4,6 +4,7 @@ import os
 import stat
 from utils.text_utils import remove_accents
 from utils.content_rules import content_text, index_text, hw_text_excluding_n
+from utils.xml_schema import ATTR_ID, ATTR_EXCL
 
 
 _DICTIONARY_INSERT_SQL = (
@@ -270,7 +271,7 @@ def insert_entry(entry, source_file, main_entry_id):
             ex_elements.append(element)
 
     headword_element = next(
-        (h for h in headword_elements if h.get('excl') is None),
+        (h for h in headword_elements if h.get(ATTR_EXCL) is None),
         headword_elements[0] if headword_elements else None
     )
     if headword_element is None:
@@ -283,8 +284,8 @@ def insert_entry(entry, source_file, main_entry_id):
     sort_headword = hw_text_excluding_n(headword_element).strip() or headword
     normalized_headword = remove_accents(sort_headword).lower()
     entry_string = ElementTree.tostring(entry, encoding="unicode")
-    entry_xml_id = entry.get('id')
-    main_hw_xml_id = headword_element.get('id')
+    entry_xml_id = entry.get(ATTR_ID)
+    main_hw_xml_id = headword_element.get(ATTR_ID)
 
     dict_row = (
         main_entry_id, headword, sort_headword, normalized_headword,
@@ -297,11 +298,11 @@ def insert_entry(entry, source_file, main_entry_id):
     for sub_headword_element in headword_elements:
         if sub_headword_element is headword_element:
             continue
-        if sub_headword_element.get('excl') is not None:
+        if sub_headword_element.get(ATTR_EXCL) is not None:
             continue
         sub_text = ''.join(sub_headword_element.itertext()).strip()
         if sub_text:
-            descriptor = sub_headword_element.get('id')
+            descriptor = sub_headword_element.get(ATTR_ID)
             sub_link = entry_xml_id
             sub_sort = hw_text_excluding_n(sub_headword_element).strip() or sub_text
             sub_normalized = remove_accents(sub_sort).lower()
@@ -312,7 +313,7 @@ def insert_entry(entry, source_file, main_entry_id):
                 seen_sub_headwords.add(dedup_key)
             sub_rows.append(
                 (sub_text, sub_sort, sub_normalized, remove_accents(sub_text).lower(),
-                 main_entry_id, sub_link, sub_headword_element.get('id'))
+                 main_entry_id, sub_link, sub_headword_element.get(ATTR_ID))
             )
 
     content_rows = []

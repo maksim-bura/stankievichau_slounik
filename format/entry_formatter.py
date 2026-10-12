@@ -6,6 +6,7 @@ from .source_mapper import source_mapper
 from utils.text_utils import remove_accents
 from utils.content_rules import d_hw_variants
 from utils.constants import ARROW_MARKER, SENSE_ANCHOR_PREFIX
+from utils.xml_schema import ATTR_ID, ATTR_HW, ATTR_ENTRY, ATTR_N
 
 _ITALIC_TEXT_TAGS = {'g', 'ex', 'i', 'st', 'see'}
 
@@ -172,15 +173,11 @@ def format_entry(xml_string, is_sources=False):
     return html
 
 
-def _sense_matches_headword(sense_element, target_headword, variants=None):
+def _sense_matches_headword(target_headword, variants=None):
     if not target_headword:
         return True
     if variants:
         return target_headword in variants
-    hw_attr = sense_element.get('hw')
-    if hw_attr:
-        hw_variants = [remove_accents(v.strip()) for v in hw_attr.split('|')]
-        return target_headword in hw_variants
     return True
 
 
@@ -211,10 +208,10 @@ def process_element(element, context, is_sources=False, current_variants=None):
 
         is_target_sense = False
         if context and context.senses and child.tag == 'sense':
-            sense_attribute = child.get('n')
+            sense_attribute = child.get(ATTR_N)
             if sense_attribute:
                 normalized = int(sense_attribute) if sense_attribute.isdigit() else sense_attribute
-                if normalized in context.senses and _sense_matches_headword(child, context.headword, current_variants):
+                if normalized in context.senses and _sense_matches_headword(context.headword, current_variants):
                     is_target_sense = True
 
         is_target_headword = (context and context.subheadword and
@@ -323,8 +320,8 @@ def process_element(element, context, is_sources=False, current_variants=None):
                 else:
                     parts.append('')
             else:
-                entry_attr = child.get('entry')
-                hw_attr = child.get('hw')
+                entry_attr = child.get(ATTR_ENTRY)
+                hw_attr = child.get(ATTR_HW)
                 display_text = ''.join(child.itertext()).strip() or child.text or ''
                 see_text = display_text.strip('"\'„“”') or display_text
                 if entry_attr:
@@ -378,7 +375,7 @@ def process_element(element, context, is_sources=False, current_variants=None):
                         sep += ','
                         child.tail = child.tail[1:]
 
-                anchor_id = child.get('id') or remove_accents(hw_text)
+                anchor_id = child.get(ATTR_ID) or remove_accents(hw_text)
                 parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}{sep}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}{sep}</span>')
             elif tag_class:
                 parts.append(f'<span class="{tag_class}">{inner_html}</span>')

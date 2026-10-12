@@ -3,7 +3,7 @@
 ## Goal
 A Belarusian–Russian bilingual dictionary app. Queries in either language search headwords (Belarusian), translations (Russian `<t>` tags), or examples (`<ex>` tags), with tab‑separated search modes and a split‑pane UI.
 
-A separate **markup app** (`AGENTS_markup.md`) provides an entry editor that saves changes back to the source XML files.
+A separate **markup app** (`markup/AGENTS_markup.md`) provides an entry editor that saves changes back to the source XML files.
 
 ## Project Layout
 ```
@@ -28,8 +28,7 @@ dictionary_app/
 │   └── shortcuts/
 │       └── shortcuts.py  # Global Ctrl+C handler
 ├── build/                # SQLite database output (gitignored)
-│   ├── dictionary.db
-│   └── markup_checked.json  # Markup app checked states
+│   └── dictionary.db
 ├── data/
 │   ├── dictionary/       # Split XML entry files (dictionary_A.xml …); raw OCR text in raw_data/
 │   ├── sources.xml       # Sources/abbreviations reference
@@ -44,22 +43,31 @@ dictionary_app/
 │   └── source_mapper.py    # Abbreviation → source-id mapper
 ├── localization/
 │   ├── loader.py         # strings object from JSON
-│   └── strings.json
-├── markup/               # Markup app (see AGENTS_markup.md)
+│   └── strings.json      # dictionary-app strings
+├── markup/               # Markup app — DELETE markup/ + run_markup.py to remove it (see markup/AGENTS_markup.md)
+│   ├── app/              # window + panels (main_window.py, panels/editor.py) — mirror of app/
+│   ├── services/         # non-UI logic: broken_links.py (analysis), attribute_completion.py, checked_state.py
+│   │   └── build/        # runtime state: markup_checked.json (gitignored)
+│   ├── localization/     # markup-app strings loader + strings.json (manually maintained)
+│   ├── theme/            # markup-only layout/widget constants + styles.py
+│   ├── utils/            # markup-only glyph constants (FLOPPY_MARKER, RELOAD_MARKER, …)
+│   ├── AGENTS_markup.md  # Markup app guide
+│   └── MARKUP_PATTERNS.md  # OCR → XML markup conventions
 ├── theme/
 │   ├── layout_constants.py  # Pixel/metric constants
 │   └── widget_styles.py     # Global + per-widget stylesheets, named palette + RESULTS_LIST_STYLE
 ├── utils/
-│   ├── constants.py      # Glyphs (arrows, check/radio, gear, magnifier, books, floppy), scheme names,
-│   │                     #   triangle entities — single source
-│   ├── text_utils.py     # remove_accents, normalize_jo, alphabet_sort_key
+│   ├── constants.py      # Glyphs (arrows, check/radio, gear, magnifier, books), scheme names,
+│   │                     #   triangle entities — single source (markup-only glyphs in markup/utils/constants.py)
+│   ├── xml_schema.py     # dictionary tag-attribute registry (ATTRIBUTES, ATTR_*, attribute_names/is_boolean/unknown_attributes)
+│   ├── text_utils.py     # remove_accents, normalize_jo, collapse_same_entry_duplicates, alphabet_sort_key
 │   ├── search_regex.py   # compile_search_regex (accent-insensitive, word-boundary-aware)
 │   ├── scroll_manager.py # Anchor scroll + cached state restore
+│   ├── scroll_bar_utility.py # overlay_right_inset / scrollbar_extent / vertical_scrollbar_shown
 │   └── content_rules.py  # get_text_excluding_src, content_text, index_text, hw_text_excluding_n, d_hw_variants
 ├── AGENTS.md             # This file (dictionary app guide)
-├── AGENTS_markup.md      # Markup app guide
 ├── run.py                # Dictionary app launcher
-└── run_markup.py         # Markup app launcher
+└── run_markup.py         # Markup app launcher (only file outside markup/ )
 ```
 
 ## Key Design Decisions
@@ -69,10 +77,10 @@ dictionary_app/
 - **Exclusive mode**: exactly one of translations/examples ON, headwords OFF — shows preview snippets in the entry pane, hides the results list
 - **Combined mode**: headwords ON + examples ON, translations OFF — headword matches fill the results list, example matches fill previews
 - **Any other combination** (or headwords-only) → standard headword search with results list visible
-- Empty main-search results leave the entry pane empty (the results list is cleared). The "no results" message (`strings.no_results`, "Няма вынікаў.") is used ONLY by `sources_renderer.build_filtered_html` when a sources search matches no section.
+- Empty main-search results leave the entry pane empty (the results list is cleared). The "no results" message (`strings.nav.no_results`, "Няма вынікаў.") is used ONLY by `sources_renderer.build_filtered_html` when a sources search matches no section.
 - **Settings state machine** (`SettingsButton.get_option_states`): `_russian_radio` → `{headwords:False, translations:True, examples:False}`; `_belarusian_radio` → `{headwords:_headwords_option(), translations:False, examples:_examples_option()}` — translations is ALWAYS False for Belarusian. Sub-options (Belarusian) control headwords + examples only.
 - **Combined mode does a dual search**: `on_search` runs TWO separate `search_engine.search()` calls (headwords-only fills the list, examples-only fills previews). This keeps the results list showing only headword matches. Do NOT collapse this into a single call.
-- **Headword search shows duplicate rows by design**: `_HEADWORD_ROWS_SQL` joins the `dictionary` and `sub_headwords` selects with `UNION ALL` (not `UNION`), so an entry whose sub-headwords include a duplicate of itself appears as multiple identical list rows (e.g. searching `зачапіцца` returns id 88 twice). Keep it `ALL` — the duplicate-group filter relies on every row being visible.
+- **Headword search shows duplicate rows by design**: `_HEADWORD_ROWS_SQL` joins the `dictionary` and `sub_headwords` selects with `UNION ALL` (not `UNION`), so an entry whose sub-headwords include a duplicate of itself appears as multiple identical list rows (e.g. searching `зачапіцца` returns id 88 twice). Keep it `ALL` — the markup duplicate-group filter relies on every row being visible. The results LIST then collapses same-entry duplicates to a single row via `utils.text_utils.collapse_same_entry_duplicates` (key = DB entry id + accent-stripped headword, first occurrence wins) — genuine homonyms in DIFFERENT entries are kept, and the SQL is never narrowed.
 
 ### Content Index
 - `content_index` table in `dictionary.db`: `(entry_id, tag_type, searchable_text)` + indexes
@@ -99,7 +107,7 @@ dictionary_app/
 ### Source Data State (`<tp>` / `lvl`)
 - All `data/dictionary/dictionary_*.xml` source files are stripped of every `<tp>` tag and `lvl` attribute — inner text is kept, only bare `<t>` tags remain. This is a **data-only** change.
 - ґ-initial entries live in `data/dictionary/dictionary_G.xml` (untracked; the tracked `data/dictionary/dictionary_*.xml` set does not include G). The authoritative OCR text is `data/dictionary/raw_data/dictionary_G_raw.txt` (also untracked) — when editing or reconstructing G entries, verify against the raw lines. Since `dictionary_G.xml` is untracked, remember it is NOT part of `git status`; rebuilds/saves still target the file via `get_source_path`.
-- The lexicographic XML markup conventions (tags, entry shapes, spacing, OCR-fix rules, homonym/`link` handling) used when transcribing raw OCR text are documented in `MARKUP_PATTERNS.md` (app root) — see there for tagging rules; this file covers only app behavior.
+- The lexicographic XML markup conventions (tags, entry shapes, spacing, OCR-fix rules, homonym/`link` handling) used when transcribing raw OCR text are documented in `markup/MARKUP_PATTERNS.md` — see there for tagging rules; this file covers only app behavior.
 - `dictionary_G.xml` is kept in the raw file's print order (anchored to `dictionary_G_raw.txt`). The on-screen list order is alphabetical regardless of file order because search results are sorted by `alphabet_sort_key` (see Collation Rules) — so file order and list order are intentionally different. All other letter files are also in print order; none should be re-sorted alphabetically in the files.
 - All app code support for `<tp>`/`lvl` has been removed: no ranking tiers remain (the former `lvl="1"`-based tiers, `_compute_t_match_rank`, and `_tier_for_match` are gone — previews carry no `rank` and sort purely alphabetically by `sort_headword`, see Wildcard / LIKE building), and `entry_formatter` no longer maps a `tp` CSS class. Re-adding `<tp>`/`lvl` to the data would require restoring the rank pipeline. The markup editor's `tp`/`lvl="1"` tag buttons were removed too (markup is written by hand or with the remaining tag buttons).
 
@@ -132,6 +140,7 @@ dictionary_app/
 ### Accent-Handling Chain
 `remove_accents` is applied at EVERY layer: SQL `normalized_headword` at build time, query normalization, result-list item display text, entry-link matching, and preview headwords. Never drop an accent-strip step on one layer only — it must stay consistent across build, search, and display.
 - `normalize_jo` (`ё`→`е`, `Ё`→`Е`) in `utils/text_utils.py` is applied **only** for translation search (`tag='t'`), never for examples.
+- The content-search regex (`_search_via_index`, used for `t`/`ex`) is built from the query with accents stripped (`remove_accents(text.strip())`) and, for `t` only, `normalize_jo_to_je` applied — mirroring the headword path (`compile_search_regex(clean_text, …)` where `clean_text = remove_accents(text.strip())`). Candidate narrowing still goes through `index_text`/FTS/LIKE; the regex that re-filters is always the de-accented one, so accented or `ё`-spelled queries still match.
 - In `MainWindow.on_search`: `_search_normalize` is set True only when translations-only (translations ON and examples OFF); `_search_in_headwords` mirrors the option. These flags steer which classes get highlighted (see Highlighting).
 
 ### Wildcard / LIKE building
@@ -144,9 +153,11 @@ dictionary_app/
 ### Collation Rules (`alphabet_sort_key` in `utils/text_utils.py`)
 - Compares letter-by-letter using the Belarusian alphabet (`ґ` ranks after `г`, before `д`; `ё` is its own letter between `е` and `ж`).
 - Combining accents (U+0300/U+0301) are skipped, so accented and unaccented letters compare equally — e.g. `ґазавы` sorts before `ґатунак`, and `ґаґаць` sits between `ґавыліць` and `ґазавы`.
+- Apostrophes (`'`, `’`, `ʼ`) are skipped entirely (not ranked), so `Юр'е` collates exactly as `Юре`.
 - Word breaks (space, hyphen) are strong dividers ranked BELOW all letters (`-` = 0, space = 1; letters `а…я` = 2…34), so a multi-word entry groups immediately after its single headword: `ґаз, ґаз сьвяціць, ґаза, ґазавая ґрана́та, ґазавод, ґазавы, …`. Between the two break symbols space ranks after hyphen (so a hyphenated form sorts before the spaced form when otherwise equal).
 - The pipe `|` (used to join multiple `<hw>`s of one entry into a preview sort key) is ranked like a space, so a completed first headword sorts before any longer word with the same prefix — `ё|ёсьць|ёсьцека` precedes `ёвінны`; groups sharing a first headword tie-break by second, then third, … headword (`ё|ёсьці|ёсьцека` before `ё|ёсьць|ёсьцека`, since `і` ranks before `ь`).
 - Among equal prefixes, shorter words come first (shorter-first), so `ґаз` precedes `ґаза` precedes `ґазаліна`.
+- Case is NOT baked into the letter rank: uppercase letters only decide ties AFTER the character ranks, so `юр` sorts before `Юр` (and `юрка` before `Юрка`). `alphabet_sort_key` therefore returns a `(ranks, case_flags)` pair — Python compares the `ranks` lists first and only falls back to `case_flags` for otherwise-equal keys.
 - Other non-alphabet characters fall back to `len(alphabet) + ord(ch)` so they sort after letters with a stable relative order.
 - Both the dictionary app and the markup app list sort through this single key; the XML files keep raw print order (see Source Data State), so file order and on-screen list order intentionally differ.
 
@@ -161,15 +172,16 @@ dictionary_app/
 - **Paren rule (symmetric to the comma rule, same logic in `process_element`):** any literal `(` / `)` occurring inside an italicized tag's text (`g`, `ex`, `i`, `st`, `see`) is auto-wrapped in `<span class="p">` at render time, so the parens stay non-italic even if the markup does **not** surround them with `<p>`. `<p>` markup in data still works and is redundant (presents identically). `<src>` (already `font-style: normal`) is exempt.
 - **Embedded-`<p>`-in-`<st>` rule:** a `<p>` child inside a `<st>` (or `<src>`/`<see>`) element is preserved as `<span class="p">…</span>` in the **inner-content loop** of `process_element` (NOT flattened to bare text), so register/style markers like `<st><p>презр.</p></st>` render plain (`.p` is `font-style: normal; font-weight: normal;`) inside the otherwise italic `<st>`.
 - **Square-bracket bold rule (preserve):** a literal `[` … `]` pair whose inner content contains **only** `<hw>` and/or `<src>`/`<st>` elements (at least one `<hw>`) is auto-wrapped in `<b>` at render time, so such brackets stay bold even if the markup does **not** surround them with `<b>`. Detection (`_find_bracket_bold` in `entry_formatter.py`) scans the element's text and each child's tail and requires the `[` and `]` to be sibling text directly around the qualifying tags. Other bracket usages (e.g. brackets around non-`hw`/`src`/`st` content) are left untouched.
-- `_sense_matches_headword` / sense targeting: a `<sense>` element is only considered if its `n` attribute matches a target sense (digit for numeric, string otherwise) AND (if it has an `hw` attribute) the target headword is among its pipe-separated variants, accent-stripped.
-- Context (`FormatContext`) is module-level global state set via `set_target_subheadword` / `set_target_senses` / `clear_target`; `process_element` reads it to prepend `👉` arrows and wrap targeted senses/headwords in anchor spans. It is **cleared by `format_entry` after every render**, so it is write-only for the caller and must never be read back to learn what was applied (see Navigation History). The sub-headword target is applied to a single `<hw>`, matched first by its `id` attribute and otherwise by de-accented text.
+- `_sense_matches_headword` / sense targeting: a `<sense>` element is only considered if its `n` attribute matches a target sense (digit for numeric, string otherwise). `<sense>` has NO `hw` attribute (support removed) — sense→headword binding is only via the enclosing `<d>` bucket (`current_variants`).
+- Context (`FormatContext`) is module-level global state set via `set_target_subheadword` / `set_target_senses` / `clear_target`; `process_element` reads it to prepend `👉` arrows and wrap targeted senses/headwords in anchor spans. It is **cleared by `format_entry` after every render**, so it is write-only for the caller and must never be read back to learn what was applied (see Navigation History). The sub-headword target is applied to EVERY matching `<hw>` (matched by its `id` attribute or by de-accented text) — so a same-entry duplicate headword points the `👉` at all of its occurrences at once, not just the first.
 - **Anchor IDs for a scoped target are entry-local:** a `<hw>` gets `id` = its `id` attribute when present, else `remove_accents(text)`. There is no entry-ID prefix, because the anchor is only ever looked up inside the already-resolved entry.
-- **Glyphs and schemes (single source):** `utils/constants.py` defines every emoji and URL scheme used across the apps — `ARROW_MARKER` (`👉`), `CROSS_MARKER` (`❌`), `BACK_ARROW` (`⬅️`), `FORWARD_ARROW` (`➡️`), `CHECK_MARK` (`✅`), `CHECK_BLANK` (`⬜`), `RADIO_ON` (`🟢`), `RADIO_OFF` (`⚪`), `GEAR_MARKER` (`⚙️`), `MAGNIFIER_MARKER` (`🔍`), `BOOKS_MARKER` (`📚`), `FLOPPY_MARKER` (`💾`), `COLLAPSED_TRIANGLE_ENTITY`/`EXPANDED_TRIANGLE_ENTITY` (`▶`/`▼`), and `SCHEME_WORD/SOURCE/PREVIEW/TOGGLE_SECTION`. Import the constant everywhere the glyph is needed — never re-type the emoji/entity/scheme string in widget code. The arrow is used in the entry view (`headword-arrow`/`sense-arrow`, entry_formatter.py) and injected by the sources panel renderer (`build_filtered_html`, which imports `ARROW_MARKER` internally — the renderer receives only the target anchor id); the nav bar uses `BACK_ARROW`/`FORWARD_ARROW` (entry_viewer.py); the nav-bar close and sources-search close buttons use `CROSS_MARKER`. The emoji values are defined ONCE in `utils/constants.py` and imported everywhere — never re-type any of them in widget code.
+- **Glyphs and schemes (single source):** `utils/constants.py` defines every emoji and URL scheme used across the apps — `ARROW_MARKER` (`👉`), `CROSS_MARKER` (`❌`), `BACK_ARROW` (`⬅️`), `FORWARD_ARROW` (`➡️`), `CHECK_MARK` (`✅`), `CHECK_BLANK` (`⬜`), `RADIO_ON` (`🟢`), `RADIO_OFF` (`⚪`), `GEAR_MARKER` (`⚙️`), `MAGNIFIER_MARKER` (`🔍`), `BOOKS_MARKER` (`📚`), `COLLAPSED_TRIANGLE_ENTITY`/`EXPANDED_TRIANGLE_ENTITY` (`▶`/`▼`), and `SCHEME_WORD/SOURCE/PREVIEW/TOGGLE_SECTION`. Import the constant everywhere the glyph is needed. The arrow is used in the entry view (`headword-arrow`/`sense-arrow`, entry_formatter.py) and injected by the sources panel renderer (`build_filtered_html`, which imports `ARROW_MARKER` internally — the renderer receives only the target anchor id); the nav bar uses `BACK_ARROW`/`FORWARD_ARROW` (entry_viewer.py); the nav-bar close and sources-search close buttons use `CROSS_MARKER`. Markup-only glyphs (`FLOPPY_MARKER`, `RELOAD_MARKER`, `DUPLICATES_MARKER`, `BROKEN_LINKS_MARKER`) live in `markup/utils/constants.py`. Never re-type any of these emoji/entity/scheme strings in widget code.
+- **Tag attributes (single source):** `utils/xml_schema.py` is the single registry of dictionary tag attributes — `ATTRIBUTES` (tag → ordered `(name, kind)`; `kind` = `TEXT`/`BOOL`), the `ATTR_*` name constants (`ATTR_ID`/`ATTR_HW`/`ATTR_ENTRY`/`ATTR_EXCL`/`ATTR_N`/`ATTR_LANG`/`ATTR_CODE`/`ATTR_SYN`), and helpers `attribute_names(tag)` / `is_boolean(tag, name)` / `unknown_attributes(root)`. Every read of an attribute across the app (entry/highlight formatters, `utils/content_rules`, markup broken-links, DB build/search, markup source cache) imports the constants from here instead of re-typing the literal; the markup attribute-completion prompt reads `ATTRIBUTES` from the same module, so adding an attribute once updates code reads AND the prompt together. `sources.xml` (`section/@id`) is a separate document shape and is intentionally NOT in this registry.
 - **Arrow-suppression for homonyms (HEADWORD arrow must NOT appear when opening a homonym whose number is a separate `<entry>`):** the decision of whether the opened headword is the *main* headword MUST compare against the full `<hw>` text via `SearchEngine.get_main_headword` (which uses `''.join(hw.itertext()).strip()`, accent-stripped by the caller), NEVER `hw.text` — `hw.text` alone drops an embedded `<n>` homonym numeral ("ґен " + "І") and makes the homonym wrongly look like a sub-headword, triggering the 👉 arrows. This rule applies in ALL navigation paths: entry-list click (`search_results_list.py`), see/word/nav links (`open_entry_by_headword` in `app/main_window.py`), and preview-link clicks (`preview:` handler in `app/main_window.py`). Sub-headword targets (e.g. a nested `<hw>` like `ґалера абразоў`) legitimately still get the arrow. **See-link path is NOT an exception:** a word/see link (`open_entry_by_headword(..., from_word_link=True)` from the `word:` handler in `on_link_clicked`) that opens an entry whose target IS the main `<hw>` shows NO 👉 next to it, exactly like list clicks, preview clicks, and the nav bar — the former see-link branch that pointed at the main `<hw>` was removed, and the sub-headword target branch applies only when the highlight word differs from the main headword. The comparison main does NOT skip `excl` headwords (see `<hw excl="true">`) — an `excl` headword first in document order makes the real listed headword a "sub" for the comparison, so it points (as in the `ёсьцяка` entry).
 - **Italics rule:** `.g`/`.ex`/`.i` glosses are italic, but a nested `<hw>` inside a gloss (a "see" headword, e.g. `один <hw>ґалёш</hw>` in `ґалёшы`) and any inserted `👉` arrow stay **non-italic** — enforced by `font-style: normal` on `.hw`, `.headword-arrow`, and `.sense-arrow` (theme/widget_styles.py).
 
 ### Source Mapping (`SourceMapper`)
-- Singleton (`__new__`), loads `data/source_mappings.json`, builds a variant→abbreviation map (`_variant_to_abbr`).
+- Singleton (`__new__`), loads `data/source_mappings.json`, builds a variant→abbreviation map (`_variant_to_abbr`). Every mapping currently lists exactly ONE (default) variant — the file was normalized so `variants[0]` IS the canonical form; keep new mappings single-variant too.
 - **Space-prefix rule (preserve):** six abbreviations (`акр.`, `п.`, `пав.`, `р.`, `с.`, `вол.`) are in `_space_prefixed_only` and only match when preceded by a space or at position 0. This prevents false matches inside words (e.g. not matching `«п.»` inside `«ап.»`). Do NOT remove or generalize this whitelist.
 - `get_abbreviation(text)`: exact match first, then longest-variant-first fallback.
 - `extract_abbreviations(text)`: uses a compiled combined regex and returns `(abbr, variant)` pairs; same space-prefix check applies. Single-letter variants (currently only `С`) additionally require word boundaries: they do not match when adjacent to a letter on either side, so `С` still links standalone (`<src>С</src>`, `С.`) but not inside `Старадуб`/`Старина`.
@@ -194,7 +206,7 @@ dictionary_app/
 
 ### Navigation Bar (`NavigationBar`)
 - Fixed height 30px (`BAR_HEIGHT`), horizontal layout: Back | Back-spacer | Flex-spacer | Forward | stretch | Close
-- Back/Forward buttons: 95px wide each (`NAV_BUTTON_WIDTH`), emoji labels (`BACK_ARROW`/`FORWARD_ARROW` + `strings.button.back/forward`), flat transparent style
+- Back/Forward buttons: 95px wide each (`NAV_BUTTON_WIDTH`), emoji labels (`BACK_ARROW`/`FORWARD_ARROW` + `strings.nav.back/forward`), flat transparent style
 - Close button: `IconButton`, 30x30px (`BUTTON_SIZE`)
 - Visible only when `navigation_stack` has >1 entry
 - Back button hidden when at index 0 (replaced by fixed-width invisible spacer to keep layout stable)
@@ -235,9 +247,10 @@ dictionary_app/
 
 ### Sources Panel (`SourcesPanel`)
 - `DictTextBrowser` (read-only) + search `QLineEdit` + magnifier `IconButton` (`MAGNIFIER_MARKER`) + close `IconButton` (`CROSS_MARKER`), in a VBox layout; `get_widget()` returns the container
+- **Scrollbar-aware floating magnifier (preserve):** the magnifier overlays the viewer top-right in the same 2-column `QGridLayout` (the viewer spans both columns; column 1 is a spacer). `_update_floating_button_inset` sets column 1's minimum width to `overlay_right_inset(...)` (see Scroll Bar Utility) on every `viewer.verticalScrollBar().rangeChanged`, so the button clears the vertical scrollbar when present and sits flush right otherwise.
 - Toggle button (`SourcesButton`): book emoji (`BOOKS_MARKER`), subclass of the shared `MenuButton` base (30x30px, `class="menu-button"`, `MENU_BUTTON_STYLE`)
 - Loaded from `data/sources.xml`; HTML built by `sources_renderer.build_filtered_html` (module functions: `build_filtered_html`, `section_matches`, `_element_to_html`)
-- Search box filters/sections by text match; a search matching no section renders `strings.no_results`
+- Search box filters/sections by text match; a search matching no section renders `strings.nav.no_results`
 - When `sources.xml` contains no `<entry>` children, the panel content is `'<body></body>'` (an empty page; no message string is used)
 - Panel shown/hidden via toggle button; visibility tracked in `sources_visible`
 - **Collapse/search state machine (preserve):** `_collapsed_sections` (a set) tracks collapsed `<section>` ids. Search **auto-expands** collapsed sections that match; on clearing the search, the pre-search collapsed state is restored. Hiding the panel resets all collapsed state and the anchor.
@@ -253,6 +266,11 @@ dictionary_app/
 - `clear_cache()`: clears the cached scroll value and `last_anchor`
 - `last_anchor` is cleared to `None` after every `display_entry` and `clear_cache`.
 
+### Scroll Bar Utility (`utils/scroll_bar_utility.py`)
+- `scrollbar_extent(scroll_area)`: vertical scrollbar thickness via `verticalScrollBar().sizeHint().width()` (do NOT use `style().pixelMetric(PM_ScrollBarExtent)` — it crashes on the stylesheet-proxied text edits).
+- `vertical_scrollbar_shown(scroll_area)`: predicts presence from `verticalScrollBar().maximum() > 0`, never `isVisible()` (which lags the layout step that emits `rangeChanged`).
+- `overlay_right_inset(container, scroll_area)`: right inset for a top-right overlay button = `container.width() - scroll_area.mapTo(container, ...).x() + scroll_area.frameWidth() + scrollbar_extent(scroll_area)`; `0` when the scrollbar is hidden. Covers any frame/pane between `container` and the scroll area (e.g. the markup tab pane), so the button's right edge meets the scrollbar's left edge.
+
 ### Link Routing (`on_link_clicked` + `open_entry_by_headword`)
 - URL schemes (`SCHEME_WORD`/`SCHEME_SOURCE`/`SCHEME_PREVIEW` in `utils/constants.py`): `word:`, `source:`, `preview:`. All routed through `LinkHandler.process_url` / `on_link_clicked` (see Entry Viewer for `setSource` blocking). `process_url` returns `(link_type, target, sense_parts, target_hw)`, where `target_hw` is the fourth element only for entry-scoped `word:E|H` links.
 - **Word-URL forms:** `word:H` (whole-entry target, H = entry XML ID or headword text), `word:E|TEXT` / `word:E|H` (scoped: open entry E, then target TEXT/H *within that entry only*), `word:H n, m` (sense parts). **There is no `E#H` form** — the old `#` fragment scheme is fully removed from formatter, link handler, DB, and markup; do not reintroduce it.
@@ -262,7 +280,8 @@ dictionary_app/
   - `<see hw="H">TEXT</see>` → `word:H` (bare whole-entry link; the `hw` value is the target, the text is only the label)
   - `<see entry="E">TEXT</see>` → `word:E|TEXT`
   - `<see entry="E" hw="H">TEXT</see>` → `word:E|H`
-- **Scoped target resolution is entry-local:** `SearchEngine.get_entry_sub_headword(entry_row_id, target)` only ever looks inside the resolved entry's own sub-headwords, so a homonym with the same headword in another entry can never be picked up. It matches `<hw id>` exactly first, then de-accented sub-headword text; an **ambiguous text match (more than one) returns `(None, None)`** and the author must use the explicit `hw` attribute. A dead `hw` value degrades to the text target when it is unique.
+- **`<see>` text resolution (`SearchEngine.get_entry_by_headword`) is EXACT — case- and space-preserving:** SQL equality on `normalized_headword`/`normalized_plain_headword` (spaces preserved at build time, `build_database.py`) across BOTH the `dictionary` and `sub_headwords` tables (so a `<see>` may target a sub-headword), followed by exact `remove_accents(matched_text) == remove_accents(target)`; the first candidate whose de-accented text matches with the SAME case wins (a case-distinct headword such as `Юр` vs `юр` is never conflated). `collapse_spaces=True` appears only in the search-box LIKE narrowing (`_like_pattern`); the final regex filter uses `\s+`, so distinct multi-word headwords are never conflated. The click path never applies `normalize_jo_to_je` (targets keep `ё` — that normalization stays limited to t-tag indexing/search, see Accent-Handling Chain), and `remove_accents` never touches `ў` (U+045E), so `<see>ў</see>` ↔ `<hw>ў</hw>` resolves — but only in its precomposed form (у + combining U+0306 is neither stripped nor recognized).
+- **Scoped target resolution is entry-local:** `SearchEngine.get_entry_sub_headword(entry_row_id, target)` only ever looks inside the resolved entry's own sub-headwords, so a homonym with the same headword in another entry can never be picked up. It matches `<hw id>` exactly first, then de-accented sub-headword text **CASE-EXACTLY** (`Юрка` and `юрка` are distinct — a target whose exact case has no sub-headword also returns `(None, None)`); an **ambiguous text match (more than one)** returns `(None, None)` and the author must use the explicit `hw` attribute. A dead `hw` value degrades to the text target when it is unique.
 - **`<see>` with a homonym `<n>`**: the target string is built from the whole `<see>` content (`itertext`, which includes an embedded `<n>` numeral), so `<see>грыжа <n>ІІ</n>, 1, 2</see>` renders the full `грыжа ІІ, 1, 2` as a `word:` link to headword `грыжа ІІ` with sense parts `[1, 2]`. `LinkHandler.parse_link_text` is token-based: it detaches a *trailing* sense list (digit or single-letter tokens) from the word, and any trailing Roman-numeral token after the word (Cyrillic `І`/`і` or Latin `I`/`i`, `V`, `X`) stays on the word as the homonym marker. `get_entry_by_headword` falls back to comparing accent-stripped *display* headwords when the stripped normalized index has no match — required because homonyms are indexed n-stripped (`грыжа ІІ` → `грыжа`).
 - **Preview links** (`preview:{entry_id}|{anchor}`): URL-decode the anchor if it contains `%`, look up the result in `current_results` first then fall back to `SearchEngine.get_entry_by_id(entry_id)`, set `_highlight_entry = True`, save `_last_preview_html`, and push the headword onto the nav stack with `_PREVIEW_SENTINEL` as the older entry (Back returns to the previews).
 - **`_PREVIEW_SENTINEL`** (`'__preview__'`): `open_entry_by_headword` intercepts `headword == _PREVIEW_SENTINEL` and calls `_restore_preview()` (restores `_last_preview_html`, clears display state and nav bar). Preserve this sentinel and set `_highlight_entry = True` whenever a preview link is followed. The nav-bar clear is INTENDED, not a bug: previews are not an entry, so they terminate the entry-history chain — Back/Forward never spans a preview page, and the bar hides and the stack resets the moment previews are shown.
@@ -308,6 +327,7 @@ dictionary_app/
 - Pane = self-contained UI component (EntryViewer, SourcesPanel, SearchResultsList)
 - Window = top-level OS window (MainWindow)
 - **Docs must stay de-duplicated**: state each fact in exactly ONE place; where a later section would repeat it, use a `see <section>` cross-reference instead of restating it. Restating creates drift when code changes and only one copy gets updated.
+- **`localization/strings.json` (dictionary app) and `markup/localization/strings.json` (markup app) are manually maintained by the user — NEVER rewrite them wholesale, re-serialize, or reformat them.** Edit individual keys only, reading the file immediately before each edit and preserving all existing content (including indentation quirks). Overwriting user edits is strictly forbidden.
 
 ## Database Schema
 - `dictionary` table: `(id INTEGER PRIMARY KEY, headword, sort_headword, normalized_headword, normalized_plain_headword, full_entry, entry_link, source_file, hw_xml_id)` — `hw_xml_id` holds the entry's own `<hw id>` (6 populated), used by `get_entry_by_xml_id` for `word:` and markup lookups

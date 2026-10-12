@@ -16,7 +16,7 @@ class _StringsGroup:
 class Strings:
     _instance = None
     _strings = {}
-    _files = ('strings.json', 'markup_strings.json')
+    _files = ('strings.json',)
 
     def __new__(cls):
         if cls._instance is None:

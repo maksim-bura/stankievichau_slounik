@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ElementTree
 
 from utils.text_utils import remove_accents, normalize_jo_to_je
 from utils.content_rules import content_text, d_hw_variants, hw_text_excluding_n
+from utils.xml_schema import ATTR_CODE, ATTR_LANG, ATTR_EXCL
 from format.entry_formatter import process_element, _plain_parens
 
 
@@ -302,8 +303,8 @@ class HighlightFormatter:
             if child.tag in ('see', 'g'):
                 return True
             if child.tag == 'lang':
-                return child.get('code') in ('vl', 'la') or 'excl' in child.attrib
-            for attr_name, attr_val in (('lang', 'vl'), ('excl', None)):
+                return child.get(ATTR_CODE) in ('vl', 'la') or ATTR_EXCL in child.attrib
+            for attr_name, attr_val in ((ATTR_LANG, 'vl'), (ATTR_EXCL, None)):
                 if attr_val is None:
                     if attr_name in child.attrib:
                         return True
@@ -312,8 +313,8 @@ class HighlightFormatter:
             return False
         if tag == 'ex':
             if child.tag == 'lang':
-                return child.get('code') == 'ru'
-            if child.get('lang') == 'ru':
+                return child.get(ATTR_CODE) == 'ru'
+            if child.get(ATTR_LANG) == 'ru':
                 return True
         return False
 
@@ -449,7 +450,7 @@ class HighlightFormatter:
             relevant = []
             relevant_sort = []
             for h in root.findall('.//hw'):
-                if h.get('excl') is not None:
+                if h.get(ATTR_EXCL) is not None:
                     continue
                 text = ''.join(h.itertext()).strip()
                 if not text:

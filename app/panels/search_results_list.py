@@ -1,6 +1,6 @@
 from PySide6.QtCore import Qt, QAbstractListModel, QModelIndex, QItemSelectionModel
 from PySide6.QtWidgets import QListView
-from utils.text_utils import remove_accents
+from utils.text_utils import remove_accents, collapse_same_entry_duplicates
 from theme.layout_constants import RESULTS_MIN_WIDTH
 from app.widgets import ElidingDelegate, clamped_row
 
@@ -55,6 +55,7 @@ class SearchResultsList:
         self._view.setItemDelegate(ElidingDelegate(self._view))
 
     def display_results(self, results):
+        results = collapse_same_entry_duplicates(results)
         self.current_results = results
         self._view.clearSelection()
         self.entry_viewer.clear()

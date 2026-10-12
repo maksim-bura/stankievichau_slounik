@@ -1,4 +1,5 @@
 from utils.text_utils import normalize_jo_to_je, remove_accents
+from utils.xml_schema import ATTR_CODE, ATTR_LANG, ATTR_EXCL
 
 
 def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None, skip_lang_codes=None):
@@ -19,7 +20,7 @@ def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None, skip_la
                 elif child.get(attr_name) == attr_val:
                     skip = True
                     break
-        if not skip and skip_lang_codes and child.tag == 'lang' and child.get('code') in skip_lang_codes:
+        if not skip and skip_lang_codes and child.tag == 'lang' and child.get(ATTR_CODE) in skip_lang_codes:
             skip = True
         if not skip:
             if child.text:
@@ -33,7 +34,7 @@ def content_text(element, tag):
     if tag == 't':
         return get_text_excluding_src(
             element, extra_exclude={'see', 'g', 'ex'},
-            skip_attrs={'lang': 'vl', 'excl': None}, skip_lang_codes={'vl', 'la'},
+            skip_attrs={ATTR_LANG: 'vl', ATTR_EXCL: None}, skip_lang_codes={'vl', 'la'},
         )
     if tag == 'ex':
         return get_text_excluding_src(element, extra_exclude={'t'}, skip_lang_codes={'ru'})
@@ -58,7 +59,7 @@ def hw_text_excluding_n(element):
 def d_hw_variants(d_element, exclude_n=False):
     variants = []
     for child in d_element:
-        if child.tag == 'hw' and child.get('excl') is None:
+        if child.tag == 'hw' and child.get(ATTR_EXCL) is None:
             text = (hw_text_excluding_n(child) if exclude_n else ''.join(child.itertext())).strip()
             if text:
                 variants.append(text)

@@ -3,6 +3,7 @@ import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget, QGridLayout, QHBoxLayout
 from PySide6.QtCore import Qt
 from utils.scroll_manager import ScrollManager
+from utils.scroll_bar_utility import overlay_right_inset
 from localization import strings
 from theme.layout_constants import (
     BUTTON_SIZE, BAR_CONTENTS_MARGINS, BAR_SPACING, LAYOUT_MARGINS, LAYOUT_SPACING,
@@ -37,7 +38,7 @@ class SourcesPanel:
         search_layout.setContentsMargins(*BAR_CONTENTS_MARGINS)
         search_layout.setSpacing(BAR_SPACING)
 
-        self.search_line = SearchBox(strings.placeholder.sources_search)
+        self.search_line = SearchBox(strings.search_boxes.sources.placeholder)
         self.search_line.setClearButtonEnabled(False)
         self.search_line.setVisible(False)
         self.search_line.textChanged.connect(self._on_search)
@@ -69,12 +70,18 @@ class SourcesPanel:
         self.viewer.anchorClicked.connect(self._on_anchor_clicked)
         self.viewer.setFocusPolicy(Qt.NoFocus)
         self.viewer.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
-        wrapper_layout.addWidget(self.viewer, 0, 0)
+        wrapper_layout.addWidget(self.viewer, 0, 0, 1, 2)
+        wrapper_layout.setColumnStretch(0, 1)
+        wrapper_layout.setColumnStretch(1, 0)
+        wrapper_layout.setColumnMinimumWidth(1, 0)
 
         wrapper_layout.addWidget(self.floating_button, 0, 0, alignment=Qt.AlignTop | Qt.AlignRight)
 
         self.viewer_wrapper.setLayout(wrapper_layout)
         self.container_layout.addWidget(self.viewer_wrapper)
+
+        self._overlay_layout = wrapper_layout
+        self.viewer.verticalScrollBar().rangeChanged.connect(self._update_floating_button_inset)
 
         self.container.setLayout(self.container_layout)
         self.container.hide()
@@ -170,6 +177,7 @@ class SourcesPanel:
 
         if not was_visible:
             self.container.show()
+            self._update_floating_button_inset()
             self.sources_visible = True
         else:
             self.viewer.verticalScrollBar().setValue(current_scroll)
@@ -214,6 +222,7 @@ class SourcesPanel:
                 if self.current_anchor:
                     self.scroll_manager.scroll_to_anchor(self.current_anchor)
             self.container.show()
+            self._update_floating_button_inset()
         else:
             self.container.hide()
             self.content = self.original_content
@@ -223,6 +232,10 @@ class SourcesPanel:
             if self.search_visible:
                 self.close_search_bar()
         return self.sources_visible
+
+    def _update_floating_button_inset(self, *args):
+        inset = overlay_right_inset(self.viewer_wrapper, self.viewer)
+        self._overlay_layout.setColumnMinimumWidth(1, inset)
 
     def handle_resize(self):
         self.scroll_manager.handle_resize()

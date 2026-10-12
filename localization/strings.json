@@ -2,29 +2,37 @@
     "window": {
         "title": "Беларуска-расійскі (вялікалітоўска-расійскі) слоўнік"
     },
-    "placeholder": {
-        "entries_search": "Увядзіце слова, што хочаце знайсьці ў слоўніку",
-        "sources_search": "Увядзіце назоў жарала"
-    },
-    "tooltip": {
-        "sources": "Жаролы",
-        "settings": "Налады",
-        "insert_letter_g": "Уставіць літару ґ"
-    },
-    "settings": {
-        "search_settings": {
-            "heading": "Налады шуканьня",
-            "search_in_belarusian": {
-                "label": "Шукаць пабеларуску",
-                "headwords": "Шукаць у загалоўках",
-                "examples": "Шукаць у прыкладах"
-            },
-            "search_in_russian": "Шукаць парасійску (у перакладах)"
+    "search_boxes": {
+        "entries": {
+            "placeholder": "Увядзіце слова, што хочаце знайсьці ў слоўніку"
+        },
+        "sources": {
+            "placeholder": "Увядзіце назоў жарала"
         }
     },
-    "button": {
-        "back": "Назад",
-        "forward": "Наперад"
+    "app_buttons": {
+        "insert_g": {
+            "tooltip": "Уставіць літару ґ"
+        },
+        "sources": {
+            "tooltip": "Жаролы"
+        },
+        "settings": {
+            "tooltip": "Налады",
+            "dropdown": {
+                "title": "Налады шуканьня",
+                "search_in_belarusian": {
+                    "name": "Шукаць пабеларуску",
+                    "headwords": "Шукаць у загалоўках",
+                    "examples": "Шукаць у прыкладах"
+                },
+                "search_in_russian": "Шукаць парасійску (у перакладах)"
+            }
+        }
     },
-    "no_results": "Няма вынікаў."
+    "nav": {
+        "back": "Назад",
+        "forward": "Наперад",
+        "no_results": "Няма вынікаў."
+    }
 }

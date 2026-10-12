@@ -31,7 +31,7 @@ class NavigationBar(QWidget):
         layout.setContentsMargins(*BAR_CONTENTS_MARGINS)
         layout.setSpacing(BAR_SPACING)
 
-        self.back_button = QPushButton(f"{BACK_ARROW} {strings.button.back}")
+        self.back_button = QPushButton(f"{BACK_ARROW} {strings.nav.back}")
         self.back_button.setCursor(Qt.PointingHandCursor)
         self.back_button.setFlat(True)
         self.back_button.setStyleSheet(FLAT_BUTTON_STYLE)
@@ -47,7 +47,7 @@ class NavigationBar(QWidget):
         self.button_spacer.setMaximumWidth(NAV_SPACER_MAX_WIDTH)
         self.button_spacer.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
 
-        self.forward_button = QPushButton(f"{FORWARD_ARROW} {strings.button.forward}")
+        self.forward_button = QPushButton(f"{FORWARD_ARROW} {strings.nav.forward}")
         self.forward_button.setCursor(Qt.PointingHandCursor)
         self.forward_button.setFlat(True)
         self.forward_button.setStyleSheet(FLAT_BUTTON_STYLE)

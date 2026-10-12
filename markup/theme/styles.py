@@ -1,7 +1,9 @@
 from theme.widget_styles import (
-    FONT_STACK, COLOR_BORDER_DEFAULT, COLOR_SELECTED_BG, COLOR_BORDER_SELECTED,
-    COLOR_TOOLTIP_BG, COLOR_HOVER_BG, COLOR_BUTTON_HOVER,
+    FONT_STACK, COLOR_NORMAL_BG, COLOR_BORDER_DEFAULT, COLOR_SELECTED_BG,
+    COLOR_BORDER_SELECTED, COLOR_TOOLTIP_BG, COLOR_HOVER_BG, COLOR_BUTTON_HOVER,
     COLOR_BUTTON_PRESSED_HOVER, COLOR_MENU_PRESSED_FG,
+)
+from .widget_styles import (
     COLOR_CHECKED_PRESSED_FG, COLOR_CHECKED_PRESSED_BG,
     COLOR_CHECKED_PRESSED_HOVER_BG, COLOR_CHECKED_PRESSED_BORDER,
 )
@@ -61,6 +63,38 @@ ENTRY_LIST_STYLE = f"""
     }}
 """
 
+ATTRIBUTE_POPUP_STYLE = f"""
+    QListWidget {{
+        background-color: {COLOR_NORMAL_BG};
+        border: 1px solid {COLOR_BORDER_DEFAULT};
+        border-radius: 5px;
+        padding: 2px 0;
+        outline: 0;
+        font-family: {FONT_STACK};
+        font-size: 12pt;
+    }}
+    QListWidget::item {{
+        padding: 2px 10px;
+        border-left: 3px solid transparent;
+        color: black;
+    }}
+    QListWidget::item:hover {{
+        background: {COLOR_HOVER_BG};
+        border-left: 3px solid {COLOR_BORDER_DEFAULT};
+        color: black;
+    }}
+    QListWidget::item:selected {{
+        background: {COLOR_SELECTED_BG};
+        border-left: 3px solid {COLOR_BORDER_SELECTED};
+        color: black;
+    }}
+    QListWidget::item:selected:!active {{
+        background: {COLOR_SELECTED_BG};
+        border-left: 3px solid {COLOR_BORDER_SELECTED};
+        color: black;
+    }}
+"""
+
 CHECKED_TOGGLE_STYLE = f"""
     QPushButton {{
         background-color: {COLOR_HOVER_BG};
@@ -90,6 +124,17 @@ CHECKED_TOGGLE_STYLE = f"""
     }}
     QPushButton[pressed="menu"]:hover {{
         background-color: {COLOR_BUTTON_PRESSED_HOVER};
+    }}
+"""
+
+ENTRY_CHECKED_TOGGLE_STYLE = f"""
+    QPushButton {{
+        border: none;
+        background-color: transparent;
+        color: black;
+        padding: 2px 6px;
+        font-family: {FONT_STACK};
+        font-size: 12pt;
     }}
 """
 

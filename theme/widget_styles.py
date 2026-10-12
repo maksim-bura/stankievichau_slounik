@@ -11,15 +11,6 @@ COLOR_DISABLED_FG = '#888888'
 COLOR_MENU_PRESSED_FG = '#1e3a5f'
 COLOR_BUTTON_HOVER = '#ececec'
 COLOR_BUTTON_PRESSED_HOVER = '#e0eefb'
-COLOR_CHECKED_BG = '#c8f7c5'
-COLOR_CHECKED_HOVER_BG = '#b8f0b5'
-COLOR_CHECKED_SELECTED_BG = '#7cbf7a'
-COLOR_CHECKED_BORDER = '#a0d8a0'
-COLOR_CHECKED_PRESSED_FG = '#1e4d2b'
-COLOR_CHECKED_PRESSED_BG = '#edf9eb'
-COLOR_CHECKED_PRESSED_HOVER_BG = '#e0f5dd'
-COLOR_CHECKED_PRESSED_BORDER = '#8abf88'
-COLOR_TRANSPARENT = '#00000000'
 
 
 def _font_rule(widget, size='12pt'):
@@ -95,6 +86,14 @@ MENU_BUTTON_STYLE = f"""
     }}
     QPushButton[class="menu-button"][pressed="true"]:hover,
     QPushButton[class="menu-button"][pressed="true"][dual="true"]:hover {{
+        background-color: {COLOR_BUTTON_PRESSED_HOVER};
+    }}
+    QPushButton[class="menu-button"][pressed="menu"] {{
+        background-color: {COLOR_SELECTED_BG};
+        color: {COLOR_MENU_PRESSED_FG};
+        border: 2px solid {COLOR_BORDER_SELECTED};
+    }}
+    QPushButton[class="menu-button"][pressed="menu"]:hover {{
         background-color: {COLOR_BUTTON_PRESSED_HOVER};
     }}
 """

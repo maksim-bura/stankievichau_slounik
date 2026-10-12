@@ -38,7 +38,7 @@ def build_filtered_html(all_children, collapsed_sections, search_text=None, mark
                 needs_br = True
 
     if not matching_sections:
-        parts.append(strings.no_results)
+        parts.append(strings.nav.no_results)
 
     while parts and parts[-1] == '<br>':
         parts.pop()

@@ -82,13 +82,13 @@ class SettingsButton(MenuButton):
     search_mode_changed = Signal()
 
     def __init__(self, sources_button=None, parent=None):
-        super().__init__(GEAR_MARKER, strings.tooltip.settings, parent)
+        super().__init__(GEAR_MARKER, strings.app_buttons.settings.tooltip, parent)
         self._sources_button = sources_button
         self._consume_next_press = False
 
         self.settings_menu = QMenu(self)
         heading_action = QWidgetAction(self.settings_menu)
-        heading_label = QLabel(strings.settings.search_settings.heading)
+        heading_label = QLabel(strings.app_buttons.settings.dropdown.title)
         heading_label.setContentsMargins(*MENU_OPTION_MARGINS)
         font = QFont()
         font.setBold(True)
@@ -97,10 +97,10 @@ class SettingsButton(MenuButton):
         self.settings_menu.addAction(heading_action)
         self.settings_menu.addSeparator()
 
-        belarusian_data = strings.settings.search_settings.search_in_belarusian
-        russian_label = strings.settings.search_settings.search_in_russian
+        belarusian_data = strings.app_buttons.settings.dropdown.search_in_belarusian
+        russian_label = strings.app_buttons.settings.dropdown.search_in_russian
 
-        self._belarusian_radio = _RadioOption(belarusian_data.label, checked=True)
+        self._belarusian_radio = _RadioOption(belarusian_data.name, checked=True)
         self._belarusian_radio.toggled.connect(self._on_radio_toggled)
         self._belarusian_radio_action = QWidgetAction(self.settings_menu)
         self._belarusian_radio_action.setDefaultWidget(self._belarusian_radio)

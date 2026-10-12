@@ -8,5 +8,5 @@ INSERT_LETTER_G = '\u0491'
 
 class InsertLetterGButton(MenuButton):
     def __init__(self, parent=None):
-        super().__init__(INSERT_LETTER_G, strings.tooltip.insert_letter_g, parent)
+        super().__init__(INSERT_LETTER_G, strings.app_buttons.insert_g.tooltip, parent)
         self.setFocusPolicy(Qt.NoFocus)
