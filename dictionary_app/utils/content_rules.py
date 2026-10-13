@@ -1,0 +1,71 @@
+from dictionary_app.utils.text_utils import normalize_jo_to_je, remove_accents
+from dictionary_app.utils.xml_schema import ATTR_CODE, ATTR_LANG, ATTR_EXCL
+
+
+def get_text_excluding_src(element, extra_exclude=None, skip_attrs=None, skip_lang_codes=None):
+    parts = []
+    if element.text:
+        parts.append(element.text)
+    exclude = {'src', 'st'}
+    if extra_exclude:
+        exclude.update(extra_exclude)
+    for child in element:
+        skip = child.tag in exclude
+        if not skip and skip_attrs:
+            for attr_name, attr_val in skip_attrs.items():
+                if attr_val is None:
+                    if attr_name in child.attrib:
+                        skip = True
+                        break
+                elif child.get(attr_name) == attr_val:
+                    skip = True
+                    break
+        if not skip and skip_lang_codes and child.tag == 'lang' and child.get(ATTR_CODE) in skip_lang_codes:
+            skip = True
+        if not skip:
+            if child.text:
+                parts.append(child.text)
+        if child.tail:
+            parts.append(child.tail)
+    return ''.join(parts)
+
+
+def content_text(element, tag):
+    if tag == 't':
+        return get_text_excluding_src(
+            element, extra_exclude={'see', 'g', 'ex'},
+            skip_attrs={ATTR_LANG: 'vl', ATTR_EXCL: None}, skip_lang_codes={'vl', 'la'},
+        )
+    if tag == 'ex':
+        return get_text_excluding_src(element, extra_exclude={'t'}, skip_lang_codes={'ru'})
+    return get_text_excluding_src(element)
+
+
+def hw_text_excluding_n(element):
+    parts = []
+    if element.text:
+        parts.append(element.text)
+    for child in element:
+        if child.tag == 'n':
+            if child.tail:
+                parts.append(child.tail)
+            continue
+        parts.append(hw_text_excluding_n(child))
+        if child.tail:
+            parts.append(child.tail)
+    return ''.join(parts)
+
+
+def d_hw_variants(d_element, exclude_n=False):
+    variants = []
+    for child in d_element:
+        if child.tag == 'hw' and child.get(ATTR_EXCL) is None:
+            text = (hw_text_excluding_n(child) if exclude_n else ''.join(child.itertext())).strip()
+            if text:
+                variants.append(text)
+    return variants
+
+
+def index_text(text, tag):
+    clean = remove_accents(text.lower())
+    return normalize_jo_to_je(clean) if tag == 't' else clean
