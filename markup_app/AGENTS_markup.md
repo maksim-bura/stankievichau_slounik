@@ -21,11 +21,11 @@ stankievichau_slounik/          # project root - shared code lives in the siblin
     ├── utils/                  # markup-only glyph constants (FLOPPY_MARKER, RELOAD_MARKER, …)
     ├── AGENTS_markup.md        # This file (markup app guide)
     ├── MARKUP_PATTERNS.md      # OCR → XML markup conventions
-    └── run_markup.py           # Markup app launcher
+    └── run.py                 # Markup app launcher
 ```
 **Deletable as a unit.** `markup_app/` sits beside `dictionary_app/` and imports shared code from it, but nothing in `dictionary_app/` imports `markup_app/`. To remove the markup app, delete `markup_app/` - the dictionary app keeps working. For future changes: never add markup-only files or symbols to the shared `dictionary_app/` modules (`theme/`, `utils/`, `localization/`, `format/`, `db/`, window code); keep every markup-app-specific thing inside `markup_app/`, mirrored under the matching subpackage (localization strings → `markup_app/localization/strings.json`, colors/metrics/stylesheets → `markup_app/theme/*`, glyphs → `markup_app/utils/constants.py`, non-UI logic → `markup_app/services/`, editor pane → `markup_app/panels/`, runtime artifacts → `markup_app/services/build/`).
 
-The launcher (`markup_app/run_markup.py`) inserts the project root on `sys.path`, constructs `QApplication` first, then `MarkupMainWindow(create_search_engine())`. `get_source_path` is imported from `dictionary_app.db.build_database` (never re-derive paths).
+The launcher (`markup_app/run.py`) inserts the project root on `sys.path`, constructs `QApplication` first, then `MarkupMainWindow(create_search_engine())`. `get_source_path` is imported from `dictionary_app.db.build_database` (never re-derive paths).
 
 ## Key Design Decisions
 
