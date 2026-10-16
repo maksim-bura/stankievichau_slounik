@@ -10,4 +10,7 @@ dist/
 *.exe
 build/
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 db/test_*.py
