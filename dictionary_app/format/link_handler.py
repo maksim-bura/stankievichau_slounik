@@ -1,7 +1,7 @@
 import re
 from urllib.parse import unquote
 
-from dictionary_app.utils.constants import SCHEME_WORD, SCHEME_SOURCE
+from dictionary_app.utils.constants import SCHEME_WORD, SCHEME_WORD_ATTR, SCHEME_SOURCE
 from dictionary_app.utils.text_utils import remove_accents
 from .source_mapper import source_mapper
 
@@ -29,12 +29,18 @@ class LinkHandler:
         return display_html
 
     @classmethod
+    def create_word_attr_link(cls, link_target, display_html=None):
+        if display_html is None:
+            display_html = link_target
+        return f'<a href="{SCHEME_WORD_ATTR}:{link_target}" class="link word-link">{display_html}</a>'
+
+    @classmethod
     def is_link_tag(cls, tag_name):
         return tag_name in cls.LINK_TAGS
 
     @classmethod
-    def parse_link_text(cls, link_text):
-        normalized = remove_accents(link_text)
+    def parse_link_text(cls, link_text, keep_accents=False):
+        normalized = link_text if keep_accents else remove_accents(link_text)
         tokens = [t for t in re.split(r'[\s,，]+', normalized) if t]
         if not tokens:
             return normalized, []
@@ -66,7 +72,16 @@ class LinkHandler:
     @classmethod
     def process_url(cls, url_string):
         word_prefix = SCHEME_WORD + ':'
+        word_attr_prefix = SCHEME_WORD_ATTR + ':'
         source_prefix = SCHEME_SOURCE + ':'
+        if url_string.startswith(word_attr_prefix):
+            target = unquote(url_string[len(word_attr_prefix):])
+            if '|' in target:
+                entry_raw, _sep, target_hw = target.partition('|')
+                entry, sense_parts = cls.parse_link_text(entry_raw, keep_accents=True)
+                return ('word-attr', entry, sense_parts, target_hw or None)
+            entry, sense_parts = cls.parse_link_text(target, keep_accents=True)
+            return ('word-attr', entry, sense_parts, None)
         if url_string.startswith(word_prefix):
             target = unquote(url_string[len(word_prefix):])
             if '|' in target:

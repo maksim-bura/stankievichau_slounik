@@ -1,7 +1,7 @@
 from PySide6.QtCore import Qt, QAbstractListModel, QModelIndex, QItemSelectionModel
 from PySide6.QtWidgets import QListView
-from dictionary_app.utils.text_utils import remove_accents, collapse_same_entry_duplicates
-from dictionary_app.utils.item_roles import ROLE_ENTRY_LINK, ROLE_HEADWORD
+from dictionary_app.utils.text_utils import resolve_headword, collapse_same_entry_duplicates, hw_identity
+from dictionary_app.utils.item_roles import ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_IDENTITY
 from dictionary_app.theme.layout_constants import RESULTS_MIN_WIDTH
 from dictionary_app.widgets import ElidingDelegate, navigate_rows, select_row
 
@@ -19,13 +19,15 @@ class ResultsListModel(QAbstractListModel):
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid() or not (0 <= index.row() < len(self.rows)):
             return None
-        display, headword, entry_link = self.rows[index.row()]
+        display, headword, entry_link, identity = self.rows[index.row()]
         if role == Qt.DisplayRole:
             return display
         if role == ROLE_ENTRY_LINK:
             return entry_link
         if role == ROLE_HEADWORD:
             return headword
+        if role == ROLE_IDENTITY:
+            return identity
         return None
 
     def set_rows(self, rows):
@@ -45,9 +47,8 @@ class SearchResultsList:
         self.navigation_bar = navigation_bar
         self.current_results = []
         self._by_headword = {}
-        self._by_clean = {}
+        self._by_identity = {}
         self._by_link = {}
-        self._by_clean_link = {}
         self._by_id = {}
         self._view.setFixedWidth(RESULTS_MIN_WIDTH)
         self._view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -64,49 +65,45 @@ class SearchResultsList:
 
         self._index_results()
 
-        self._model.set_rows([(remove_accents(r[1]), r[1], r[3]) for r in results])
+        self._model.set_rows([
+            (resolve_headword(r[1], r[6] if len(r) > 6 else 0), r[1], r[3],
+             hw_identity(r[1], r[6] if len(r) > 6 else 0))
+            for r in results
+        ])
 
         if results:
             self._select_row(0)
 
     def _index_results(self):
         by_headword = {}
-        by_clean = {}
+        by_identity = {}
         by_link = {}
-        by_clean_link = {}
         by_id = {}
         for result in self.current_results:
             headword = result[1]
-            clean = remove_accents(headword)
+            identity = hw_identity(headword, result[6] if len(result) > 6 else 0)
             entry_link = result[3]
             by_headword.setdefault(headword, result)
-            by_clean.setdefault(clean, result)
+            by_identity.setdefault(identity, result)
             by_id.setdefault(result[0], result)
             if entry_link is not None:
                 by_link.setdefault(entry_link, result)
-                by_clean_link.setdefault((clean, entry_link), result)
         self._by_headword = by_headword
-        self._by_clean = by_clean
+        self._by_identity = by_identity
         self._by_link = by_link
-        self._by_clean_link = by_clean_link
         self._by_id = by_id
 
     def find_by_headword(self, headword):
         return self._by_headword.get(headword)
 
-    def find_by_clean_headword(self, clean_headword):
-        return self._by_clean.get(clean_headword)
+    def find_by_identity(self, identity):
+        return self._by_identity.get(identity)
 
     def find_by_link(self, entry_link):
         return self._by_link.get(entry_link)
 
     def find_by_id(self, entry_id):
         return self._by_id.get(entry_id)
-
-    def find_clicked(self, clean_headword, entry_link=None):
-        if entry_link:
-            return self._by_clean_link.get((clean_headword, entry_link))
-        return self._by_clean.get(clean_headword)
 
     def _select_row(self, row):
         select_row(self._view, self._model, row)
@@ -125,23 +122,21 @@ class SearchResultsList:
         clicked_word = index.data(ROLE_HEADWORD)
         if not clicked_word:
             return
-        entry_link = index.data(ROLE_ENTRY_LINK)
-        clicked_clean = remove_accents(clicked_word)
-
-        result = self.find_clicked(clicked_clean, entry_link)
-        if result is None:
+        row = index.row()
+        if not (0 <= row < len(self.current_results)):
             return
 
+        result = self.current_results[row]
         if result[2] is None:
             result = self.search_engine.materialize_result(result)
             if result is None:
                 return
 
-        return self._present_clicked(result, clicked_clean, formatter, display_entry,
-                                     scroll_to_anchor)
+        return self._present_clicked(result, formatter, display_entry, scroll_to_anchor)
 
-    def _present_clicked(self, result, clicked_clean, formatter, display_entry, scroll_to_anchor):
+    def _present_clicked(self, result, formatter, display_entry, scroll_to_anchor):
         main_headword = self.search_engine.get_main_headword(result[0], result[2])
+        keep_acc = result[6] if len(result) > 6 else 0
 
         if result[1] != main_headword:
             formatter.set_target_subheadword(result[1])
@@ -151,6 +146,6 @@ class SearchResultsList:
             applied_target = None
 
         display_entry(result)
-        scroll_to_anchor(clicked_clean)
+        scroll_to_anchor(resolve_headword(result[1], keep_acc))
         self.navigation_bar.clear()
         return applied_target

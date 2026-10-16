@@ -7,7 +7,7 @@ from dictionary_app.theme.layout_constants import (
     LAYOUT_MARGINS, LAYOUT_SPACING
 )
 from dictionary_app.widgets import IconButton, DictTextBrowser
-from dictionary_app.utils.scroll_manager import ScrollManager
+from dictionary_app.utils.scroll_state import ScrollState
 from dictionary_app.theme.widget_styles import ENTRY_STYLESHEET, FLAT_BUTTON_STYLE
 from dictionary_app.utils.constants import CROSS_MARKER, BACK_ARROW, FORWARD_ARROW
 
@@ -140,7 +140,7 @@ class EntryViewer:
         layout.addWidget(self.viewer)
         self.container.setLayout(layout)
 
-        self.scroll_manager = ScrollManager(self.viewer)
+        self.scroll_manager = ScrollState(self.viewer)
         self.stored_html = None
 
     def get_widget(self):

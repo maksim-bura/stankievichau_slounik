@@ -1,4 +1,4 @@
-class ScrollManager:
+class ScrollState:
     def __init__(self, viewer):
         self.viewer = viewer
         self.last_anchor = None

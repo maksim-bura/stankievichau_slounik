@@ -4,18 +4,18 @@ import os
 import stat
 from dictionary_app.utils.text_utils import remove_accents
 from dictionary_app.utils.content_rules import content_text, index_text, hw_text_excluding_n
-from dictionary_app.utils.xml_schema import ATTR_ID, ATTR_EXCL
+from dictionary_app.utils.xml_schema import ATTR_ID, ATTR_EXCL, ATTR_KEEP_ACC
 
 
 _DICTIONARY_INSERT_SQL = (
     "INSERT INTO dictionary (id, headword, sort_headword, normalized_headword, "
-    "normalized_plain_headword, full_entry, entry_link, hw_xml_id, source_file) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "normalized_plain_headword, full_entry, entry_link, hw_xml_id, source_file, keep_acc) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _SUB_HEADWORD_INSERT_SQL = (
     "INSERT INTO sub_headwords (headword, sort_headword, normalized_headword, "
-    "normalized_plain_headword, main_entry_id, link, hw_xml_id) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?)"
+    "normalized_plain_headword, main_entry_id, link, hw_xml_id, keep_acc) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _CONTENT_INDEX_INSERT_SQL = (
     "INSERT INTO content_index (entry_id, tag_type, searchable_text) VALUES (?, ?, ?)"
@@ -26,7 +26,7 @@ _SQLITE_SYNCHRONOUS_OFF = "PRAGMA synchronous = OFF"
 _SQLITE_CACHE_SIZE_KIB = "PRAGMA cache_size = -20000"
 
 _SCHEMA_VERSION_KEY = 'schema_version'
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def parse_xml_file(file_path):
@@ -95,10 +95,10 @@ def _schema_is_current(cursor):
     if not rows:
         return False
     columns = {row[1] for row in cursor.execute("PRAGMA table_info(sub_headwords)")}
-    if 'link' not in columns or 'hw_xml_id' not in columns:
+    if 'link' not in columns or 'hw_xml_id' not in columns or 'keep_acc' not in columns:
         return False
     dict_columns = {row[1] for row in cursor.execute("PRAGMA table_info(dictionary)")}
-    if 'hw_xml_id' not in dict_columns:
+    if 'hw_xml_id' not in dict_columns or 'keep_acc' not in dict_columns:
         return False
     meta = cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'").fetchall()
     if not meta:
@@ -159,7 +159,8 @@ def build_database(file_names=None):
                 full_entry TEXT,
                 entry_link TEXT,
                 hw_xml_id TEXT,
-                source_file TEXT
+                source_file TEXT,
+                keep_acc INTEGER
             )
         """)
 
@@ -172,7 +173,8 @@ def build_database(file_names=None):
                 normalized_plain_headword TEXT,
                 main_entry_id INTEGER,
                 link TEXT,
-                hw_xml_id TEXT
+                hw_xml_id TEXT,
+                keep_acc INTEGER
             )
         """)
 
@@ -287,10 +289,11 @@ def insert_entry(entry, source_file, main_entry_id):
     entry_xml_id = entry.get(ATTR_ID)
     main_hw_xml_id = headword_element.get(ATTR_ID)
 
+    main_hw_keep_acc = 1 if headword_element.get(ATTR_KEEP_ACC) is not None else 0
     dict_row = (
         main_entry_id, headword, sort_headword, normalized_headword,
         remove_accents(headword).lower(), entry_string, entry_xml_id,
-        main_hw_xml_id, source_file
+        main_hw_xml_id, source_file, main_hw_keep_acc
     )
 
     sub_rows = []
@@ -311,9 +314,10 @@ def insert_entry(entry, source_file, main_entry_id):
                 if dedup_key in seen_sub_headwords:
                     continue
                 seen_sub_headwords.add(dedup_key)
+            sub_keep_acc = 1 if sub_headword_element.get(ATTR_KEEP_ACC) is not None else 0
             sub_rows.append(
                 (sub_text, sub_sort, sub_normalized, remove_accents(sub_text).lower(),
-                 main_entry_id, sub_link, sub_headword_element.get(ATTR_ID))
+                 main_entry_id, sub_link, sub_headword_element.get(ATTR_ID), sub_keep_acc)
             )
 
     content_rows = []

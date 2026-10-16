@@ -23,15 +23,16 @@ from dictionary_app.utils.xml_schema import BOOL as _ATTR_BOOL
 from markup_app.services.attribute_completion import (
     detect_context as _detect_completion_context,
 )
-from markup_app.panels.xml_editing import (
-    entry_block_span, find_hw_occurrence, find_rogue_tags, innermost_d_span,
-    is_inside_tag, is_name_char, non_d_region_hw_count, non_d_regions,
-    pair_at_deletion_boundary, partner_tag, scan_tags,
+from markup_app.panels.xml_tag_parsing import (
+    entry_block_span, find_hw_occurrence, find_hw_occurrences, find_rogue_tags,
+    innermost_d_span, is_inside_tag, is_name_char, non_d_region_hw_count,
+    non_d_regions, pair_at_deletion_boundary, partner_tag, scan_tags,
 )
 
 
 LINK_MARKER = '\U0001F517'
 _LINK_MARK_COLOR = QColor(70, 130, 180)
+COMPLETION_MIN_WIDTH = 80
 _PAIR_SELECT_RE = re.compile(r'^(<\w+[^>]*>)(.*)(</\w+>)$')
 
 
@@ -73,9 +74,10 @@ class XmlTextEdit(QTextEdit):
         self._last_deleted_close = None
         self._last_deleted_forward = None
         self._rogue_tags = []
-        self._d_span_sel = None
+        self._d_span_sels = []
         self._non_d_underline = []
         self._target_hw = None
+        self._separate_occurrences = False
         self._broken_link_spans = []
         self._grammar_g_spans = []
         self._grammar_hw_spans = []
@@ -231,37 +233,51 @@ class XmlTextEdit(QTextEdit):
         else:
             self._refresh_selections()
 
-    def _compute_d_span_underline(self):
+    def _compute_d_span_sels(self):
         if self._non_d_underline or self._target_hw is None:
-            return None
+            return []
         text = self.toPlainText()
-        match = find_hw_occurrence(text, self._target_hw[0], self._target_hw[1])
-        if match is None:
-            return None
-        open_tag, close_tag = innermost_d_span(text, match.start())
-        if open_tag is None:
-            if non_d_region_hw_count(text, match.start()) >= 2:
-                return None
-            span = entry_block_span(text)
-            if span is None:
-                return None
-            start, end = span
+        key = self._target_hw[0]
+        if self._separate_occurrences:
+            single = find_hw_occurrence(text, key, self._target_hw[1])
+            matches = [single] if single is not None else []
         else:
-            start, end = open_tag['start'], close_tag['end']
+            matches = find_hw_occurrences(text, key)
+        spans = []
+        seen = set()
+        for match in matches:
+            open_tag, close_tag = innermost_d_span(text, match.start())
+            if open_tag is None:
+                if non_d_region_hw_count(text, match.start()) >= 2:
+                    continue
+                span = entry_block_span(text)
+                if span is None:
+                    continue
+            else:
+                span = (open_tag['start'], close_tag['end'])
+            if span in seen:
+                continue
+            seen.add(span)
+            spans.append(span)
         fmt = QTextCharFormat()
         fmt.setFontUnderline(True)
         fmt.setUnderlineColor(QColor(COLOR_D_SPAN_UNDERLINE))
-        cursor = self.textCursor()
-        cursor.setPosition(start)
-        cursor.setPosition(end, QTextCursor.KeepAnchor)
-        sel = QTextEdit.ExtraSelection()
-        sel.format = fmt
-        sel.cursor = cursor
-        return sel
+        sels = []
+        for start, end in spans:
+            cursor = self.textCursor()
+            cursor.setPosition(start)
+            cursor.setPosition(end, QTextCursor.KeepAnchor)
+            sel = QTextEdit.ExtraSelection()
+            sel.format = fmt
+            sel.cursor = cursor
+            sels.append(sel)
+        return sels
 
     def _build_composed_selections(self, pair=None):
         if self._target_hw is not None:
-            self._d_span_sel = self._compute_d_span_underline()
+            self._d_span_sels = self._compute_d_span_sels()
+        else:
+            self._d_span_sels = []
         sels = []
         if pair is not None:
             sels.extend(self._build_pair_selections(pair[0], pair[1]))
@@ -269,8 +285,7 @@ class XmlTextEdit(QTextEdit):
         sels.extend(self._build_broken_link_selections())
         sels.extend(self._build_grammar_selections())
         sels.extend(self._build_non_d_underline_selections())
-        if self._d_span_sel is not None:
-            sels.append(self._d_span_sel)
+        sels.extend(self._d_span_sels)
         return sels
 
     def _build_non_d_underline_selections(self):
@@ -431,8 +446,9 @@ class XmlTextEdit(QTextEdit):
                                    min(scrollbar.maximum(), value)))
             self.repaint()
 
-    def mark_sub_hw(self, headword_norm, occurrence_index=0):
+    def mark_sub_hw(self, headword_norm, occurrence_index=0, separate_occurrences=False):
         self._target_hw = (headword_norm, occurrence_index)
+        self._separate_occurrences = separate_occurrences
         self._non_d_underline = []
         text = self.toPlainText()
         match = find_hw_occurrence(text, headword_norm, occurrence_index)
@@ -442,11 +458,11 @@ class XmlTextEdit(QTextEdit):
             self.setTextCursor(caret)
             self._scroll_line_to_top(match.start())
         self._refresh_selections()
-        return self._d_span_sel is not None
+        return bool(self._d_span_sels)
 
     def mark_main_non_d(self, headword_norm, occurrence_index=0):
         self._target_hw = None
-        self._d_span_sel = None
+        self._d_span_sels = []
         self._non_d_underline = []
         text = self.toPlainText()
         match = find_hw_occurrence(text, headword_norm, occurrence_index)
@@ -622,9 +638,12 @@ class XmlTextEdit(QTextEdit):
 
     def _size_completion_popup(self, popup):
         metrics = popup.fontMetrics()
-        width = 80
-        for i in range(popup.count()):
-            width = max(width, metrics.horizontalAdvance(popup.item(i).text()) + 28)
+        width = COMPLETION_MIN_WIDTH
+        if popup.count():
+            popup.setUniformItemSizes(False)
+            content_w = popup.sizeHintForColumn(0)
+            popup.setUniformItemSizes(True)
+            width = max(width, content_w + 2 * popup.frameWidth() + 2)
         row_h = popup.sizeHintForRow(0) if popup.count() else metrics.height() + 4
         visible = min(popup.count(), AttributePopup.MAX_VISIBLE)
         popup.setFixedWidth(width)
@@ -697,6 +716,7 @@ class XmlTextEdit(QTextEdit):
     def mousePressEvent(self, event):
         self._hide_completion()
         super().mousePressEvent(event)
+        self._refresh_completion()
 
     def focusOutEvent(self, event):
         self._hide_completion()

@@ -17,9 +17,9 @@ from markup_app.theme.layout_constants import (
 from markup_app.theme.styles import TAG_BUTTON_STYLE, ENTRY_CHECKED_TOGGLE_STYLE
 from markup_app.utils.constants import FLOPPY_MARKER
 from markup_app.localization import strings
-from markup_app.panels.xml_text_edit import XmlTextEdit
-from dictionary_app.utils.text_utils import remove_accents, normalize_jo_to_je
-from dictionary_app.utils.scroll_bar_utility import overlay_right_inset
+from markup_app.panels.xml_edit_widget import XmlTextEdit
+from dictionary_app.utils.text_utils import hw_identity
+from dictionary_app.utils.scrollbar_geometry import overlay_right_inset
 from dictionary_app.utils.constants import CHECK_BLANK
 
 
@@ -140,9 +140,10 @@ class EditorPane(QWidget):
         self._text_edit._last_deleted_close = None
         self._text_edit._last_deleted_forward = None
         self._text_edit._rogue_tags = []
-        self._text_edit._d_span_sel = None
+        self._text_edit._d_span_sels = []
         self._text_edit._non_d_underline = []
         self._text_edit._target_hw = None
+        self._text_edit._separate_occurrences = False
         self._text_edit._broken_link_spans = []
         self._text_edit._grammar_g_spans = []
         self._text_edit._grammar_hw_spans = []
@@ -151,16 +152,16 @@ class EditorPane(QWidget):
         self._text_edit.setExtraSelections([])
         self._render_author()
 
-    def mark_sub_hw(self, headword, occurrence_index=0):
+    def mark_sub_hw(self, headword, occurrence_index=0, keep_acc=0, separate_occurrences=False):
         if not headword:
             return
-        norm = normalize_jo_to_je(remove_accents(headword.strip()))
-        self._text_edit.mark_sub_hw(norm, occurrence_index)
+        norm = hw_identity(headword.strip(), keep_acc)
+        self._text_edit.mark_sub_hw(norm, occurrence_index, separate_occurrences)
 
-    def mark_main_non_d(self, headword, occurrence_index=0):
+    def mark_main_non_d(self, headword, occurrence_index=0, keep_acc=0):
         if not headword:
             return
-        norm = normalize_jo_to_je(remove_accents(headword.strip()))
+        norm = hw_identity(headword.strip(), keep_acc)
         self._text_edit.mark_main_non_d(norm, occurrence_index)
 
     def highlight_broken_links(self, spans):
@@ -203,9 +204,10 @@ class EditorPane(QWidget):
         self._text_edit.clear()
         self._text_edit.blockSignals(False)
         self._text_edit._rogue_tags = []
-        self._text_edit._d_span_sel = None
+        self._text_edit._d_span_sels = []
         self._text_edit._non_d_underline = []
         self._text_edit._target_hw = None
+        self._text_edit._separate_occurrences = False
         self._text_edit._broken_link_spans = []
         self._text_edit._grammar_g_spans = []
         self._text_edit._grammar_hw_spans = []

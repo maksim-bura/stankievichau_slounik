@@ -1,9 +1,11 @@
 import html
 import re
 
+from dictionary_app.utils.text_utils import has_keep_acc, resolve_headword
+
 from markup_app.localization import strings
 from markup_app.services.broken_links import (
-    OUTCOME_RESOLVED, normalize_headword, strip_tags,
+    OUTCOME_RESOLVED, _attr_matches, strip_tags,
 )
 
 
@@ -29,7 +31,7 @@ def build_link_marks(broken_links, text, entry_id):
         if row is None or row[0] != entry_id:
             continue
         entry_targeted = True
-        norm = normalize_headword(row[1])
+        norm = resolve_headword(row[1], row[4] if len(row) > 4 else 0)
         hw_id_value = row[3] if len(row) > 3 and row[3] else None
         target_norms.add(norm)
         if hw_id_value:
@@ -40,17 +42,21 @@ def build_link_marks(broken_links, text, entry_id):
             'hws': broken_links.owning_hw_texts(occ['block'], occ['start']),
             'raw': occ['block'][occ['start']:occ['end']],
         })
+    g_hw_attrs = []
     for match in re.finditer(r'<g\b([^>]*)>', text):
         attr = re.search(r'\bhw\s*=\s*"([^"]*)"', match.group(1))
         if attr and attr.group(1):
-            target_norms.add(normalize_headword(attr.group(1)))
+            g_hw_attrs.append(attr.group(1))
             target_ids.add(attr.group(1))
     hw_offsets = []
     tooltips = {}
     for match in re.finditer(r'<hw\b([^>]*)>(.*?)</hw>', text, re.DOTALL):
         hw_id = re.search(r'\bid\s*=\s*"([^"]*)"', match.group(1))
-        inner = normalize_headword(strip_tags(match.group(2)).strip())
-        if inner in target_norms or (hw_id and hw_id.group(1) in target_ids):
+        hw_text = strip_tags(match.group(2)).strip()
+        inner = resolve_headword(hw_text, has_keep_acc(match.group(1)))
+        if (inner in target_norms
+                or any(_attr_matches(attr, hw_text) for attr in g_hw_attrs)
+                or (hw_id and hw_id.group(1) in target_ids)):
             hw_offsets.append(match.start())
             hw_deps = [
                 dep for dep in deps

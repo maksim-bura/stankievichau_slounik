@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from dictionary_app.format.link_handler import LinkHandler
-from dictionary_app.utils.text_utils import remove_accents, alphabet_sort_key
+from dictionary_app.utils.text_utils import remove_accents, alphabet_sort_key, hw_identity, entry_id_sort_key
 from dictionary_app.utils.search_regex import compile_search_regex
 import dictionary_app.format.entry_formatter as formatter
 from dictionary_app.localization import strings
@@ -81,12 +81,13 @@ class MainWindow(QMainWindow):
         self.open_entry_by_headword(headword, sense_parts, from_navigation=True,
                                     entry_row_id=entry_row_id, target_subheadword=target)
 
-    def open_entry_by_headword(self, headword, sense_parts=None, target_hw=None, from_navigation=False, from_word_link=False, entry_row_id=None, target_subheadword=None):
+    def open_entry_by_headword(self, headword, sense_parts=None, target_hw=None, from_navigation=False, from_word_link=False, from_attr=False, entry_row_id=None, target_subheadword=None):
         if headword == _PREVIEW_SENTINEL:
             self._restore_preview()
             return
 
         target_headword = remove_accents(headword)
+        headword_exact = from_attr and target_headword != headword
         result_to_display = None
         resolved_id_headword = None
         target_anchor = None
@@ -107,9 +108,9 @@ class MainWindow(QMainWindow):
             else:
                 result_to_display = self.results_list.find_by_headword(headword)
                 if not result_to_display:
-                    result_to_display = self.results_list.find_by_clean_headword(target_headword)
+                    result_to_display = self.results_list.find_by_identity(hw_identity(headword, 1 if headword_exact else 0))
                 if not result_to_display:
-                    entry_data = self.search_engine.get_entry_by_headword(headword)
+                    entry_data = self.search_engine.get_entry_by_headword(headword, exact_headword=headword_exact)
                     if entry_data[0]:
                         result_to_display = entry_data
             if result_to_display:
@@ -121,9 +122,9 @@ class MainWindow(QMainWindow):
         elif result_to_display is None:
             result_to_display = self.results_list.find_by_headword(headword)
             if not result_to_display:
-                result_to_display = self.results_list.find_by_clean_headword(target_headword)
+                result_to_display = self.results_list.find_by_identity(hw_identity(headword, 1 if headword_exact else 0))
             if not result_to_display:
-                entry_data = self.search_engine.get_entry_by_headword(headword)
+                entry_data = self.search_engine.get_entry_by_headword(headword, exact_headword=headword_exact)
                 if entry_data[0]:
                     result_to_display = entry_data
             if not result_to_display and from_word_link:
@@ -135,12 +136,16 @@ class MainWindow(QMainWindow):
         if result_to_display:
             result_to_display = self.search_engine.materialize_result(result_to_display) or result_to_display
             main_headword = remove_accents(self.search_engine.get_main_headword(result_to_display[0], result_to_display[2]))
+            main_headword_display = self.search_engine.get_main_headword_display(result_to_display[0], result_to_display[2])
             compare_to = target_headword
             highlight_word = resolved_id_headword or compare_to
 
             if from_navigation and target_subheadword is not None:
                 formatter.set_target_subheadword(target_subheadword)
                 applied_target = target_subheadword
+                if target_anchor is None:
+                    _, target_anchor = self.search_engine.get_entry_sub_headword(
+                        result_to_display[0], target_subheadword)
             elif sense_parts:
                 formatter.set_target_senses(sense_parts, headword)
                 applied_target = None
@@ -172,6 +177,8 @@ class MainWindow(QMainWindow):
                     self.entry_scroll_manager.scroll_to_anchor(anchor_id)
             elif target_anchor:
                 self.entry_scroll_manager.scroll_to_anchor(target_anchor)
+            elif highlight_word == main_headword:
+                self.entry_scroll_manager.scroll_to_anchor(main_headword_display)
             else:
                 self.entry_scroll_manager.scroll_to_anchor(compare_to)
         else:
@@ -209,7 +216,7 @@ class MainWindow(QMainWindow):
                     self._last_preview_html = self.entry_viewer.stored_html
                     self.entry_viewer.navigation_bar.push(result[1], None, _PREVIEW_SENTINEL, result[0])
                     if anchor:
-                        main_headword = remove_accents(self.search_engine.get_main_headword(result[0], result[2]))
+                        main_headword = self.search_engine.get_main_headword_display(result[0], result[2])
                         if anchor != main_headword:
                             formatter.set_target_subheadword(anchor)
                         else:
@@ -225,6 +232,9 @@ class MainWindow(QMainWindow):
         if link_type == 'word' and target:
             self.open_entry_by_headword(target, sense_parts, target_hw,
                                         from_navigation=False, from_word_link=True)
+        elif link_type == 'word-attr' and target:
+            self.open_entry_by_headword(target, sense_parts, target_hw,
+                                        from_navigation=False, from_word_link=True, from_attr=True)
         elif link_type == 'source' and target:
             self.open_source(target)
 
@@ -444,7 +454,7 @@ class MainWindow(QMainWindow):
                 for p in result[5]:
                     key = (result[0], p['headword'])
                     if key not in groups:
-                        groups[key] = {'headword': remove_accents(p['headword']), 'sort_headword': remove_accents(p.get('sort_headword') or p['headword']), 'htmls': [], 'breaks': []}
+                        groups[key] = {'headword': p['headword'], 'sort_headword': p.get('sort_headword') or p['headword'], 'sort_id': result[3], 'sort_hw_id': p.get('sort_hw_id'), 'htmls': [], 'breaks': []}
                     if p['preview_html'] not in groups[key]['htmls']:
                         groups[key]['htmls'].append(p['preview_html'])
                         groups[key]['breaks'].append(p.get('paragraph_break', False))
@@ -452,7 +462,7 @@ class MainWindow(QMainWindow):
             return
         html_parts = ['<body>']
         first_group = True
-        for key, g in sorted(groups.items(), key=lambda kv: (alphabet_sort_key(kv[1]['sort_headword']),)):
+        for key, g in sorted(groups.items(), key=lambda kv: (alphabet_sort_key(kv[1]['sort_headword']), entry_id_sort_key(kv[1]['sort_id']) or entry_id_sort_key(kv[1]['sort_hw_id']))):
             if not first_group:
                 html_parts.append('<br><br>')
             first_group = False

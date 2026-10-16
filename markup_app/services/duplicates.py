@@ -1,4 +1,4 @@
-from dictionary_app.utils.text_utils import remove_accents
+from dictionary_app.utils.text_utils import hw_identity
 
 
 def all_ids_resolved(member_ids):
@@ -24,7 +24,7 @@ class DuplicateResolver:
     def filter(self, results):
         by_norm = {}
         for r in results:
-            by_norm.setdefault(remove_accents(r[1]), []).append(r)
+            by_norm.setdefault(hw_identity(r[1], r[6] if len(r) > 6 else 0), []).append(r)
 
         unresolved = []
         for rows in by_norm.values():

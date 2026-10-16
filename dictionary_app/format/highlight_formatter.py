@@ -3,8 +3,8 @@ import re
 import xml.etree.ElementTree as ElementTree
 
 from dictionary_app.utils.text_utils import remove_accents, normalize_jo_to_je
-from dictionary_app.utils.content_rules import content_text, d_hw_variants, hw_text_excluding_n
-from dictionary_app.utils.xml_schema import ATTR_CODE, ATTR_LANG, ATTR_EXCL
+from dictionary_app.utils.content_rules import content_text, hw_text_excluding_n
+from dictionary_app.utils.xml_schema import ATTR_CODE, ATTR_LANG, ATTR_EXCL, ATTR_KEEP_ACC, ATTR_ID
 from dictionary_app.format.entry_formatter import process_element, _plain_parens
 
 
@@ -121,7 +121,7 @@ class HighlightFormatter:
             pos = i
         return ''.join(result)
 
-    def find_content_matches(self, root, headword, tag, pattern):
+    def find_content_matches(self, root, headword, tag, pattern, keep_acc=0):
         parent_map = {c: p for p in root.iter() for c in p}
         order = list(root.iter())
         order_pos = {id(el): i for i, el in enumerate(order)}
@@ -176,7 +176,7 @@ class HighlightFormatter:
                         consumed_senses.add(id(group['sense']))
                         emitted_sense_ids.add(id(group['sense']))
                         paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
-                        preview = self._build_embedded_t_preview(group, pattern, parent_map, root, headword)
+                        preview = self._build_embedded_t_preview(group, pattern, parent_map, root, headword, keep_acc)
                         preview['paragraph_break'] = paragraph_break
                         embedded_previews.append(preview)
                         prev_element = element
@@ -184,7 +184,7 @@ class HighlightFormatter:
                     if id(element) in skipped_main_t:
                         continue
                     paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
-                    preview_hw, preview_sort = self._preview_hw_fields(element, parent_map, root, headword)
+                    preview_hw, preview_sort, preview_hw_id = self._preview_hw_fields(element, parent_map, root, headword, keep_acc)
                     sense_num, sense_id = self._sense_number_for(element, parent_map)
                     suppress = sense_id is not None and sense_id in emitted_sense_ids
                     preview_html = self._build_preview_html(element, tag, pattern, parent_map, add_sense_num=not suppress, matched_ids=matched_ids)
@@ -193,6 +193,7 @@ class HighlightFormatter:
                     embedded_previews.append({
                         'headword': preview_hw,
                         'sort_headword': preview_sort,
+                        'sort_hw_id': preview_hw_id,
                         'preview_html': preview_html,
                         'paragraph_break': paragraph_break,
                     })
@@ -204,7 +205,7 @@ class HighlightFormatter:
         for element in matched:
             paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
 
-            preview_hw, preview_sort = self._preview_hw_fields(element, parent_map, root, headword)
+            preview_hw, preview_sort, preview_hw_id = self._preview_hw_fields(element, parent_map, root, headword, keep_acc)
 
             sense_num, sense_id = self._sense_number_for(element, parent_map)
             suppress = sense_id is not None and sense_id in emitted_sense_ids
@@ -214,6 +215,7 @@ class HighlightFormatter:
             previews.append({
                 'headword': preview_hw,
                 'sort_headword': preview_sort,
+                'sort_hw_id': preview_hw_id,
                 'preview_html': preview_html,
                 'paragraph_break': paragraph_break,
             })
@@ -258,7 +260,7 @@ class HighlightFormatter:
                     by_element[id(element)] = group
         return by_element, by_sense
 
-    def _build_embedded_t_preview(self, group, pattern, parent_map, root, headword):
+    def _build_embedded_t_preview(self, group, pattern, parent_map, root, headword, keep_acc=0):
         sense = group['sense']
         elements = group['elements']
 
@@ -282,10 +284,11 @@ class HighlightFormatter:
 
         preview_html = ''.join(parts)
         first = elements[0]
-        preview_hw, preview_sort = self._preview_hw_fields(first, parent_map, root, headword)
+        preview_hw, preview_sort, preview_hw_id = self._preview_hw_fields(first, parent_map, root, headword, keep_acc)
         return {
             'headword': preview_hw,
             'sort_headword': preview_sort,
+            'sort_hw_id': preview_hw_id,
             'preview_html': f'<span class="t">{preview_html}</span>',
         }
 
@@ -432,38 +435,50 @@ class HighlightFormatter:
                 return current
         return None
 
-    def _preview_hw_fields(self, element, parent_map, root, headword):
-        display = None
-        sort = None
+    def _preview_hw_fields(self, element, parent_map, root, headword, keep_acc=0):
         current = element
         while current in parent_map:
             current = parent_map[current]
             if current.tag == 'd':
-                variants = d_hw_variants(current)
+                variants = []
+                sort_variants = []
+                hw_id = None
+                for child in current:
+                    if child.tag != 'hw' or child.get(ATTR_EXCL) is not None:
+                        continue
+                    text = ''.join(child.itertext()).strip()
+                    if not text:
+                        continue
+                    if hw_id is None:
+                        hw_id = child.get(ATTR_ID)
+                    child_keep = child.get(ATTR_KEEP_ACC) is not None
+                    variants.append(text if child_keep else remove_accents(text))
+                    sort_variants.append(hw_text_excluding_n(child).strip() or text)
                 if variants:
-                    display = '|'.join(variants)
-                    sort_variants = d_hw_variants(current, exclude_n=True)
-                    sort = '|'.join(sort_variants) if sort_variants else display
-                    return display, sort
-        if display is None:
-            element_sense = self._enclosing_sense(element, parent_map)
-            relevant = []
-            relevant_sort = []
-            for h in root.findall('.//hw'):
-                if h.get(ATTR_EXCL) is not None:
-                    continue
-                text = ''.join(h.itertext()).strip()
-                if not text:
-                    continue
-                hw_sense = self._enclosing_sense(h, parent_map)
-                if hw_sense is None or hw_sense is element_sense:
-                    relevant.append(text)
-                    relevant_sort.append(hw_text_excluding_n(h).strip() or text)
-            if relevant:
-                if root.find('.//d') is None:
-                    return '|'.join(relevant), '|'.join(relevant_sort)
-                return relevant[0], relevant_sort[0]
-        return headword, headword
+                    return '|'.join(variants), '|'.join(sort_variants), hw_id
+        element_sense = self._enclosing_sense(element, parent_map)
+        relevant = []
+        relevant_sort = []
+        hw_id = None
+        for h in root.findall('.//hw'):
+            if h.get(ATTR_EXCL) is not None:
+                continue
+            text = ''.join(h.itertext()).strip()
+            if not text:
+                continue
+            hw_sense = self._enclosing_sense(h, parent_map)
+            if hw_sense is None or hw_sense is element_sense:
+                if hw_id is None:
+                    hw_id = h.get(ATTR_ID)
+                child_keep = h.get(ATTR_KEEP_ACC) is not None
+                relevant.append(text if child_keep else remove_accents(text))
+                relevant_sort.append(hw_text_excluding_n(h).strip() or text)
+        if relevant:
+            if root.find('.//d') is None:
+                return '|'.join(relevant), '|'.join(relevant_sort), hw_id
+            return relevant[0], relevant_sort[0], hw_id
+        display_main = headword if keep_acc else remove_accents(headword)
+        return display_main, headword, hw_id
 
     @staticmethod
     def _sense_number_html(sense):

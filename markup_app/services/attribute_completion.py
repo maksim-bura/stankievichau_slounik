@@ -40,6 +40,7 @@ def detect_context(text, pos):
     rest = region[head.end():]
     if not rest or not rest[0].isspace():
         return None
+    trailing_space = rest[-1].isspace()
 
     present = set()
     n = len(rest)
@@ -85,4 +86,6 @@ def detect_context(text, pos):
         else:
             present.add(name.lower())
             i = j
+    if not trailing_space:
+        return None
     return CompletionContext(tag, present, '')

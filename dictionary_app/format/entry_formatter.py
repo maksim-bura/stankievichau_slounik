@@ -6,7 +6,7 @@ from .source_mapper import source_mapper
 from dictionary_app.utils.text_utils import remove_accents
 from dictionary_app.utils.content_rules import d_hw_variants
 from dictionary_app.utils.constants import ARROW_MARKER, SENSE_ANCHOR_PREFIX
-from dictionary_app.utils.xml_schema import ATTR_ID, ATTR_HW, ATTR_ENTRY, ATTR_N
+from dictionary_app.utils.xml_schema import ATTR_ID, ATTR_HW, ATTR_ENTRY, ATTR_N, ATTR_KEEP_ACC
 
 _ITALIC_TEXT_TAGS = {'g', 'ex', 'i', 'st', 'see'}
 
@@ -160,7 +160,14 @@ def format_entry(xml_string, is_sources=False):
 
     root = ElementTree.fromstring(xml_string)
     context = _format_context or FormatContext()
-    content = process_element(root, context, is_sources)
+    main_variants = None
+    if not is_sources:
+        main_variants = _d_variants(root)
+        for text in d_hw_variants(root, exclude_n=True):
+            normalized = remove_accents(text)
+            if normalized and normalized not in main_variants:
+                main_variants.append(normalized)
+    content = process_element(root, context, is_sources, main_variants)
 
     html = f"<body>{content}</body>"
 
@@ -214,9 +221,13 @@ def process_element(element, context, is_sources=False, current_variants=None):
                 if normalized in context.senses and _sense_matches_headword(context.headword, current_variants):
                     is_target_sense = True
 
-        is_target_headword = (context and context.subheadword and
-                              child.tag == 'hw' and
-                              remove_accents(''.join(child.itertext()).strip()) == remove_accents(context.subheadword))
+        is_target_headword = False
+        if context and context.subheadword and child.tag == 'hw':
+            child_hw_text = ''.join(child.itertext()).strip()
+            if child.get(ATTR_KEEP_ACC) is not None:
+                is_target_headword = child_hw_text == context.subheadword
+            else:
+                is_target_headword = remove_accents(child_hw_text) == remove_accents(context.subheadword)
 
         if child.tag == 'br':
             parts.append('<br>')
@@ -338,7 +349,10 @@ def process_element(element, context, is_sources=False, current_variants=None):
                             and re.match(r'^[,\s]*\d', child.tail or ''):
                         link_target += (child.tail or '')
                 if link_target:
-                    link_html = LinkHandler.create_link(child.tag, link_target, display_html=_plain_parens(display_text) or display_text)
+                    if entry_attr or hw_attr:
+                        link_html = LinkHandler.create_word_attr_link(link_target, display_text)
+                    else:
+                        link_html = LinkHandler.create_link('see', link_target, display_text)
                     parts.append(f'<span class="see">{link_html}</span>')
                 else:
                     parts.append(f'<span class="see">{_plain_parens(display_text)}</span>')
@@ -373,7 +387,10 @@ def process_element(element, context, is_sources=False, current_variants=None):
                         sep += ','
                         child.tail = child.tail[1:]
 
-                anchor_id = child.get(ATTR_ID) or remove_accents(hw_text)
+                if child.get(ATTR_KEEP_ACC) is not None:
+                    anchor_id = child.get(ATTR_ID) or hw_text
+                else:
+                    anchor_id = child.get(ATTR_ID) or remove_accents(hw_text)
                 parts.append(f'<span id="{anchor_id}" class="{tag_class}">{inner_html}{sep}</span>' if tag_class else f'<span id="{anchor_id}">{inner_html}{sep}</span>')
             elif tag_class:
                 parts.append(f'<span class="{tag_class}">{inner_html}</span>')

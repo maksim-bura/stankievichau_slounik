@@ -2,7 +2,7 @@
 
 Single source of truth for the **lexicographic XML markup** used in `dictionary_app/data/dictionary/dictionary_*.xml`, distilled from `dictionary_G.xml` (130 entries) and reassessed against all letter files (`A` 32, `B` 3, `Ch` 3, `Cz` 7, `D` 3, `DZ` 1, `G` 130, `H` 4, `Jo` 35, `Ju` 23, `N` 1, `P` 2, `S` 3, `Y` 3, `Z` 1 — 251 entries total). `Cz` transcription is in progress: first chunk чооат…човен (7 entries) is user-checked.
 
-Scope: how RAW OCR text (`dictionary_app/data/dictionary/raw_data/*_raw.txt`) is converted to marked-up XML. App behavior (rendering, search, build, collation, `tp`/`lvl` state) is in `AGENTS.md`; the markup editor is in `AGENTS_markup.md`. Do NOT restate those facts here — cross-reference instead.
+Scope: how RAW OCR text (`markup_app/data/dictionary_raw/*_raw.txt`) is converted to marked-up XML. App behavior (rendering, search, build, collation, `tp`/`lvl` state) is in `AGENTS.md`; the markup editor is in `AGENTS_markup.md`. Do NOT restate those facts here — cross-reference instead.
 
 ## 1. File structure
 
@@ -16,7 +16,7 @@ Scope: how RAW OCR text (`dictionary_app/data/dictionary/raw_data/*_raw.txt`) is
 
 | tag | role | notes |
 |---|---|---|
-| `<hw>` | headword (bold, clickable anchor) | one per spelling variant; multi-word headwords like `ґазавая ґрана́та`; homonym numerals nested: `<hw>гале́ра <n>ІІ</n></hw>`; disambiguation links see §7; `excl="true"` marks a display-only variant that is kept out of the entry list and all logic except display + the pointing-finger (`👉`), e.g. `•<hw excl="true">ёсьць</hw>, <hw>ёсьцяка</hw>` (see AGENTS.md → `<hw excl="true">`); an inflected/cognate variant shown alongside the main form may be italicized INSIDE `<hw>`: `<hw>Юр'е</hw>, <hw><i>Юр'я</i></hw>` (Ju) |
+| `<hw>` | headword (bold, clickable anchor) | one per spelling variant; multi-word headwords like `ґазавая ґрана́та`; homonym numerals nested: `<hw>гале́ра <n>ІІ</n></hw>`; disambiguation links see §7; `excl="true"` marks a display-only variant that is kept out of the entry list and all logic except display + the pointing-finger (`👉`), e.g. `•<hw excl="true">ёсьць</hw>, <hw>ёсьцяка</hw>` (see AGENTS.md → `<hw excl="true">`); an inflected/cognate variant shown alongside the main form may be italicized INSIDE `<hw>`: `<hw>Юр'е</hw>, <hw><i>Юр'я</i></hw>` (Ju); `keep-acc="true"` marks a headword whose combining accents are load-bearing and must be PRESERVED (never stripped) for display, list identity, search, and `<see>` resolution — used on the Cz `ча́паць`/`чапа́ць` family |
 | `<g>` | grammar/declension, italic | declension starts with `-`: `-са, м.`; standalone markers: `нареч.`, `местоим.`, `союз`, `соверш.`, `несоверш.`, `безлич.`, `однкр.`, `средн.`, `прич.`, `отгл. имя сущ.`; may embed `<st>`, `<see>`, `<p>`, `<src>`, even `<hw>` (`один <hw>ґалёш</hw>`) |
 | `<t>` | Russian translation (can also appear nested INSIDE an `<ex>` for a Russian gloss of a proverb/idiom — H `гарох`: `<ex>Хадзі̀ма ў гарох <t>(знач. щипать горох)</t>. <src>Ст.</src></ex>`) | transcription, multiple `<t>` per sense allowed; sources and `—` separators inside |
 | `<ex>` | Belarusian example, italic, srcless or `<src>`-tagged | may embed a Russian `<t>` gloss and/or `<st>Послов.</st>` (H `гарох`: `Ідзе гарох, там сем дарог. <st>Послов.</st>, <t>о частом щипании гороха</t>. <src>Дсл.</src>`) |
@@ -33,6 +33,10 @@ Scope: how RAW OCR text (`dictionary_app/data/dictionary/raw_data/*_raw.txt`) is
 | `<br />` | block separator inside an entry | between senses, between `<d>` blocks |
 
 `<tp>` and `lvl` attributes must NOT be added (data is stripped of them — AGENTS.md → Source Data State).
+
+**`keep-acc` attribute.** `<hw keep-acc="true">` marks a headword whose combining accents (U+0300/U+0301) are semantically load-bearing: the accents are KEPT — never `remove_accents`-stripped — for display, result-list identity, search matching, and `<see>` target resolution. Use it when two spellings differ only by accent (Cz `ча́паць` vs `чапа́ць`). It is a BOOL attribute of `<hw>` only (not `<entry>`); see AGENTS.md → Accent-Handling Chain.
+
+**Accent-sensitive `<see>` resolution.** A `<see>` carrying `entry=`/`hw=` is emitted as a `wordattr:` link and resolved ACCENT-PRESERVINGLY — an accented target must match exactly (`абора` ≠ `абора́`) — while a text-only `<see>word</see>` (and any see without attributes) keeps the accent-insensitive default. Bare cross-references therefore still find any accent variant; only attribute-pinned sees are strict.
 
 ## 3. Entry shapes (canonical)
 

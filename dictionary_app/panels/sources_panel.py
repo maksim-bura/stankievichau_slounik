@@ -2,8 +2,8 @@ import os
 import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget, QGridLayout, QHBoxLayout
 from PySide6.QtCore import Qt
-from dictionary_app.utils.scroll_manager import ScrollManager
-from dictionary_app.utils.scroll_bar_utility import overlay_right_inset
+from dictionary_app.utils.scroll_state import ScrollState
+from dictionary_app.utils.scrollbar_geometry import overlay_right_inset
 from dictionary_app.localization import strings
 from dictionary_app.theme.layout_constants import (
     BUTTON_SIZE, BAR_CONTENTS_MARGINS, BAR_SPACING, LAYOUT_MARGINS, LAYOUT_SPACING,
@@ -86,7 +86,7 @@ class SourcesPanel:
         self.container.setLayout(self.container_layout)
         self.container.hide()
 
-        self.scroll_manager = ScrollManager(self.viewer)
+        self.scroll_manager = ScrollState(self.viewer)
 
         self._collapsed_sections = set()
         self._pre_search_content = None

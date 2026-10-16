@@ -1,12 +1,12 @@
 import re
 
-from dictionary_app.utils.text_utils import remove_accents, normalize_jo_to_je
+from dictionary_app.utils.text_utils import has_keep_acc, hw_identity
 
 
 _TAG_RE = re.compile(r'<(/?)(\w+)[^>]*>')
 _ENTRY_OPEN_RE = re.compile(r'<entry\b[^>]*>')
 _ENTRY_CLOSE_RE = re.compile(r'</entry\s*>')
-_HW_TEXT_RE = re.compile(r'<hw\b[^>]*>(.*?)</hw>', re.DOTALL)
+_HW_TEXT_RE = re.compile(r'<hw\b([^>]*)>(.*?)</hw>', re.DOTALL)
 _NAME_CHAR_RE = re.compile(r'[A-Za-z0-9_]')
 
 
@@ -154,16 +154,24 @@ def innermost_d_span(text, pos):
     return None, None
 
 
-def find_hw_occurrence(text, headword_norm, occurrence_index):
+def find_hw_occurrences(text, headword_key):
+    return [
+        m for m in _HW_TEXT_RE.finditer(text)
+        if hw_identity(
+            re.sub(r'<[^>]+>', '', m.group(2)).strip(),
+            has_keep_acc(m.group(1)),
+        ) == headword_key
+    ]
+
+
+def find_hw_occurrence(text, headword_key, occurrence_index):
     found = None
     k = 0
-    for m in _HW_TEXT_RE.finditer(text):
-        inner = re.sub(r'<[^>]+>', '', m.group(1)).strip()
-        if normalize_jo_to_je(remove_accents(inner)) == headword_norm:
-            if k == occurrence_index:
-                return m
-            found = m
-            k += 1
+    for m in find_hw_occurrences(text, headword_key):
+        if k == occurrence_index:
+            return m
+        found = m
+        k += 1
     return found
 
 

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QPoint, QEvent, QRect, QItemSelectionModel
 from PySide6.QtGui import QCursor
-from dictionary_app.utils.text_utils import remove_accents, collapse_same_entry_duplicates
+from dictionary_app.utils.text_utils import remove_accents, resolve_headword, hw_identity, has_keep_acc, collapse_same_entry_duplicates
 from dictionary_app.utils.xml_schema import ATTR_ID
 from dictionary_app.db.build_database import build_database, get_source_path
 from markup_app.services.broken_links import (
@@ -269,7 +269,7 @@ class MarkupMainWindow(QMainWindow):
             displayed = collapse_same_entry_duplicates(results)
         self._by_id_headword = {(r[0], r[1], r[3]): r for r in displayed}
         self.results_model.set_rows(
-            [(remove_accents(r[1]), r) for r in displayed])
+            [(resolve_headword(r[1], r[6] if len(r) > 6 else 0), r) for r in displayed])
 
         if displayed:
             select_row(self.results_box, self.results_model, 0)
@@ -518,25 +518,27 @@ class MarkupMainWindow(QMainWindow):
             self._restore_selection_to_current()
             return
 
-        self._load_result(result, occurrence)
+        self._load_result(result, occurrence, self._separate_occurrences_mode())
 
     def _is_sub_headword(self, result):
-        cached = self._sub_headword_cache.get(result[0])
+        key = (result[0], result[1])
+        cached = self._sub_headword_cache.get(key)
         if cached is None:
             cursor = self.search_engine._get_connection().cursor()
             cursor.execute("SELECT headword FROM dictionary WHERE id=?", (result[0],))
             row = cursor.fetchone()
             cached = bool(row) and row[0] != result[1]
-            self._sub_headword_cache[result[0]] = cached
+            self._sub_headword_cache[key] = cached
         return cached
 
-    def _load_result(self, result, occurrence=0):
+    def _load_result(self, result, occurrence=0, separate_occurrences=False):
         entry_id = result[0]
         headword = result[1]
         source_file = result[4]
         entry_link = result[3]
+        keep_acc = result[6] if len(result) > 6 else 0
 
-        raw = self._read_entry_from_source(entry_id, source_file, headword, entry_link)
+        raw = self._read_entry_from_source(entry_id, source_file, headword, entry_link, keep_acc)
         if raw is not None:
             self._loaded_raw[entry_id] = raw.rstrip('\n')
             xml_text = raw
@@ -544,13 +546,14 @@ class MarkupMainWindow(QMainWindow):
             self._loaded_raw.pop(entry_id, None)
             xml_text = self.search_engine.get_full_entry(entry_id) or ''
 
-        self.current_result = (result[0], result[1], xml_text, result[3], source_file)
+        self.current_result = (result[0], result[1], xml_text, result[3], source_file, keep_acc)
         self.current_occurrence = occurrence
         self.editor.pane.set_entry(result[0], xml_text)
         if self._is_sub_headword(result):
-            self.editor.pane.mark_sub_hw(result[1], occurrence)
+            self.editor.pane.mark_sub_hw(
+                result[1], occurrence, keep_acc, separate_occurrences)
         else:
-            self.editor.pane.mark_main_non_d(result[1], occurrence)
+            self.editor.pane.mark_main_non_d(result[1], occurrence, keep_acc)
         self._has_unsaved = False
 
         is_checked = self.checked_state.is_checked(source_file, result[3], result[1])
@@ -560,7 +563,7 @@ class MarkupMainWindow(QMainWindow):
         self._refresh_broken_highlight()
         self._refresh_link_marks()
 
-    def _read_entry_from_source(self, entry_id, source_file, headword=None, entry_link=None):
+    def _read_entry_from_source(self, entry_id, source_file, headword=None, entry_link=None, keep_acc=0):
         if not source_file:
             return None
         if headword is None and self.current_result and self.current_result[0] == entry_id:
@@ -572,7 +575,7 @@ class MarkupMainWindow(QMainWindow):
         if loaded is None:
             return None
         blocks = loaded['blocks']
-        t_norm = normalize_headword(headword) if headword else None
+        t_norm = hw_identity(headword, keep_acc) if headword else None
         link_norm = normalize_headword(entry_link) if entry_link else None
 
         def _matches_own_entry(candidates):
@@ -645,9 +648,9 @@ class MarkupMainWindow(QMainWindow):
     @staticmethod
     def _block_headwords(block):
         norms = []
-        for m in re.finditer(r'<hw\b[^>]*>(.*?)</hw>', block, re.DOTALL):
-            inner = re.sub(r'<[^>]+>', '', m.group(1))
-            norms.append(normalize_headword(inner.strip()))
+        for m in re.finditer(r'<hw\b([^>]*)>(.*?)</hw>', block, re.DOTALL):
+            inner = re.sub(r'<[^>]+>', '', m.group(2))
+            norms.append(hw_identity(inner.strip(), has_keep_acc(m.group(1))))
         return norms
 
     @staticmethod
@@ -717,7 +720,10 @@ class MarkupMainWindow(QMainWindow):
         if current and current[4]:
             result = self._find_current_result()
             if result is not None:
-                self._load_result(result)
+                self._load_result(result, self.current_occurrence, self._separate_occurrences_mode())
+
+    def _separate_occurrences_mode(self):
+        return self._duplicates_toggle.isChecked() or self._broken_mode is not None
 
     def _find_current_result(self):
         current = self.current_result
