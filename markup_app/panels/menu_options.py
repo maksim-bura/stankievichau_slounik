@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel
 from dictionary_app.theme.layout_constants import MENU_OPTION_MARGINS, SEARCH_BOX_HEIGHT
 from dictionary_app.theme.styles import COLOR_DISABLED_FG
 from dictionary_app.utils.constants import CHECK_MARK, CHECK_BLANK
+from dictionary_app.widgets.emoji_label import set_emoji_prefixed_text
 
 
 class MenuCommandOption(QWidget):
@@ -39,7 +40,7 @@ class BrokenCheckOption(QWidget):
 
     def _update_display(self):
         glyph = CHECK_MARK if self._checked else CHECK_BLANK
-        self._label.setText(f'{glyph} {self._text}')
+        set_emoji_prefixed_text(self._label, glyph, self._text)
         if not self._active:
             self._label.setStyleSheet(f'color: {COLOR_DISABLED_FG};')
         else:

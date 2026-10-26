@@ -52,7 +52,7 @@ stankievichau_slounik/
 | `remove_accents.py` | `remove_accents` |
 | `sort_keys.py` | `alphabet_sort_key`, `entry_id_sort_key`, `encode_order_key` |
 | `normalize_headword.py` | `strip_quotes`, `resolve_headword`, `has_keep_acc`, `normalize_jo_to_je` |
-| `collapse_duplicates.py` | `collapse_same_entry_duplicates` |
+| `collapse_duplicates.py` | `collapse_with_identities`, `collapse_same_entry_duplicates` |
 | `compile_search_regex.py` | `compile_search_regex` |
 | `extract_content_text.py` | `is_excluded_child`, `content_text`, `hw_text_excluding_n`, `d_hw_variants`, `index_text` |
 | `measure_scrollbars.py` | `scrollbar_extent`, `vertical_scrollbar_shown`, `overlay_right_inset` |
@@ -93,10 +93,12 @@ stankievichau_slounik/
   identical list rows (e.g. `зачапіцца` returns entry 88 twice). Keep it `ALL` —
   the markup duplicate-group filter relies on every row being visible. The
   results LIST collapses same-entry duplicates to one row via
-  `collapse_same_entry_duplicates` (key = DB entry id + accent-resolved headword,
-  first occurrence wins); genuine homonyms in DIFFERENT entries stay, and the SQL
-  is never narrowed. The build enforces the same invariant: `insert_entry` emits
-  EVERY non-`excl`, non-main `<hw>` as a `sub_headwords` row with **no dedup**.
+  `collapse_with_identities` (key = DB entry id + accent-resolved headword,
+  first occurrence wins; it also returns each surviving row's identity so the
+  list never re-resolves it); genuine homonyms in DIFFERENT entries stay, and
+  the SQL is never narrowed. The build enforces the same invariant: `insert_entry`
+  emits EVERY non-`excl`, non-main `<hw>` as a `sub_headwords` row with **no
+  dedup**.
 
 ### Content Index
 
@@ -438,15 +440,18 @@ headwords. Never drop it on one layer only.
 - `DictTextBrowser` (QTextBrowser subclass) in a `QVBoxLayout` with
   `NavigationBar` above.
 - Read-only, no external links (`setOpenExternalLinks(False)`), `ClickFocus`.
-- `DictTextBrowser` installs `NoBlueFocusFrameStyle` and sets `ENTRY_STYLESHEET`
-  as the document stylesheet.
+- `DictTextBrowser` installs `NoBlueFocusFrameStyle`, sets `ENTRY_STYLESHEET`
+  as the document stylesheet, and calls `setOpenLinks(False)`. Link navigation
+  is handled ONLY by `anchorClicked` handlers. QTextBrowser's built-in
+  `setSource` is non-virtual, so a Python `setSource` override cannot stop a
+  click: without `setOpenLinks(False)` a custom-scheme click tries to load the
+  URL, fails, and CLEARS the document. Keep the override for direct Python calls
+  (`word:`, `source:`, `preview:`, checked against `SCHEME_*`).
 - Document margin: `DOCUMENT_MARGIN` left/right via `rootFrame().frameFormat()` —
   **re-applied on every `setHtml`** (Qt resets the root frame format).
 - `stored_html` holds the last displayed HTML for refresh/restore.
 - `ScrollState` handles anchor scroll, resize re-scroll, and cached state restore
   (see Scroll State).
-- `setSource` is overridden to block QTextBrowser navigation for `word:`,
-  `source:`, and `preview:` (checked against `SCHEME_*`).
 - `display_entry(result, formatter)` formats `result[2]` (the entry XML) and
   stores the HTML.
 
@@ -477,15 +482,27 @@ headwords. Never drop it on one layer only.
   text exceeds `viewport().width() - RESULTS_ITEM_PADDING` (`Qt.ElideRight`);
   `helpEvent` tests at HOVER time and calls `QToolTip.showText` directly (no
   `ToolTipRole`). Keep the strict `>` comparison.
+- **Tooltip show/hide (preserve):** `helpEvent` passes `view.viewport()` and
+  `option.rect` (viewport coordinates) to `QToolTip.showText`, so Qt hides the tip
+  ~300 ms after the cursor leaves the row instead of leaving it until Leave or the
+  display-time expiry. `SearchResultsList` wraps the viewport style in
+  `TooltipDelayStyle`, lowering `SH_ToolTip_WakeUpDelay` to
+  `RESULTS_TOOLTIP_WAKE_UP_DELAY` (400 ms). Keep the proxy on the list
+  (`_tooltip_style`) — PySide deletes an unreferenced style object. `MainWindow`
+  applies `GLOBAL_STYLE` AFTER constructing the list (the stylesheet must wrap,
+  never re-wrap, that proxy); the ordering is required.
 - Tooltip = the row's `DisplayRole` (accent-RESOLVED headword).
-- Font: Cambria/Times New Roman, 12pt bold (via `GLOBAL_STYLE`, which also covers
-  `QListView`).
+- Font: single-family `'Cambria'` (`FONT_STACK`), 12pt bold (via `GLOBAL_STYLE`,
+  which also covers `QListView`) — see Startup Latency.
 - Item CSS in `RESULTS_LIST_STYLE` (`QListView::item`): 3px left border
   transparent idle / grey hover / blue selected; white → hover → selected
   background; text always black.
-- `display_results(results)` collapses same-entry duplicates, stores
-  `current_results`, clears selection and the entry viewer, indexes rows into
-  `_by_headword`/`_by_identity`/`_by_id`, sets model rows, selects row 0.
+- `display_results(results)` calls `collapse_with_identities` once (collapsed
+  rows + accent-resolved identities in the same pass), stores
+  `current_results`, clears selection and the entry viewer, builds
+  `_by_headword`/`_by_identity`/`_by_id` from those identities, reuses them for
+  the model display rows, and selects row 0. Never re-resolve a row in a second
+  loop.
 - `on_clicked(index, formatter, display_entry, scroll_to_anchor)` indexes
   **positionally** into `current_results[index.row()]` (bounds-guarded). It
   materializes the lazy row (`materialize_result`), computes `<hw>` equality via
@@ -543,7 +560,17 @@ headwords. Never drop it on one layer only.
 - Toggle button (`SourcesButton`): `BOOKS_MARKER`, `MenuButton` subclass.
 - Loaded from `dictionary_app/data/sources.xml`; HTML from
   `format/render_sources.build_filtered_html`.
+- **Lazy load (preserve):** `sources.xml` is parsed only on first use via
+  `_ensure_loaded()` (called from `_rebuild_content`, `scroll_to_source`,
+  `_on_search`, `toggle`), so window startup never pays for it. `content` /
+  `original_content` are `None` until then.
 - Search filters sections by text; no match renders `strings.nav.no_results`.
+- **Parse-once rendering:** in search mode `build_filtered_html` parses each
+  `<section>` once while collecting matches and passes those parsed groups to
+  `_render_section`; with no search it parses lazily in the render pass. Never
+  parse a section twice. `section_matches` remains the standalone predicate used
+  by `SourcesPanel`'s auto-expand pass and shares the same `_parse_section`
+  result shape.
 - `sources.xml` with no `<entry>` children → content `'<body></body>'` (no
   message string).
 - Visibility tracked in `sources_visible`, toggled by the button.
@@ -555,10 +582,30 @@ headwords. Never drop it on one layer only.
   (`toggle-section:{id}`), rendered with
   `COLLAPSED_TRIANGLE_ENTITY`/`EXPANDED_TRIANGLE_ENTITY`; `ARROW_MARKER` is
   injected after the anchor span whose id was passed as `marker_anchor`.
-- `scroll_to_source(abbr)`: strips trailing `:`/`.` for anchor lookup,
-  auto-expands collapsed sections containing the target, calls
-  `QApplication.processEvents()` before scrolling, then restores the focused
-  widget and scroll position.
+- `scroll_to_source(abbr, was_visible=None)`: strips trailing `:`/`.` for anchor
+  lookup, auto-expands collapsed sections containing the target, calls
+  `QApplication.processEvents()` before scrolling on the rebuild path, then
+  restores the focused widget and scroll position.
+- **Repeat-anchor fast path (preserve):** when the panel is already visible and
+  neither search nor section expansion changed the HTML, `scroll_to_source` does
+  NOT rebuild: `_move_marker` removes the old `👉` and inserts it at the target
+  anchor with `QTextCursor`, `self.content` is refreshed with
+  `build_filtered_html` for later renders, and the view scrolls. It rebuilds
+  (one `setHtml`, wrapped in `setUpdatesEnabled(False/True)`) only when the panel
+  was hidden, search was open, a collapsed section expanded, or the marker/anchor
+  lookup fails. The fast path must stay identical to a fresh render in plain
+  text, marker format, and anchor scroll. It must NOT call
+  `QApplication.processEvents()`: the scroll has to be applied before the next
+  paint, otherwise the old anchor paints first (the blink).
+- **Qt anchor quirk (preserve):** `scrollToAnchor` only resolves a fragment whose
+  `QTextCharFormat` has BOTH `isAnchor()` and matching `anchorNames()`; names
+  alone scroll to 0. Marker insertion therefore clones the target anchor's first
+  character format and calls `setAnchor(True)`; `_restore_anchor` does the same
+  for the previous anchor.
+- `show_panel()` / `SourcesToggle.reveal(...)`: show and resize the panel WITHOUT
+  rendering. `MainWindow.open_source` reveals first, then runs the single
+  `scroll_to_source` render, and calls `entry_viewer.refresh()` only when the
+  panel was hidden.
 - `SourcesToggle` resizes the splitter (half entry / half sources) on show; on
   hide it combines entry+sources width back.
 
@@ -844,6 +891,60 @@ headwords. Never drop it on one layer only.
 
 ## Performance / Scale Notes
 
+### Startup Latency
+
+Measured with `py -3` (Python 3.14): both launchers reach first paint in
+~0.3–0.4 s. Do not undo these without re-measuring end-to-end.
+
+- **`FONT_STACK` is the single family `'Cambria'`.** A multi-family stack
+  (`'Cambria', 'Times New Roman', Times, serif`) resolves to the identical face
+  and metrics but costs ~0.15–0.25 s on the first shaping pass. Do not add
+  fallbacks back.
+- **Emoji must be shaped with `'Segoe UI Emoji'` (`EMOJI_FONT_STACK`).** Shaping
+  an emoji glyph under Cambria triggers an expensive fallback at first paint.
+  Use the emoji-aware variants: `EMOJI_FLAT_BUTTON_STYLE`,
+  `MENU_BUTTON_EMOJI_STYLE` / `menu_button_style(font_family=…)` /
+  `MenuButton(emoji_font=True)`, and `flat_button_style(font_family=…)`.
+  Mixed glyph+text `QLabel`s use rich text via `set_emoji_prefixed_text`
+  (`dictionary_app/widgets/emoji_label.py`), which puts ONLY the glyph in an
+  emoji-font span. Widget-level style beats `setFont`. Rendering is
+  pixel-identical to the old whole-stack version.
+- **`dictionary_app/__init__.py` is lazy** (PEP 562 `__getattr__`): importing the
+  package (as `markup_app` does) does not import `main_window`. Keep
+  `from dictionary_app import MainWindow` working through `__getattr__`.
+- **Initial all-entries load is deferred** to `QTimer.singleShot(0, …)` after the
+  first `showEvent` (see Key UI Wiring) and **`SourcesPanel` parses
+  `sources.xml` lazily** (see Sources Panel).
+
+### Runtime Hot Paths
+
+- **One resolve per list row:** `collapse_with_identities` returns the collapsed
+  rows and their accent-resolved identities from the same pass; the dictionary
+  list, its lookup indexes, and its model display rows all reuse those values.
+  Filter modes in the markup list compute identities once while building rows.
+- **Sources render parses once:** `build_filtered_html` reuses the
+  `_parse_section` result for matching and rendering (see Sources Panel).
+- **Sources marker moves are incremental:** a repeat `scroll_to_source` on a
+  visible, unchanged panel moves only the `👉` marker instead of rebuilding the
+  document (one `setHtml` per first open/search/expansion, see Sources Panel).
+- **Save patches only changed rows:** `_apply_saved_result` compares each
+  same-entry model row before replacing it and emits `dataChanged` only for the
+  contiguous runs that actually changed (usually none for unchanged saves).
+- **Hash indexes in the broken-link analyzer:** `BrokenLinkAnalyzer` builds
+  compact (single-value-first) indexes for rows-by-entry, raw/normalized
+  headword, raw/normalized link, and `hw_xml_id`, so `entry=`/`hw=` attribute
+  classification is a lookup instead of a scan over every headword row. They are
+  cleared by `invalidate()` together with the flags cache.
+- **Source reads trust their index:** `_read_entry_from_source` uses the cached
+  `by_headword` index directly instead of re-running `_block_matches` over each
+  candidate block.
+- **Row tooltips touch no model state:** `ElidingDelegate.helpEvent` shows the
+  hovered row's text directly, with the viewport style proxy lowering only the
+  wake-up delay (see Results List); no `ToolTipRole` request or per-row widget
+  is created.
+
+### Scale
+
 - Already scale-safe: trigram FTS5 for headword (`headword_fts`/`sub_headword_fts`)
   and content (`content_fts_t`/`content_fts_ex`), precomputed `collation_key`,
   list rows carrying `NULL` instead of entry XML, indexes on the normalized
@@ -868,8 +969,10 @@ headwords. Never drop it on one layer only.
   `_consume_next_press` makes `mousePressEvent` consume the release so the menu
   does NOT immediately re-open. Keep this workaround.
 - **`show_all_entries()` first-show guard**: runs on the FIRST `showEvent` only
-  (guarded by `_initial_shown`), so the initial load happens after the window is
-  visible. Both apps use this.
+  (guarded by `_initial_shown`), deferred with `QTimer.singleShot(0,
+  self._initial_load)` so the first paint happens before the all-entries query;
+  `_initial_load` returns immediately if the search box already has text, so an
+  early user query is never overwritten. Both apps use this.
 - **Result-click state writes in `on_result_clicked`**: captures
   `old_target`/`old_senses` from the display state, stores
   `current_display_target = applied_target`, then unconditionally resets

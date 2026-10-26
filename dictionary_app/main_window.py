@@ -3,7 +3,7 @@ from urllib.parse import unquote
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListView, QSplitter, QApplication
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from dictionary_app.format.link_handler import LinkHandler
 from dictionary_app.utils.normalize_headword import resolve_headword
 from dictionary_app.utils.remove_accents import remove_accents
@@ -56,7 +56,6 @@ class MainWindow(QMainWindow):
         self.entry_scroll_manager = self.entry_viewer.scroll_manager
 
         self.setup_ui()
-        self.load_styles()
         install_global_copy(self)
 
         self.results_list = SearchResultsList(
@@ -74,11 +73,19 @@ class MainWindow(QMainWindow):
 
         self.entry_viewer.navigation_bar.close_button.clicked.connect(self._dismiss_highlight)
 
+        # Applied after SearchResultsList: the app stylesheet must wrap its tooltip proxy style.
+        self.load_styles()
+
     def showEvent(self, event):
         super().showEvent(event)
         if not self._initial_shown:
             self._initial_shown = True
-            self.show_all_entries()
+            QTimer.singleShot(0, self._initial_load)
+
+    def _initial_load(self):
+        if self.search_box.text():
+            return
+        self.show_all_entries()
 
     def open_entry_by_headword_nav(self, headword, sense_parts, entry_row_id=None, target=None):
         self.open_entry_by_headword(headword, sense_parts, from_navigation=True,
@@ -257,10 +264,17 @@ class MainWindow(QMainWindow):
     def open_source(self, source_abbreviation):
         formatter.clear_target()
         self.entry_scroll_manager.cache_scroll()
-        if not self.sources_visible:
-            self.toggle_sources()
-        self.sources_panel.scroll_to_source(source_abbreviation)
-        self.entry_viewer.refresh()
+        was_visible = self.sources_visible
+        if not was_visible:
+            results_width = RESULTS_MIN_WIDTH if self.results_visible else 0
+            self.sources_toggle.reveal(
+                self.sources_panel, self.sources_button, results_width,
+                self.bottom_splitter, ENTRY_MIN_WIDTH, SOURCES_MIN_WIDTH)
+            self.sources_visible = True
+            self._update_min_width()
+        self.sources_panel.scroll_to_source(source_abbreviation, was_visible=was_visible)
+        if not was_visible:
+            self.entry_viewer.refresh()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

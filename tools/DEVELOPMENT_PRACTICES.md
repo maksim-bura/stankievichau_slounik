@@ -372,6 +372,16 @@ composing those primitives** — not by extending or aliasing a lower-level
 
 ### 8.6 Performance and memory (200,000 headwords)
 
+- **Optimize from measurement, not intuition.** Measure the real entry point
+  before changing it and re-measure after; a change that cannot be shown to
+  move the number is churn.
+- **Balance speed against footprint.** Never buy faster startup or computation
+  with an unbounded cache, a larger on-disk artifact, or permanently retained
+  state; every cached byte must be cheaper than recomputing it.
+- **Separate disposable caches from data.** Bytecode (`__pycache__`) and
+  memoization tables may be discarded and rebuilt freely; databases
+  (`dictionary.db`), user progress (`markup_checked.json`), and source XML are
+  data and must never be deleted as an "optimization".
 - Audit hot paths for algorithmic complexity; prefer `O(n)` / `O(log n)` over
   `O(n²)` as input grows.
 - Eliminate repeated work: never re-parse, re-normalize, or re-materialize data
@@ -383,6 +393,11 @@ composing those primitives** — not by extending or aliasing a lower-level
   loops.
 - Watch memory retention: do not hold large XML strings or parsed roots longer
   than necessary.
+- **Reference catalog:** `tools/SOFTWARE_OPTIMIZATION_TECHNIQUES.md` is a
+  menu of optimization techniques by level (architecture, algorithms, data
+  structures, memory, I/O, databases, concurrency, deployment). Consult it when
+  choosing an approach, but it is guidance, not a mandate: measurement and the
+  footprint rules above decide whether a technique is used.
 
 ### 8.7 Constants and styling
 

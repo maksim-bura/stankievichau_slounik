@@ -24,6 +24,6 @@ class ElidingDelegate(QStyledItemDelegate):
             if text:
                 max_width = self._view.viewport().width() - RESULTS_ITEM_PADDING
                 if option.fontMetrics.horizontalAdvance(text) > max_width:
-                    QToolTip.showText(event.globalPos(), text, view)
+                    QToolTip.showText(event.globalPos(), text, view.viewport(), option.rect)
                     return True
         return super().helpEvent(event, view, option, index)

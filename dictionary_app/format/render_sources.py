@@ -19,10 +19,19 @@ def build_filtered_html(all_children, collapsed_sections, search_text=None, mark
     pattern = compile_search_regex(search_text) if search_text else None
     parts = ['<body>']
 
-    matching_sections = [
-        child for child in all_children
-        if child.tag == 'section' and (pattern is None or section_matches(child, pattern))
-    ]
+    matching_sections = []
+    for child in all_children:
+        if child.tag != 'section':
+            continue
+        if pattern is None:
+            matching_sections.append((child, None))
+            continue
+        sec_children = list(child)
+        if not sec_children or sec_children[0].tag != 'h2':
+            continue
+        parsed = _parse_section(child)
+        if _parsed_section_matches(parsed, pattern):
+            matching_sections.append((child, parsed))
 
     section_idx = 0
     needs_br = False
@@ -34,11 +43,14 @@ def build_filtered_html(all_children, collapsed_sections, search_text=None, mark
             parts.append('<br>')
         elif child.tag == 'section':
             seen_section = True
-            if section_idx < len(matching_sections) and child is matching_sections[section_idx]:
+            if section_idx < len(matching_sections) and child is matching_sections[section_idx][0]:
                 if needs_br:
                     parts.append('<br>')
                     parts.append('<br>')
-                _render_section(parts, child, pattern, collapsed_sections)
+                _render_section(
+                    parts, child, pattern, collapsed_sections,
+                    matching_sections[section_idx][1],
+                )
                 while parts and parts[-1] == '<br>':
                     parts.pop()
                 section_idx += 1
@@ -78,20 +90,26 @@ def _parse_section(section):
     return h2_elem, h2_br, gabbr_groups, content_groups
 
 
-def section_matches(section, pattern):
-    sec_children = list(section)
-    if not sec_children or sec_children[0].tag != 'h2':
-        return False
-    _, _, gabbr_groups, content_groups = _parse_section(section)
+def _parsed_section_matches(parsed, pattern):
+    _, _, gabbr_groups, content_groups = parsed
     return any(
         _group_matches(g, pattern)
         for g in gabbr_groups + content_groups
     )
 
 
-def _render_section(parts, section, pattern, collapsed_sections):
+def section_matches(section, pattern):
+    sec_children = list(section)
+    if not sec_children or sec_children[0].tag != 'h2':
+        return False
+    return _parsed_section_matches(_parse_section(section), pattern)
+
+
+def _render_section(parts, section, pattern, collapsed_sections, parsed=None):
     section_id = section.get('id', '')
-    h2_elem, h2_br, gabbr_groups, content_groups = _parse_section(section)
+    if parsed is None:
+        parsed = _parse_section(section)
+    h2_elem, h2_br, gabbr_groups, content_groups = parsed
 
     is_collapsed = section_id in collapsed_sections
     button = (f'<a class="toggle-btn" href="{SCHEME_TOGGLE_SECTION}:{section_id}">'

@@ -16,6 +16,7 @@ class NoBlueFocusFrameStyle(QProxyStyle):
 class DictTextBrowser(QTextBrowser):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setOpenLinks(False)
         self.setStyle(NoBlueFocusFrameStyle(self.style()))
         self.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
 

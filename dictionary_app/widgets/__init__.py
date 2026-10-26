@@ -6,4 +6,5 @@ from .settings_button import SettingsButton
 from .insert_letter_g_button import INSERT_LETTER_G, InsertLetterGButton
 from .dict_text_browser import DictTextBrowser
 from .eliding_delegate import ElidingDelegate
+from .tooltip_delay_style import TooltipDelayStyle
 from .navigate_rows import clamped_row, navigate_rows, select_row

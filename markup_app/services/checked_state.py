@@ -50,6 +50,8 @@ class CheckedState:
         self.save()
 
     def migrate(self, conn):
+        if not self._states:
+            return
         try:
             rows = conn.execute(
                 "SELECT id, headword, entry_link, source_file FROM dictionary"

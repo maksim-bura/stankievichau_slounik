@@ -5,7 +5,7 @@ from dictionary_app.utils.constants import BOOKS_MARKER
 
 class SourcesButton(MenuButton):
     def __init__(self, parent=None):
-        super().__init__(BOOKS_MARKER, strings.app_buttons.sources.tooltip, parent)
+        super().__init__(BOOKS_MARKER, strings.app_buttons.sources.tooltip, parent, emoji_font=True)
         self.sources_visible = False
         self.update_style()
 

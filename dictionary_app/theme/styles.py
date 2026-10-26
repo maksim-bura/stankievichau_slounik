@@ -1,4 +1,5 @@
-FONT_STACK = "'Cambria', 'Times New Roman', Times, serif"
+FONT_STACK = "'Cambria'"
+EMOJI_FONT_STACK = "'Segoe UI Emoji'"
 
 FONT_SIZE_BASE = '12pt'
 FONT_SIZE_HEADING_LARGE = '16pt'
@@ -69,12 +70,14 @@ GLOBAL_STYLE = (
 )
 
 
-def flat_button_style(padding=PADDING_NONE, declarations='', hover=''):
+def flat_button_style(padding=PADDING_NONE, declarations='', hover='', font_family=None):
+    font = f"        font-family: {font_family};\n" if font_family else ''
     style = (f"    QPushButton {{\n"
              f"        border: none;\n"
              f"        background-color: transparent;\n"
              f"        color: black;\n"
              f"        padding: {padding};\n"
+             f"{font}"
              f"{declarations}"
              f"    }}\n")
     if hover:
@@ -83,10 +86,13 @@ def flat_button_style(padding=PADDING_NONE, declarations='', hover=''):
 
 
 FLAT_BUTTON_STYLE = flat_button_style()
+EMOJI_FLAT_BUTTON_STYLE = flat_button_style(font_family=EMOJI_FONT_STACK)
 
 SEARCH_BOX_STYLE = LINEEDIT_RULE
 
-MENU_BUTTON_STYLE = f"""
+
+def menu_button_style(font_family=FONT_STACK):
+    return f"""
     QPushButton[class="menu-button"] {{
         background-color: {COLOR_HOVER_BG};
         color: black;
@@ -94,7 +100,7 @@ MENU_BUTTON_STYLE = f"""
         border: {BORDER_WIDTH_THICK} solid {COLOR_BORDER_DEFAULT};
         border-radius: {BORDER_RADIUS_MEDIUM};
         padding: {PADDING_MEDIUM};
-        font-family: {FONT_STACK};
+        font-family: {font_family};
         font-size: {FONT_SIZE_BASE};
     }}
     QPushButton[class="menu-button"]:hover {{
@@ -113,6 +119,10 @@ MENU_BUTTON_STYLE = f"""
         background-color: {COLOR_BUTTON_PRESSED_HOVER};
     }}
 """
+
+
+MENU_BUTTON_STYLE = menu_button_style()
+MENU_BUTTON_EMOJI_STYLE = menu_button_style(EMOJI_FONT_STACK)
 
 RESULTS_LIST_STYLE = f"""
     QListView::item {{

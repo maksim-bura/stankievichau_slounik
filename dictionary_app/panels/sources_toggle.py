@@ -35,6 +35,12 @@ class SourcesToggle:
         sizes = bottom_splitter.sizes()
         bottom_splitter.setSizes([results_width + sizes[1], 0])
 
+    def reveal(self, sources_panel, sources_button, results_width, bottom_splitter,
+               entry_min_width, sources_min_width):
+        sources_panel.show_panel()
+        sources_button.set_sources_visible(True)
+        self._handle_showing(results_width, entry_min_width, sources_min_width, bottom_splitter)
+
     def toggle(self, sources_visible, sources_panel, sources_button, results_width, bottom_splitter, entry_min_width, sources_min_width):
         was_visible = sources_visible
         sizes_before = bottom_splitter.sizes() if was_visible else None

@@ -1,10 +1,14 @@
 from PySide6.QtCore import Qt, QAbstractListModel, QModelIndex, QItemSelectionModel
 from PySide6.QtWidgets import QListView
-from dictionary_app.utils.collapse_duplicates import collapse_same_entry_duplicates
+from dictionary_app.utils.collapse_duplicates import collapse_with_identities
 from dictionary_app.utils.normalize_headword import resolve_headword
 from dictionary_app.utils.item_roles import ROLE_HEADWORD
-from dictionary_app.theme.layout_constants import RESULTS_MIN_WIDTH
-from dictionary_app.widgets import ElidingDelegate, navigate_rows, select_row
+from dictionary_app.theme.layout_constants import (
+    RESULTS_MIN_WIDTH, RESULTS_TOOLTIP_WAKE_UP_DELAY,
+)
+from dictionary_app.widgets import (
+    ElidingDelegate, TooltipDelayStyle, navigate_rows, select_row,
+)
 
 
 class ResultsListModel(QAbstractListModel):
@@ -50,30 +54,37 @@ class SearchResultsList:
         self._view.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self._view.setUniformItemSizes(True)
         self._view.setItemDelegate(ElidingDelegate(self._view))
+        viewport = self._view.viewport()
+        self._tooltip_style = TooltipDelayStyle(viewport.style(), RESULTS_TOOLTIP_WAKE_UP_DELAY)
+        viewport.setStyle(self._tooltip_style)
 
     def display_results(self, results):
-        results = collapse_same_entry_duplicates(results)
+        results, identities = collapse_with_identities(results)
         self.current_results = results
         self._view.clearSelection()
         self.entry_viewer.clear()
 
-        self._index_results()
+        self._index_results(identities)
 
         self._model.set_rows([
-            (resolve_headword(r[1], r[6] if len(r) > 6 else 0), r[1])
-            for r in results
+            (identity, result[1])
+            for identity, result in zip(identities, results)
         ])
 
         if results:
             self._select_row(0)
 
-    def _index_results(self):
+    def _index_results(self, identities=None):
         by_headword = {}
         by_identity = {}
         by_id = {}
-        for result in self.current_results:
+        if identities is None:
+            identities = [
+                resolve_headword(result[1], result[6] if len(result) > 6 else 0)
+                for result in self.current_results
+            ]
+        for result, identity in zip(self.current_results, identities):
             headword = result[1]
-            identity = resolve_headword(headword, result[6] if len(result) > 6 else 0)
             by_headword.setdefault(headword, result)
             by_identity.setdefault(identity, result)
             by_id.setdefault(result[0], result)

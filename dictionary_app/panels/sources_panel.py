@@ -2,6 +2,7 @@ import os
 import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget, QGridLayout, QHBoxLayout
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QTextCursor
 from dictionary_app.utils.scroll_state import ScrollState
 from dictionary_app.utils.measure_scrollbars import overlay_right_inset
 from dictionary_app.localization import strings
@@ -13,7 +14,9 @@ from dictionary_app.utils.compile_search_regex import compile_search_regex
 from dictionary_app.format.render_sources import (
     build_filtered_html, normalize_anchor, section_matches
 )
-from dictionary_app.utils.constants import CROSS_MARKER, MAGNIFIER_MARKER, SCHEME_TOGGLE_SECTION
+from dictionary_app.utils.constants import (
+    ARROW_MARKER, CROSS_MARKER, MAGNIFIER_MARKER, SCHEME_TOGGLE_SECTION
+)
 
 
 class SourcesPanel:
@@ -26,7 +29,7 @@ class SourcesPanel:
         self.content = None
         self.current_anchor = None
         self._all_children = None
-        self.load_content()
+        self._anchor_texts = {}
 
         self.container = QWidget()
         self.container_layout = QVBoxLayout()
@@ -91,6 +94,11 @@ class SourcesPanel:
         self._collapsed_sections = set()
         self._pre_search_content = None
         self._pre_search_collapsed = None
+
+    def _ensure_loaded(self):
+        if self._all_children is not None:
+            return
+        self.load_content()
         if self._all_children:
             self.content = build_filtered_html(self._all_children, self._collapsed_sections)
         else:
@@ -105,6 +113,11 @@ class SourcesPanel:
         tree = ElementTree.parse(sources_path)
         entry = tree.getroot().find('entry')
         self._all_children = list(entry) if entry is not None else []
+        self._anchor_texts = {
+            normalize_anchor(abbr.text): abbr.text
+            for abbr in tree.getroot().iter('abbr')
+            if abbr.text
+        }
 
     def open_search_bar(self):
         self.search_visible = True
@@ -123,12 +136,69 @@ class SourcesPanel:
         self.floating_button.setVisible(True)
 
     def _rebuild_content(self, **kwargs):
+        self._ensure_loaded()
         self.content = build_filtered_html(self._all_children, self._collapsed_sections, **kwargs)
         self.viewer.setHtml(self.content)
 
     def _show_panel(self):
         self.container.show()
         self._update_floating_button_inset()
+
+    def show_panel(self):
+        self._show_panel()
+
+    def _anchor_position(self, anchor):
+        document = self.viewer.document()
+        block = document.begin()
+        while block.isValid():
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                if fragment.isValid() and anchor in fragment.charFormat().anchorNames():
+                    return fragment.position()
+                iterator += 1
+            block = block.next()
+        return -1
+
+    def _restore_anchor(self, anchor, position):
+        if not anchor or self._anchor_position(anchor) >= 0:
+            return
+        cursor = QTextCursor(self.viewer.document())
+        cursor.setPosition(position)
+        cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 1)
+        anchor_format = cursor.charFormat()
+        anchor_format.setAnchor(True)
+        anchor_format.setAnchorNames([anchor])
+        cursor.mergeCharFormat(anchor_format)
+
+    def _move_marker(self, anchor, previous_anchor=None):
+        text = self._anchor_texts.get(anchor)
+        if not text:
+            return False
+        document = self.viewer.document()
+        old_marker = document.find(ARROW_MARKER)
+        if not old_marker.isNull():
+            old_position = old_marker.selectionStart()
+            old_marker.removeSelectedText()
+            self._restore_anchor(previous_anchor, old_position)
+        position = self._anchor_position(anchor)
+        if position < 0:
+            return False
+        selection = QTextCursor(document)
+        selection.setPosition(position)
+        selection.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, len(text))
+        if selection.selectedText() != text:
+            return False
+        anchor_format = QTextCursor(document)
+        anchor_format.setPosition(position)
+        anchor_format.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 1)
+        marker_format = anchor_format.charFormat()
+        marker_format.setAnchor(True)
+        marker_format.setAnchorNames([anchor])
+        marker = QTextCursor(document)
+        marker.setPosition(position)
+        marker.insertText(ARROW_MARKER, marker_format)
+        return True
 
     def _capture_view_state(self):
         return (self.main_window.entry_viewer.get_viewer().hasFocus(),
@@ -140,10 +210,13 @@ class SourcesPanel:
             self.main_window.entry_viewer.get_viewer().setFocus()
 
     def _expand_matching_sections(self, predicate):
+        expanded = False
         for child in self._all_children:
             if child.tag == 'section' and child.get('id') in self._collapsed_sections:
                 if predicate(child):
                     self._collapsed_sections.discard(child.get('id'))
+                    expanded = True
+        return expanded
 
     def _section_has_anchor(self, section, anchor):
         return any(anchor == normalize_anchor(abbr.text) for abbr in section.iter('abbr'))
@@ -168,8 +241,10 @@ class SourcesPanel:
         else:
             self.main_window.on_link_clicked(url)
 
-    def scroll_to_source(self, source_abbreviation):
-        if self.search_visible:
+    def scroll_to_source(self, source_abbreviation, was_visible=None):
+        self._ensure_loaded()
+        was_search = self.search_visible
+        if was_search:
             self.close_search_bar()
         else:
             self.search_line.clear()
@@ -179,27 +254,41 @@ class SourcesPanel:
 
         anchor = source_abbreviation.rstrip(':').rstrip('.')
 
-        self._expand_matching_sections(
+        expanded = self._expand_matching_sections(
             lambda section: self._section_has_anchor(section, anchor))
 
+        previous_anchor = self.current_anchor
         self.current_anchor = anchor
-        was_visible = self.sources_visible
+        if was_visible is None:
+            was_visible = self.sources_visible
 
         if was_visible:
             old_focus, current_scroll = self._capture_view_state()
 
-        self._rebuild_content(marker_anchor=anchor)
+        if was_visible and not was_search and not expanded and self._move_marker(anchor, previous_anchor):
+            self.content = build_filtered_html(
+                self._all_children, self._collapsed_sections, marker_anchor=anchor)
+            self.scroll_manager.scroll_to_anchor(anchor)
+            return
 
-        if not was_visible:
-            self._show_panel()
-            self.sources_visible = True
-        else:
-            self._restore_view_state(old_focus, current_scroll)
+        updates_enabled = self.viewer.updatesEnabled()
+        self.viewer.setUpdatesEnabled(False)
+        try:
+            self._rebuild_content(marker_anchor=anchor)
 
-        QApplication.processEvents()
-        self.scroll_manager.scroll_to_anchor(anchor)
+            if not was_visible:
+                self._show_panel()
+                self.sources_visible = True
+            else:
+                self._restore_view_state(old_focus, current_scroll)
+
+            QApplication.processEvents()
+            self.scroll_manager.scroll_to_anchor(anchor)
+        finally:
+            self.viewer.setUpdatesEnabled(updates_enabled)
 
     def _on_search(self, text):
+        self._ensure_loaded()
         if not text:
             restored = self._pre_search_content or self.original_content
             self.content = restored
@@ -223,6 +312,7 @@ class SourcesPanel:
             self._rebuild_content(search_text=text)
 
     def toggle(self):
+        self._ensure_loaded()
         self.sources_visible = not self.sources_visible
         if self.sources_visible:
             if self.content:

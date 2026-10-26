@@ -5,9 +5,9 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListView, QApplication, QPushButton,
     QMessageBox, QMenu, QWidgetAction
 )
-from PySide6.QtCore import Qt, QPoint, QEvent, QRect, QItemSelectionModel
+from PySide6.QtCore import Qt, QPoint, QEvent, QRect, QItemSelectionModel, QTimer
 from PySide6.QtGui import QCursor
-from dictionary_app.utils.collapse_duplicates import collapse_same_entry_duplicates
+from dictionary_app.utils.collapse_duplicates import collapse_with_identities
 from dictionary_app.utils.normalize_headword import has_keep_acc, resolve_headword
 from dictionary_app.utils.xml_schema import ATTR_ID
 from dictionary_app.db.build_database import build_database, get_source_path, reindex_entry
@@ -26,13 +26,15 @@ from markup_app.panels.apply_pressed import apply_pressed
 from markup_app.panels.border_delegate import BorderDelegate
 from markup_app.panels.menu_options import BrokenCheckOption, MenuCommandOption
 from markup_app.panels.results_list_model import ResultsListModel
-from markup_app.theme.styles import ( MARKUP_GLOBAL_STYLE, ENTRY_LIST_STYLE, REBUILD_BUTTON_STYLE )
+from markup_app.theme.styles import (
+    MARKUP_GLOBAL_STYLE, ENTRY_LIST_STYLE, REBUILD_BUTTON_STYLE
+)
 from markup_app.localization import strings
 from dictionary_app.theme.layout_constants import (
     RESULTS_MIN_WIDTH, ENTRY_MIN_WIDTH, WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT,
     LAYOUT_MARGINS, LAYOUT_SPACING, TOP_LAYOUT_SPACING, BUTTON_SIZE
 )
-from dictionary_app.theme.styles import MENU_BUTTON_STYLE
+from dictionary_app.theme.styles import MENU_BUTTON_EMOJI_STYLE
 from dictionary_app.utils.constants import CHECK_MARK, CHECK_BLANK
 from dictionary_app.utils.item_roles import ( ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_ENTRY_ID, )
 from markup_app.utils.constants import ( RELOAD_MARKER, DUPLICATES_MARKER, BROKEN_LINKS_MARKER, )
@@ -94,7 +96,12 @@ class MarkupMainWindow(QMainWindow):
         super().showEvent(event)
         if not getattr(self, '_initial_shown', False):
             self._initial_shown = True
-            self.show_all_entries()
+            QTimer.singleShot(0, self._initial_load)
+
+    def _initial_load(self):
+        if self.search_box.text():
+            return
+        self.show_all_entries()
 
     def setup_ui(self):
         central_widget = QWidget()
@@ -116,7 +123,7 @@ class MarkupMainWindow(QMainWindow):
         self._duplicates_toggle.setFixedSize(BUTTON_SIZE)
         self._duplicates_toggle.setCursor(Qt.PointingHandCursor)
         self._duplicates_toggle.setProperty("class", "menu-button")
-        self._duplicates_toggle.setStyleSheet(MENU_BUTTON_STYLE)
+        self._duplicates_toggle.setStyleSheet(MENU_BUTTON_EMOJI_STYLE)
         self._duplicates_toggle.setToolTip(strings.app_buttons.duplicates.tooltip)
         self._duplicates_toggle.clicked.connect(self._on_duplicates_toggle)
         apply_pressed(self._duplicates_toggle)
@@ -126,7 +133,7 @@ class MarkupMainWindow(QMainWindow):
         self._broken_links_toggle.setFixedSize(BUTTON_SIZE)
         self._broken_links_toggle.setCursor(Qt.PointingHandCursor)
         self._broken_links_toggle.setProperty("class", "menu-button")
-        self._broken_links_toggle.setStyleSheet(MENU_BUTTON_STYLE)
+        self._broken_links_toggle.setStyleSheet(MENU_BUTTON_EMOJI_STYLE)
         self._broken_links_toggle.setToolTip(strings.app_buttons.broken_links.tooltip)
         self._broken_links_toggle.clicked.connect(self._on_broken_links_toggle)
         apply_pressed(self._broken_links_toggle)
@@ -257,11 +264,14 @@ class MarkupMainWindow(QMainWindow):
             displayed = self._duplicate_resolver.filter(results) if self._duplicates_toggle.isChecked() else results
             if self._broken_mode is not None:
                 displayed = self._broken_filter(displayed, self._broken_mode)
+            identities = [
+                resolve_headword(r[1], r[6] if len(r) > 6 else 0)
+                for r in displayed
+            ]
         else:
-            displayed = collapse_same_entry_duplicates(results)
+            displayed, identities = collapse_with_identities(results)
         self._by_id_headword = {(r[0], r[1], r[3]): r for r in displayed}
-        self.results_model.set_rows(
-            [(resolve_headword(r[1], r[6] if len(r) > 6 else 0), r) for r in displayed])
+        self.results_model.set_rows(list(zip(identities, displayed)))
 
         if displayed:
             select_row(self.results_box, self.results_model, 0)
@@ -570,11 +580,7 @@ class MarkupMainWindow(QMainWindow):
                 return _matches_own_entry(candidates)
 
         if t_norm:
-            candidates = []
-            for i in loaded['by_headword'].get(t_norm, ()):
-                block = blocks[i]
-                if self._block_matches(block, t_norm):
-                    candidates.append(i)
+            candidates = loaded['by_headword'].get(t_norm)
             if candidates:
                 return _matches_own_entry(candidates)
         return None
@@ -790,21 +796,39 @@ class MarkupMainWindow(QMainWindow):
                     r[0], headword, r[2], entry_link, r[4], r[5], keep_acc
                 )
         rows = self.results_model.rows
-        for i, (_display, result) in enumerate(rows):
+        changed = []
+        for i, (display, result) in enumerate(rows):
             if result[0] != entry_id:
                 continue
-            rows[i] = (
-                resolve_headword(headword, keep_acc),
-                (result[0], headword, result[2], entry_link, result[4],
-                 result[5], keep_acc),
+            new_result = (
+                result[0], headword, result[2], entry_link, result[4],
+                result[5], keep_acc,
             )
-        if rows:
-            self.results_model.dataChanged.emit(
-                self.results_model.index(0, 0),
-                self.results_model.index(len(rows) - 1, 0),
-            )
+            new_display = resolve_headword(headword, keep_acc)
+            if display == new_display and result == new_result:
+                continue
+            rows[i] = (new_display, new_result)
+            changed.append(i)
+        run_start = None
+        run_end = None
+        for i in changed:
+            if run_start is None:
+                run_start = run_end = i
+            elif i == run_end + 1:
+                run_end = i
+            else:
+                self._emit_rows_changed(run_start, run_end)
+                run_start = run_end = i
+        if run_start is not None:
+            self._emit_rows_changed(run_start, run_end)
         self._by_id_headword = {(r[0], r[1], r[3]): r for _display, r in rows}
         self._sub_headword_cache.clear()
+
+    def _emit_rows_changed(self, start, end):
+        self.results_model.dataChanged.emit(
+            self.results_model.index(start, 0),
+            self.results_model.index(end, 0),
+        )
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_S and event.modifiers() == Qt.ControlModifier:

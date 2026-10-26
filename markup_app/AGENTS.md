@@ -55,6 +55,10 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   `RESULTS_MIN_WIDTH`, horizontal scrollbar off.
 - Editor container min width `ENTRY_MIN_WIDTH`.
 - Global stylesheet: `MARKUP_GLOBAL_STYLE`.
+- **Deferred initial load:** the first `showEvent` schedules
+  `QTimer.singleShot(0, self._initial_load)` once (`_initial_shown`); the load
+  only runs when the search box is still empty (see `dictionary_app/AGENTS.md` →
+  Key UI Wiring).
 
 ### Toolbar Buttons (`MarkupMainWindow.setup_ui`)
 
@@ -73,16 +77,20 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 - **Same-entry duplicate collapse (NORMAL list only):** with NO filter active
   (`_duplicates_toggle` off AND `_broken_mode is None`), `_display_results`
   collapses rows sharing a DB entry id + accent-resolved headword via
-  `collapse_same_entry_duplicates` (first occurrence wins). With either filter
-  active the collapse is skipped, so the 👯 groups/⛓️‍💥 flags are inspected per
-  row. Clicking a collapsed row passes `occurrence=0` → first matching `<hw>`.
+  `collapse_with_identities` (first occurrence wins). It reuses the returned
+  identities for the model display rows (no second resolve); with either filter
+  active the collapse is skipped and identities are computed once while the
+  rows are built, so the 👯 groups/⛓️‍💥 flags are inspected per row. Clicking a
+  collapsed row passes `occurrence=0` → first matching `<hw>`.
 - **Broken-links toggle** (`_broken_links_toggle`): checkable,
   `BROKEN_LINKS_MARKER` (⛓️‍💥), tooltip `app_buttons.broken_links.tooltip`.
   Right-click opens `_broken_menu` — three independent checks from
   `app_buttons.broken_links.dropdown.*`: `missing_links`, `unresolved_links`,
   `ambiguous_g`, built as `BrokenCheckOption(text, checked=…)` rows mirroring the
   settings menu (CHECK_MARK/CHECK_BLANK + label, `SEARCH_BOX_HEIGHT` min-height,
-  `MENU_OPTION_MARGINS`, `COLOR_DISABLED_FG` on the sole disabled one); at least
+  `MENU_OPTION_MARGINS`, `COLOR_DISABLED_FG` on the sole disabled one); the label
+  is rich text from `set_emoji_prefixed_text` (glyph span in
+  `EMOJI_FONT_STACK`, text in `FONT_STACK`). At least
   one stays checked (`_sync_broken_option_active` disables the only-checked one).
   Clicking keeps the menu OPEN and re-filters live
   (`_on_broken_category_toggled`); all three checked = `MODE_UNION`, a subset =
@@ -96,6 +104,13 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   `app_buttons.rebuild_database.tooltip`, `_on_rebuild` (confirms leaving a dirty
   entry, closes the engine, `build_database()` full rebuild, clears
   caches/resolver, restores the previous search and entry).
+- **Emoji font (startup, preserve):** every emoji-only button pins
+  `EMOJI_FONT_STACK` in its per-widget stylesheet — `_duplicates_toggle` /
+  `_broken_links_toggle` → `MENU_BUTTON_EMOJI_STYLE`, `_rebuild_button` →
+  `REBUILD_BUTTON_STYLE`, checked toggle / Save button →
+  `ENTRY_CHECKED_TOGGLE_STYLE`. Mixed glyph+text labels use
+  `set_emoji_prefixed_text` (rich text). Rationale: see
+  `dictionary_app/AGENTS.md` → Startup Latency.
 - **Insert-ґ button** (`_insert_letter_g_button`): shared `InsertLetterGButton`
   between search box and duplicates toggle (see `dictionary_app/AGENTS.md` → Insert
   Letter G Button).
@@ -146,7 +161,8 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   owns visual state: background + left-border color per state, driven by
   `CheckedState.is_checked(...)` + hover + selection. Hover tracking via
   `eventFilter` on the viewport (MouseMove + Leave); `set_hovered_row` drives the
-  hover paint.
+  hover paint. It inherits the shared elided-row tooltip behavior (row-limited
+  show/hide, see `dictionary_app/AGENTS.md` → Results List).
 - First result row auto-selected after `_display_results` (via `select_row`).
 - Keyboard nav: Up/Down from `SearchBox` → `navigate_rows` (shared helper);
   Enter → `_on_activate` → `on_result_clicked(currentIndex())`.
@@ -165,7 +181,8 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 - API: `is_checked(source_file, entry_link, headword)`, `toggle(...)` (returns the
   new state and persists), `uncheck_all()`, `save()`, `migrate(conn)`.
 - `migrate(conn)` runs at startup and rewrites legacy keys (e.g.
-  `{entry_id}:{headword}`) to the current schema.
+  `{entry_id}:{headword}`) to the current schema. It no-ops when the state is
+  empty, so a fresh install pays no DB work.
 - Visual states via `BorderDelegate.paint()` using the shared palette
   (`COLOR_NORMAL_BG`/`COLOR_HOVER_BG`/`COLOR_SELECTED_BG`/
   `COLOR_BORDER_DEFAULT`/`COLOR_BORDER_SELECTED` from
@@ -479,13 +496,16 @@ tag on every keystroke.
      saved entry's new `headword` / `entry_link` / `keep_acc`, keeping each row's
      own `source_file`; then refresh link markers. This matches on `entry_id`
      alone, so sub-headword rows of that entry also take the main headword.
+     Rows are compared before replacement, and `dataChanged` is emitted only for
+     the contiguous runs that actually changed (no full-model repaint).
      `_by_id_headword` is rebuilt and `_sub_headword_cache` cleared afterwards.
 - `_read_entry_from_source(entry_id, source_file, headword=None, entry_link=None,
   keep_acc=0)`: matches a raw `<entry>` block by **entry XML ID** (`entry_link`,
   normalized accent- and ё-insensitively, via the `by_link` index) and/or by
-  headword (`_block_matches`, accent- and ё-normalized, case-preserving). Returns
-  `None` if nothing matches or on `ParseError`/`OSError` — NEVER falls back to the
-  first entry.
+  headword through the memoized `by_headword` index (accent- and ё-normalized,
+  case-preserving; the index already guarantees the match, so the ID-less path
+  does not re-scan candidates with `_block_matches`). Returns `None` if nothing
+  matches or on `ParseError`/`OSError` — NEVER falls back to the first entry.
 - **Ambiguous headword/ID match → disambiguate by the row's own entry XML:** when
   ID-less lookup yields several candidates (distinct entries collided on a
   normalized headword, e.g. `ча́пацца`/`чапа́цца`, or two entries sharing a
@@ -556,6 +576,13 @@ tag on every keystroke.
   main), cached and invalidated with the flags. Matching uses `normalize_headword`
   = `remove_accents(...)` (NEVER `ё`→`е`), quote-strip, `<n>`-tail append
   mirroring the formatting link-target logic.
+- **Attribute lookup indexes:** the same row cache feeds compact
+  (single-value-first) hash indexes for rows-by-entry, raw and accent-stripped
+  headwords, raw and accent-stripped links, and `hw_xml_id`. `entry=` resolves
+  its candidate ids from headword/link keys; `hw=` from headword/`hw_xml_id`
+  keys; per-entry narrowing uses the rows-by-entry key. All are cleared by
+  `invalidate()` with the flags cache, so a saved entry can never be classified
+  against stale row identities.
 - **Sense-tail stripping** (`split_sense_tail`, applied to every see-word at the
   top of classification): removes a trailing Arabic-digit sense list and returns
   the numbers, so `<see>абразок 1, 2</see>` is checked as `абразок` with
@@ -621,6 +648,9 @@ tag on every keystroke.
   rewrite/reformat it; targeted key edits only (see `dictionary_app/AGENTS.md` →
   Writing Conventions).
 - Markup-specific styles in `markup_app/theme/styles.py`.
+- Button styles that render an emoji must use `EMOJI_FONT_STACK`; mixed
+  glyph+text labels go through `set_emoji_prefixed_text` (see Toolbar Buttons →
+  Emoji font).
 - Shared styles/palette (`ENTRY_STYLESHEET`, `COLOR_HIGHLIGHT_BG`,
   `COLOR_NORMAL_BG`, `MENU_BUTTON_STYLE`, `GLOBAL_STYLE`, `flat_button_style`, …)
   imported from `dictionary_app/theme/styles.py`; markup-only palette

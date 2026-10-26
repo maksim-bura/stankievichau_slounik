@@ -5,6 +5,7 @@ from dictionary_app.localization import strings
 from dictionary_app.theme.layout_constants import SEARCH_BOX_HEIGHT, MENU_OPTION_MARGINS, MENU_INDENT_MARGINS
 from dictionary_app.theme.styles import COLOR_DISABLED_FG
 from dictionary_app.utils.constants import CHECK_MARK, CHECK_BLANK, RADIO_ON, RADIO_OFF, GEAR_MARKER
+from dictionary_app.widgets.emoji_label import set_emoji_prefixed_text
 from dictionary_app.widgets.menu_button import MenuButton
 
 
@@ -28,7 +29,7 @@ class _ToggleOption(QWidget):
 
     def _update_display(self):
         prefix = self._glyph_checked if self._checked else self._glyph_unchecked
-        self._label.setText(f'{prefix} {self._text}')
+        set_emoji_prefixed_text(self._label, prefix, self._text)
 
     def set_checked(self, checked):
         self._checked = checked
@@ -82,7 +83,7 @@ class SettingsButton(MenuButton):
     search_mode_changed = Signal()
 
     def __init__(self, sources_button=None, parent=None):
-        super().__init__(GEAR_MARKER, strings.app_buttons.settings.tooltip, parent)
+        super().__init__(GEAR_MARKER, strings.app_buttons.settings.tooltip, parent, emoji_font=True)
         self._sources_button = sources_button
         self._consume_next_press = False
 

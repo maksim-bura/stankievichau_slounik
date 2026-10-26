@@ -55,6 +55,25 @@ def strip_tags(text):
     return _TAG_RE.sub('', text)
 
 
+def _index_add(index, key, value):
+    existing = index.get(key)
+    if existing is None:
+        index[key] = value
+    elif isinstance(existing, list):
+        existing.append(value)
+    else:
+        index[key] = [existing, value]
+
+
+def _index_values(index, key):
+    value = index.get(key)
+    if value is None:
+        return ()
+    if isinstance(value, list):
+        return value
+    return (value,)
+
+
 def split_sense_tail(text):
     if not text:
         return text, []
@@ -95,6 +114,7 @@ class BrokenLinkAnalyzer:
         self._exact_index = None
         self._entry_senses = None
         self._entry_indexes = None
+        self._row_index_cache = None
 
     def invalidate(self):
         self._flags = None
@@ -103,6 +123,7 @@ class BrokenLinkAnalyzer:
         self._exact_index = None
         self._entry_senses = None
         self._entry_indexes = None
+        self._row_index_cache = None
 
     def flags(self):
         if self._flags is not None:
@@ -318,6 +339,58 @@ class BrokenLinkAnalyzer:
         self._exact_index = index
         return index
 
+    def _row_indexes(self):
+        if self._row_index_cache is not None:
+            return self._row_index_cache
+        raw_hw = {}
+        norm_hw = {}
+        raw_link = {}
+        norm_link = {}
+        by_hw_xml_id = {}
+        by_entry = {}
+        for i, (entry_id, headword, link, hw_xml_id, _keep_acc) in enumerate(
+            self._headword_rows()
+        ):
+            _index_add(by_entry, entry_id, i)
+            _index_add(raw_hw, headword, i)
+            _index_add(norm_hw, remove_accents(headword), i)
+            if link:
+                _index_add(raw_link, link, i)
+                _index_add(norm_link, remove_accents(link), i)
+            if hw_xml_id:
+                _index_add(by_hw_xml_id, hw_xml_id, i)
+        self._row_index_cache = {
+            'raw_hw': raw_hw,
+            'norm_hw': norm_hw,
+            'raw_link': raw_link,
+            'norm_link': norm_link,
+            'hw_xml_id': by_hw_xml_id,
+            'by_entry': by_entry,
+        }
+        return self._row_index_cache
+
+    def _entry_attr_ids(self, attr):
+        rows = self._headword_rows()
+        index = self._row_indexes()
+        if remove_accents(attr) != attr:
+            hw_ids = _index_values(index['raw_hw'], attr)
+            link_ids = _index_values(index['raw_link'], attr)
+        else:
+            hw_ids = _index_values(index['norm_hw'], attr)
+            link_ids = _index_values(index['norm_link'], attr)
+        ids = {rows[i][0] for i in hw_ids}
+        ids.update(rows[i][0] for i in link_ids)
+        return ids
+
+    def _hw_attr_indexes(self, attr):
+        index = self._row_indexes()
+        if remove_accents(attr) != attr:
+            matched = set(_index_values(index['raw_hw'], attr))
+        else:
+            matched = set(_index_values(index['norm_hw'], attr))
+        matched.update(_index_values(index['hw_xml_id'], attr))
+        return matched
+
     def _entry_id_indexes(self):
         if self._entry_indexes is not None:
             return self._entry_indexes
@@ -446,29 +519,24 @@ class BrokenLinkAnalyzer:
 
         def handle_attrs():
             if entry_attr:
-                entry_ids = {
-                    entry_id for entry_id, headword, _link, _hw, _keep_acc in rows
-                    if (_link and attr_matches(entry_attr, _link))
-                    or attr_matches(entry_attr, headword)
-                }
+                entry_ids = self._entry_attr_ids(entry_attr)
                 if not entry_ids:
                     return OUTCOME_MISSING, None
                 if len(entry_ids) > 1:
                     return OUTCOME_UNRESOLVED, None
                 entry_id = next(iter(entry_ids))
-                in_entry = [
-                    row for row in rows if row[0] == entry_id
-                ]
+                in_entry = _index_values(
+                    self._row_indexes()['by_entry'], entry_id
+                )
                 if hw_attr:
+                    hw_ids = self._hw_attr_indexes(hw_attr)
                     matched = [
-                        row for row in in_entry
-                        if (row[3] and row[3] == hw_attr)
-                        or attr_matches(hw_attr, row[1])
+                        rows[i] for i in in_entry if i in hw_ids
                     ]
                 else:
                     matched = [
-                        row for row in in_entry
-                        if normalize_headword(row[1]) == norm
+                        rows[i] for i in in_entry
+                        if normalize_headword(rows[i][1]) == norm
                     ]
                 if len(matched) == 1:
                     return self._finalize_resolved(matched[0], senses)
@@ -498,13 +566,8 @@ class BrokenLinkAnalyzer:
         return (outcome or OUTCOME_UNRESOLVED), row
 
     def _hw_attr_rows(self, attr):
-        matches = []
-        for entry_id, headword, link, hw_xml_id, keep_acc in self._headword_rows():
-            if hw_xml_id and hw_xml_id == attr:
-                matches.append((entry_id, headword, link, hw_xml_id, keep_acc))
-            elif attr_matches(attr, headword):
-                matches.append((entry_id, headword, link, hw_xml_id, keep_acc))
-        return matches
+        rows = self._headword_rows()
+        return [rows[i] for i in sorted(self._hw_attr_indexes(attr))]
 
     def _span_flags(self, block):
         try:

@@ -1,7 +1,7 @@
 from dictionary_app.theme.styles import (
     COLOR_BORDER_DEFAULT, COLOR_BORDER_SELECTED, COLOR_BUTTON_HOVER, COLOR_BUTTON_PRESSED_HOVER,
-    COLOR_HOVER_BG, COLOR_MENU_PRESSED_FG, COLOR_NORMAL_BG, COLOR_SELECTED_BG, FONT_STACK,
-    GLOBAL_STYLE, flat_button_style
+    COLOR_HOVER_BG, COLOR_MENU_PRESSED_FG, COLOR_NORMAL_BG, COLOR_SELECTED_BG, EMOJI_FONT_STACK,
+    FONT_STACK, GLOBAL_STYLE, flat_button_style
 )
 
 COLOR_D_SPAN_UNDERLINE = '#c2571a'
@@ -76,7 +76,15 @@ ATTRIBUTE_POPUP_STYLE = f"""
     }}
 """
 
-_TOGGLE_BUTTON_BASE = f"""
+ENTRY_CHECKED_TOGGLE_STYLE = flat_button_style(
+    padding='2px 6px',
+    declarations=(
+        f"        font-family: {EMOJI_FONT_STACK};\n"
+        f"        font-size: 12pt;\n"
+    ),
+)
+
+REBUILD_BUTTON_STYLE = f"""
     QPushButton {{
         background-color: {COLOR_HOVER_BG};
         color: {COLOR_TEXT};
@@ -84,23 +92,12 @@ _TOGGLE_BUTTON_BASE = f"""
         border: 2px solid {COLOR_BORDER_DEFAULT};
         border-radius: 5px;
         padding: 5px;
-        font-family: {FONT_STACK};
+        font-family: {EMOJI_FONT_STACK};
         font-size: 12pt;
     }}
     QPushButton:hover {{
         background-color: {COLOR_BUTTON_HOVER};
     }}
-"""
-
-ENTRY_CHECKED_TOGGLE_STYLE = flat_button_style(
-    padding='2px 6px',
-    declarations=(
-        f"        font-family: {FONT_STACK};\n"
-        f"        font-size: 12pt;\n"
-    ),
-)
-
-REBUILD_BUTTON_STYLE = _TOGGLE_BUTTON_BASE + f"""
     QPushButton:pressed {{
         background-color: {COLOR_SELECTED_BG};
         color: {COLOR_MENU_PRESSED_FG};
