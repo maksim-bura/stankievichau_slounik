@@ -1,6 +1,6 @@
 import json
 import os
-from dictionary_app.utils.text_utils import remove_accents
+from dictionary_app.utils.remove_accents import remove_accents
 
 
 class CheckedState:
@@ -61,14 +61,11 @@ class CheckedState:
         for rowid, headword, entry_link, source_file in rows:
             by_src_hw.setdefault((source_file, headword), set()).add(entry_link)
 
-        def resolve(headword, entry_link, source_file):
-            return self._key(source_file, entry_link, headword)
-
         def rewrite(key):
             if ':' not in key:
                 if key.isdigit() and int(key) in by_id:
                     hw, link, src = by_id[int(key)]
-                    return [resolve(hw, link, src)]
+                    return [self._key(src, link, hw)]
                 return None
             first, _, rest = key.partition(':')
             if first.isdigit():
@@ -76,12 +73,12 @@ class CheckedState:
                     return None
                 hw, link, src = by_id[int(first)]
                 if remove_accents(rest) == remove_accents(hw):
-                    return [resolve(hw, link, src)]
+                    return [self._key(src, link, hw)]
                 return None
             source_file = first
             if (source_file, rest) in by_src_hw:
                 links = by_src_hw[(source_file, rest)]
-                return [resolve(rest, link, source_file) for link in links]
+                return [self._key(source_file, link, rest) for link in links]
             return None
 
         migrated = {}

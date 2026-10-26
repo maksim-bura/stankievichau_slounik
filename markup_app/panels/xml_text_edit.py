@@ -1,88 +1,54 @@
 import re
+from bisect import bisect_left
 from html import unescape
 
-from PySide6.QtWidgets import (
-    QTextEdit, QListWidget, QListWidgetItem, QApplication, QToolTip
-)
-from PySide6.QtCore import Qt, QTimer, QRect
-from PySide6.QtGui import (
-    QTextCursor, QTextCharFormat, QColor, QPainter, QFont, QPen,
-    QFontMetricsF, QPalette,
-)
+from PySide6.QtWidgets import ( QTextEdit, QListWidgetItem, QApplication, QToolTip )
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import ( QTextCursor, QTextCharFormat, QFontMetricsF, )
 
 from dictionary_app.widgets.dict_text_browser import NoBlueFocusFrameStyle
 from markup_app.theme.layout_constants import (
-    LINK_TOOLTIP_DELAY_MS, TOOLTIP_WIDTH_FACTOR, TOOLTIP_WIDTH_PAD,
+    COMPLETION_FRAME_PADDING, COMPLETION_MIN_WIDTH, COMPLETION_ROW_PADDING,
+    LINK_TOOLTIP_DELAY_MS, TOOLTIP_WIDTH_FACTOR, TOOLTIP_WIDTH_PAD
 )
-from markup_app.theme.styles import ATTRIBUTE_POPUP_STYLE
-from markup_app.theme.widget_styles import (
-    COLOR_D_SPAN_UNDERLINE, COLOR_AMBIGUOUS_G_BG, COLOR_AMBIGUOUS_HW_BG,
+from markup_app.theme.styles import (
+    COLOR_AMBIGUOUS_G_BG, COLOR_AMBIGUOUS_HW_BG, COLOR_D_SPAN_UNDERLINE
 )
-from dictionary_app.theme.widget_styles import COLOR_HIGHLIGHT_BG, FONT_STACK
+from dictionary_app.theme.styles import COLOR_HIGHLIGHT_BG, FONT_STACK
 from dictionary_app.utils.xml_schema import BOOL as _ATTR_BOOL
-from markup_app.services.attribute_completion import (
-    detect_context as _detect_completion_context,
-)
-from markup_app.panels.xml_tag_parsing import (
+from markup_app.panels.attribute_popup import AttributePopup
+from markup_app.panels.build_selections import ( background_selections, underline_selections, )
+from markup_app.services.completion_context import detect_context as _detect_completion_context
+from markup_app.utils.constants import LINK_MARKER, LINK_PLACEHOLDER
+from markup_app.services.parse_xml_tags import (
     entry_block_span, find_hw_occurrence, find_hw_occurrences, find_rogue_tags,
-    innermost_d_span, is_inside_tag, is_name_char, non_d_region_hw_count,
-    non_d_regions, pair_at_deletion_boundary, partner_tag, scan_tags,
+    innermost_d_span, is_inside_tag, is_name_char, non_d_region_hw_count, non_d_regions,
+    pair_at_deletion_boundary, partner_tag, placeholder_clean_starts, placeholder_positions,
+    scan_tags
 )
 
 
-LINK_MARKER = '\U0001F517'
-_LINK_MARK_COLOR = QColor(70, 130, 180)
-COMPLETION_MIN_WIDTH = 80
-_PAIR_SELECT_RE = re.compile(r'^(<\w+[^>]*>)(.*)(</\w+>)$')
+_PAIR_SELECT_RE = re.compile(
+    r'^(<' + LINK_MARKER + r'?\w+[^>]*>)(.*)(</\w+>)$'
+)
 
 
-class AttributePopup(QListWidget):
-    MAX_VISIBLE = 8
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowFlags(
-            Qt.Tool
-            | Qt.FramelessWindowHint
-            | Qt.WindowStaysOnTopHint
-            | Qt.WindowDoesNotAcceptFocus
-        )
-        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setFocusPolicy(Qt.NoFocus)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setUniformItemSizes(True)
-        self.setStyleSheet(ATTRIBUTE_POPUP_STYLE)
-        palette = self.palette()
-        palette.setColor(QPalette.Text, QColor('black'))
-        palette.setColor(QPalette.HighlightedText, QColor('black'))
-        self.setPalette(palette)
+def strip_link_markers(text):
+    return text.replace(LINK_MARKER, '')
 
 
 class XmlTextEdit(QTextEdit):
+    link_marks_stale = Signal()
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setStyle(NoBlueFocusFrameStyle(self.style()))
         self.setStyleSheet(f'font-family: {FONT_STACK}; font-size: 12pt;')
         self.setAcceptRichText(False)
-        self._pending_tag_delete = False
         self._pending_open_tag = None
         self._pending_close_tag = None
-        self._pending_delete_forward = None
-        self._pair_delete_snapshot = None
-        self._last_deleted_open = None
-        self._last_deleted_close = None
-        self._last_deleted_forward = None
-        self._rogue_tags = []
-        self._d_span_sels = []
-        self._non_d_underline = []
-        self._target_hw = None
-        self._separate_occurrences = False
-        self._broken_link_spans = []
-        self._grammar_g_spans = []
-        self._grammar_hw_spans = []
-        self._link_marks = []
-        self._link_mark_tooltips = {}
+        self.reset_state()
+        self._last_scan_text = None
         self._hovered_link_mark = None
         self._pending_link_tooltip = None
         self._link_tooltip_timer = QTimer(self)
@@ -94,8 +60,30 @@ class XmlTextEdit(QTextEdit):
         self._completion_popup.itemClicked.connect(self._accept_completion_item)
         self.cursorPositionChanged.connect(self._reset_pending_tag_delete)
         self.textChanged.connect(self._check_pair_restore)
+        self.textChanged.connect(self._on_scan_changed)
         self.textChanged.connect(self._schedule_rogue_scan)
         self.textChanged.connect(self._hide_completion)
+
+    def reset_state(self):
+        self._pending_tag_delete = False
+        self._pending_delete_forward = None
+        self._pair_delete_snapshot = None
+        self._last_deleted_open = None
+        self._last_deleted_close = None
+        self._last_deleted_forward = None
+        self._rogue_tags = []
+        self._d_span_sels = []
+        self._non_d_underline = []
+        self._non_d_target = None
+        self._target_hw = None
+        self._separate_occurrences = False
+        self._broken_link_spans = []
+        self._grammar_g_spans = []
+        self._grammar_hw_spans = []
+        self._link_marks = []
+        self._link_mark_tooltips = {}
+        self._link_mark_texts = set()
+        self._emoji_clean_starts = []
 
     def _reset_pending_tag_delete(self):
         if self._pending_tag_delete:
@@ -139,78 +127,15 @@ class XmlTextEdit(QTextEdit):
     def insertFromMimeData(self, source):
         text = source.text()
         if text:
+            text = text.replace(LINK_MARKER, '')
+        if text:
             cursor = self.textCursor()
             cursor.beginEditBlock()
             try:
                 self.insertPlainText(text)
+                self._on_scan_changed()
             finally:
                 cursor.endEditBlock()
-
-    def _build_pair_selections(self, open_tag, close_tag):
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor(COLOR_HIGHLIGHT_BG))
-
-        sel_open = QTextEdit.ExtraSelection()
-        sel_open.format = fmt
-        sel_open.cursor = self.textCursor()
-        sel_open.cursor.setPosition(open_tag['start'])
-        sel_open.cursor.setPosition(open_tag['end'], QTextCursor.KeepAnchor)
-
-        sel_close = QTextEdit.ExtraSelection()
-        sel_close.format = fmt
-        sel_close.cursor = self.textCursor()
-        sel_close.cursor.setPosition(close_tag['start'])
-        sel_close.cursor.setPosition(close_tag['end'], QTextCursor.KeepAnchor)
-
-        return [sel_open, sel_close]
-
-    def _build_rogue_selections(self):
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor(COLOR_HIGHLIGHT_BG))
-        sels = []
-        for tag in self._rogue_tags:
-            sel = QTextEdit.ExtraSelection()
-            sel.format = fmt
-            sel.cursor = self.textCursor()
-            sel.cursor.setPosition(tag['start'])
-            sel.cursor.setPosition(tag['end'], QTextCursor.KeepAnchor)
-            sels.append(sel)
-        return sels
-
-    def _build_broken_link_selections(self):
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor(COLOR_HIGHLIGHT_BG))
-        sels = []
-        for start, end in self._broken_link_spans:
-            sel = QTextEdit.ExtraSelection()
-            sel.format = fmt
-            sel.cursor = self.textCursor()
-            sel.cursor.setPosition(start)
-            sel.cursor.setPosition(end, QTextCursor.KeepAnchor)
-            sels.append(sel)
-        return sels
-
-    def _build_grammar_selections(self):
-        sels = []
-        for start, end in self._grammar_g_spans:
-            fmt = QTextCharFormat()
-            fmt.setBackground(QColor(COLOR_AMBIGUOUS_G_BG))
-            sel = QTextEdit.ExtraSelection()
-            sel.format = fmt
-            sel.cursor = self.textCursor()
-            sel.cursor.setPosition(start)
-            sel.cursor.setPosition(end, QTextCursor.KeepAnchor)
-            sels.append(sel)
-        for start, end in self._grammar_hw_spans:
-            fmt = QTextCharFormat()
-            fmt.setBackground(QColor(COLOR_AMBIGUOUS_HW_BG))
-            sel = QTextEdit.ExtraSelection()
-            sel.format = fmt
-            sel.cursor = self.textCursor()
-            sel.cursor.setPosition(start)
-            sel.cursor.setPosition(end, QTextCursor.KeepAnchor)
-            sels.append(sel)
-        return sels
 
     def _highlight_tag_pair(self, open_tag, close_tag):
         self.setExtraSelections(
@@ -221,7 +146,7 @@ class XmlTextEdit(QTextEdit):
         QTimer.singleShot(0, self._rescan_rogues)
 
     def _rescan_rogues(self):
-        self._rogue_tags = find_rogue_tags(self.toPlainText())
+        self._rogue_tags = find_rogue_tags(self._scan_text())
         if (
             self._pending_tag_delete
             and self._pending_open_tag
@@ -233,10 +158,30 @@ class XmlTextEdit(QTextEdit):
         else:
             self._refresh_selections()
 
+    def _refresh_non_d_underline(self):
+        key, occurrence_index = self._non_d_target
+        text = self._scan_text()
+        self._non_d_underline = []
+        self._target_hw = None
+        match = find_hw_occurrence(text, key, occurrence_index)
+        if match is None:
+            return
+        open_tag, _close_tag = innermost_d_span(text, match.start())
+        if open_tag is not None:
+            return
+        entry = entry_block_span(text)
+        if entry is None:
+            return
+        a, b = entry
+        if not re.search(r'<d\b', text[a:b]):
+            return
+        self._target_hw = (key, occurrence_index)
+        self._non_d_underline = non_d_regions(text, a, b)
+
     def _compute_d_span_sels(self):
         if self._non_d_underline or self._target_hw is None:
             return []
-        text = self.toPlainText()
+        text = self._scan_text()
         key = self._target_hw[0]
         if self._separate_occurrences:
             single = find_hw_occurrence(text, key, self._target_hw[1])
@@ -259,98 +204,203 @@ class XmlTextEdit(QTextEdit):
                 continue
             seen.add(span)
             spans.append(span)
-        fmt = QTextCharFormat()
-        fmt.setFontUnderline(True)
-        fmt.setUnderlineColor(QColor(COLOR_D_SPAN_UNDERLINE))
-        sels = []
-        for start, end in spans:
-            cursor = self.textCursor()
-            cursor.setPosition(start)
-            cursor.setPosition(end, QTextCursor.KeepAnchor)
-            sel = QTextEdit.ExtraSelection()
-            sel.format = fmt
-            sel.cursor = cursor
-            sels.append(sel)
-        return sels
+        return underline_selections(self, spans, COLOR_D_SPAN_UNDERLINE)
+
+    def _clean_spans(self, spans):
+        return [
+            (self._clean_to_qt(start), self._clean_to_qt(end))
+            for start, end in spans
+        ]
 
     def _build_composed_selections(self, pair=None):
+        if self._non_d_target is not None:
+            self._refresh_non_d_underline()
         if self._target_hw is not None:
             self._d_span_sels = self._compute_d_span_sels()
         else:
             self._d_span_sels = []
         sels = []
         if pair is not None:
-            sels.extend(self._build_pair_selections(pair[0], pair[1]))
-        sels.extend(self._build_rogue_selections())
-        sels.extend(self._build_broken_link_selections())
-        sels.extend(self._build_grammar_selections())
-        sels.extend(self._build_non_d_underline_selections())
+            sels.extend(background_selections(
+                self,
+                [(pair[0]['start'], pair[0]['end']),
+                 (pair[1]['start'], pair[1]['end'])],
+                COLOR_HIGHLIGHT_BG,
+            ))
+        sels.extend(background_selections(
+            self,
+            [(tag['start'], tag['end']) for tag in self._rogue_tags],
+            COLOR_HIGHLIGHT_BG,
+        ))
+        sels.extend(background_selections(
+            self, self._clean_spans(self._broken_link_spans),
+            COLOR_HIGHLIGHT_BG,
+        ))
+        sels.extend(background_selections(
+            self, self._clean_spans(self._grammar_g_spans),
+            COLOR_AMBIGUOUS_G_BG,
+        ))
+        sels.extend(background_selections(
+            self, self._clean_spans(self._grammar_hw_spans),
+            COLOR_AMBIGUOUS_HW_BG,
+        ))
+        sels.extend(underline_selections(
+            self, self._non_d_underline, COLOR_D_SPAN_UNDERLINE,
+        ))
         sels.extend(self._d_span_sels)
-        return sels
-
-    def _build_non_d_underline_selections(self):
-        fmt = QTextCharFormat()
-        fmt.setFontUnderline(True)
-        fmt.setUnderlineColor(QColor(COLOR_D_SPAN_UNDERLINE))
-        sels = []
-        for start, end in self._non_d_underline:
-            sel = QTextEdit.ExtraSelection()
-            sel.format = fmt
-            sel.cursor = self.textCursor()
-            sel.cursor.setPosition(start)
-            sel.cursor.setPosition(end, QTextCursor.KeepAnchor)
-            sels.append(sel)
         return sels
 
     def _refresh_selections(self):
         self.setExtraSelections(self._build_composed_selections())
 
-    def set_link_marks(self, offsets, tooltips=None):
+    def _scan_text(self):
+        return self.toPlainText().replace(LINK_MARKER, LINK_PLACEHOLDER)
+
+    def _clean_to_qt(self, clean_pos):
+        return clean_pos + 2 * bisect_left(self._emoji_clean_starts, clean_pos)
+
+    def set_link_marks(self, offsets, tooltips=None, reset_undo=False):
         QToolTip.hideText()
         self._hovered_link_mark = None
         self._pending_link_tooltip = None
         self._link_tooltip_timer.stop()
-        self._link_marks = sorted(set(offsets or ()))
-        self._link_mark_tooltips = tooltips or {}
-        self._apply_link_gaps()
+        desired = sorted(set(offsets or ()))
+        tooltips = tooltips or {}
+        text = self._scan_text()
+        emojis = placeholder_positions(text)
+        stray = [p for p in emojis if p == 0 or text[p - 1] != '<']
+        if stray:
+            self._remove_link_emojis(stray)
+            text = self._scan_text()
+            emojis = placeholder_positions(text)
+        clean_starts = placeholder_clean_starts(emojis)
+        desired_set = set(desired)
+        doomed = [
+            p for i, p in enumerate(emojis)
+            if clean_starts[i] not in desired_set
+        ]
+        if doomed:
+            self._remove_link_emojis(doomed)
+            text = self._scan_text()
+            emojis = placeholder_positions(text)
+            clean_starts = placeholder_clean_starts(emojis)
+        kept_clean = set(clean_starts)
+        clean = text.replace(LINK_PLACEHOLDER, '')
+        desired_texts = {}
+        for off in desired:
+            if off < len(clean) and clean[off] == '<':
+                gt = clean.find('>', off)
+                if gt != -1:
+                    desired_texts[off] = clean[off:gt + 1]
+        if reset_undo:
+            self._link_mark_texts = set(desired_texts.values())
+        new_marks = []
+        new_tooltips = {}
+        new_emoji_clean = []
+        self.blockSignals(True)
+        try:
+            cursor = QTextCursor(self.document())
+            cursor.beginEditBlock()
+            for off in desired:
+                if off not in desired_texts:
+                    continue
+                before = sum(1 for co in new_emoji_clean if co < off)
+                doc_lt = off + 2 * before
+                has_emoji = off in kept_clean
+                if not has_emoji:
+                    if desired_texts[off] not in self._link_mark_texts:
+                        continue
+                    cursor.setPosition(doc_lt + 1)
+                    cursor.insertText(LINK_MARKER)
+                    fmt = QTextCharFormat()
+                    fmt.setFontFamily('Segoe UI Emoji')
+                    cursor.setPosition(doc_lt + 1)
+                    cursor.setPosition(doc_lt + 3, QTextCursor.KeepAnchor)
+                    cursor.mergeCharFormat(fmt)
+                new_marks.append(doc_lt)
+                new_emoji_clean.append(off)
+                tip = tooltips.get(off)
+                if tip is not None:
+                    new_tooltips[doc_lt] = tip
+            cursor.endEditBlock()
+        finally:
+            self.blockSignals(False)
+        self._link_marks = new_marks
+        self._link_mark_tooltips = new_tooltips
+        self._emoji_clean_starts = new_emoji_clean
+        if reset_undo:
+            self.document().clearUndoRedoStacks()
+        self._last_scan_text = self._scan_text()
+        self._refresh_selections()
+        self.setCurrentCharFormat(QTextCharFormat())
         self.viewport().update()
 
-    def _link_symbol_font(self):
-        font = QFont(self.font())
-        font.setFamily('Segoe UI Emoji')
-        font.setPointSizeF(max(9.0, self.font().pointSizeF()))
-        return font
+    def _remove_link_emojis(self, positions):
+        self.blockSignals(True)
+        try:
+            cursor = QTextCursor(self.document())
+            cursor.beginEditBlock()
+            try:
+                for p in sorted(set(positions), reverse=True):
+                    cursor.setPosition(p)
+                    cursor.setPosition(p + 2, QTextCursor.KeepAnchor)
+                    cursor.removeSelectedText()
+            finally:
+                cursor.endEditBlock()
+        finally:
+            self.blockSignals(False)
 
-    def _link_symbol_box(self, start):
-        document = self.document()
-        length = document.characterCount()
-        if start < 0 or start + 1 >= length:
-            return None
-        char_width = QFontMetricsF(self.font()).horizontalAdvance('<')
-        caret0 = QTextCursor(document)
-        caret0.setPosition(start)
-        caret1 = QTextCursor(document)
-        caret1.setPosition(start + 1)
-        rect0 = self.cursorRect(caret0)
-        rect1 = self.cursorRect(caret1)
-        gap = (rect1.left() - rect0.left()) - char_width
-        if gap <= 1:
-            return None
-        return QRect(
-            int(rect1.left() - gap), int(rect0.top()),
-            int(gap), int(rect0.height()),
-        )
+    def _on_scan_changed(self):
+        scan = self._scan_text()
+        if scan == self._last_scan_text:
+            return
+        if not self._link_mark_texts and not self._link_marks:
+            self._last_scan_text = scan
+            return
+        self._last_scan_text = scan
+        self._enforce_link_marks()
+        self.link_marks_stale.emit()
+        self._last_scan_text = self._scan_text()
 
-    def _link_mark_at(self, point):
-        for start in self._link_marks:
-            box = self._link_symbol_box(start)
-            if box is not None and box.contains(point):
-                return start
-        return None
+    def _enforce_link_marks(self):
+        if not self._link_mark_texts and not self._link_marks:
+            return
+        text = self._scan_text()
+        emojis = placeholder_positions(text)
+        bad = []
+        for p in emojis:
+            if p < 1 or text[p - 1] != '<':
+                bad.append(p)
+                continue
+            gt = text.find('>', p)
+            host = text[p - 1:gt + 1] if gt != -1 else None
+            if host is None or host.replace(LINK_PLACEHOLDER, '') not in self._link_mark_texts:
+                bad.append(p)
+        if bad:
+            self._remove_link_emojis(bad)
+            text = self._scan_text()
+            emojis = placeholder_positions(text)
+        self._link_marks = [
+            p - 1 for p in emojis if p >= 1 and text[p - 1] == '<'
+        ]
+        self._emoji_clean_starts = placeholder_clean_starts(emojis)
+        mark_set = set(self._link_marks)
+        self._link_mark_tooltips = {
+            k: v for k, v in self._link_mark_tooltips.items()
+            if k in mark_set
+        }
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
-        start = self._link_mark_at(event.position().toPoint())
+        pos = self.cursorForPosition(event.position().toPoint()).position()
+        text = self._scan_text()
+        start = None
+        if text[pos:pos + 2] == LINK_PLACEHOLDER:
+            start = pos - 1
+        elif 0 < pos < len(text) and text[pos - 1:pos + 1] == LINK_PLACEHOLDER:
+            start = pos - 2
+        elif pos >= 2 and text[pos - 2:pos] == LINK_PLACEHOLDER:
+            start = pos - 3
         if start is None or start not in self._link_mark_tooltips:
             self._hovered_link_mark = None
             self._pending_link_tooltip = None
@@ -391,41 +441,6 @@ class XmlTextEdit(QTextEdit):
             f'<tr><td>{text}</td></tr></table>'
         )
 
-    def _apply_link_gaps(self):
-        document = self.document()
-        length = document.characterCount()
-        spacing = QFontMetricsF(self._link_symbol_font()).horizontalAdvance(
-            LINK_MARKER
-        ) + 2
-        fmt = QTextCharFormat()
-        fmt.setFontLetterSpacingType(QFont.AbsoluteSpacing)
-        fmt.setFontLetterSpacing(spacing)
-        self.blockSignals(True)
-        cursor = QTextCursor(document)
-        for start in self._link_marks:
-            if start < 0 or start + 1 >= length:
-                continue
-            cursor.setPosition(start)
-            cursor.setPosition(start + 1, QTextCursor.KeepAnchor)
-            cursor.mergeCharFormat(fmt)
-        self.blockSignals(False)
-        document.clearUndoRedoStacks()
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        if not self._link_marks:
-            return
-        viewport_rect = self.viewport().rect()
-        painter = QPainter(self.viewport())
-        painter.setFont(self._link_symbol_font())
-        painter.setPen(QPen(_LINK_MARK_COLOR))
-        for start in self._link_marks:
-            box = self._link_symbol_box(start)
-            if box is None or not viewport_rect.intersects(box):
-                continue
-            painter.drawText(box, Qt.AlignCenter, LINK_MARKER)
-        painter.end()
-
     def _scroll_line_to_top(self, pos):
         document = self.document()
         block = document.findBlock(pos)
@@ -450,7 +465,8 @@ class XmlTextEdit(QTextEdit):
         self._target_hw = (headword_norm, occurrence_index)
         self._separate_occurrences = separate_occurrences
         self._non_d_underline = []
-        text = self.toPlainText()
+        self._non_d_target = None
+        text = self._scan_text()
         match = find_hw_occurrence(text, headword_norm, occurrence_index)
         if match is not None:
             caret = self.textCursor()
@@ -464,17 +480,10 @@ class XmlTextEdit(QTextEdit):
         self._target_hw = None
         self._d_span_sels = []
         self._non_d_underline = []
-        text = self.toPlainText()
+        self._non_d_target = (headword_norm, occurrence_index)
+        text = self._scan_text()
         match = find_hw_occurrence(text, headword_norm, occurrence_index)
         if match is not None:
-            open_tag, _close_tag = innermost_d_span(text, match.start())
-            if open_tag is None:
-                entry = entry_block_span(text)
-                if entry is not None:
-                    a, b = entry
-                    if re.search(r'<d\b', text[a:b]):
-                        self._target_hw = (headword_norm, occurrence_index)
-                        self._non_d_underline = non_d_regions(text, a, b)
             caret = self.textCursor()
             caret.setPosition(match.start())
             self.setTextCursor(caret)
@@ -485,7 +494,7 @@ class XmlTextEdit(QTextEdit):
     def _try_synced_name_insert(self, event):
         if event.modifiers() & (Qt.ControlModifier | Qt.MetaModifier):
             return False
-        text = self.toPlainText()
+        text = self._scan_text()
         cursor = self.textCursor()
         tags = scan_tags(text)
 
@@ -574,20 +583,25 @@ class XmlTextEdit(QTextEdit):
             p_ns = partner['name_start']
 
         cursor = self.textCursor()
-        cursor.beginEditBlock()
-        cursor.setPosition(edited['name_start'])
-        cursor.setPosition(edited['name_end'], QTextCursor.KeepAnchor)
-        cursor.insertText(new_name)
-        cursor.setPosition(p_ns)
-        cursor.setPosition(p_ns + len(partner['name']), QTextCursor.KeepAnchor)
-        cursor.insertText(new_name)
-        cursor.endEditBlock()
+        self.blockSignals(True)
+        try:
+            cursor.beginEditBlock()
+            cursor.setPosition(edited['name_start'])
+            cursor.setPosition(edited['name_end'], QTextCursor.KeepAnchor)
+            cursor.insertText(new_name)
+            cursor.setPosition(p_ns)
+            cursor.setPosition(p_ns + len(partner['name']), QTextCursor.KeepAnchor)
+            cursor.insertText(new_name)
+            cursor.endEditBlock()
+        finally:
+            self.blockSignals(False)
 
         if p_ns < caret_after_main:
             caret_after_main += net
         c2 = self.textCursor()
         c2.setPosition(caret_after_main)
         self.setTextCursor(c2)
+        self.textChanged.emit()
 
     def _handle_completion_key(self, event):
         popup = self._completion_popup
@@ -612,7 +626,7 @@ class XmlTextEdit(QTextEdit):
 
     def _refresh_completion(self):
         pos = self.textCursor().position()
-        ctx = _detect_completion_context(self.toPlainText(), pos)
+        ctx = _detect_completion_context(self._scan_text(), pos)
         if ctx is None:
             self._hide_completion()
             return
@@ -643,11 +657,11 @@ class XmlTextEdit(QTextEdit):
             popup.setUniformItemSizes(False)
             content_w = popup.sizeHintForColumn(0)
             popup.setUniformItemSizes(True)
-            width = max(width, content_w + 2 * popup.frameWidth() + 2)
-        row_h = popup.sizeHintForRow(0) if popup.count() else metrics.height() + 4
+            width = max(width, content_w + 2 * popup.frameWidth() + COMPLETION_FRAME_PADDING)
+        row_h = popup.sizeHintForRow(0) if popup.count() else metrics.height() + COMPLETION_ROW_PADDING
         visible = min(popup.count(), AttributePopup.MAX_VISIBLE)
         popup.setFixedWidth(width)
-        popup.setFixedHeight(visible * row_h + 2 * popup.frameWidth() + 4)
+        popup.setFixedHeight(visible * row_h + 2 * popup.frameWidth() + COMPLETION_ROW_PADDING)
 
     def _position_completion_popup(self, popup):
         rect = self.cursorRect()
@@ -680,7 +694,7 @@ class XmlTextEdit(QTextEdit):
             return
         name, kind = data
         cursor = self.textCursor()
-        ctx = _detect_completion_context(self.toPlainText(), cursor.position())
+        ctx = _detect_completion_context(self._scan_text(), cursor.position())
         if ctx is None:
             self._hide_completion()
             return
@@ -695,6 +709,7 @@ class XmlTextEdit(QTextEdit):
         else:
             cursor.insertText(f'{name}=""')
             cursor.setPosition(start + len(name) + 2)
+        self._on_scan_changed()
         cursor.endEditBlock()
         self.setTextCursor(cursor)
         self._hide_completion()
@@ -709,6 +724,7 @@ class XmlTextEdit(QTextEdit):
         cursor.beginEditBlock()
         try:
             self._handle_key(event)
+            self._on_scan_changed()
         finally:
             cursor.endEditBlock()
         self._refresh_completion()
@@ -726,6 +742,19 @@ class XmlTextEdit(QTextEdit):
         if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
             deleting_forward = event.key() == Qt.Key_Delete
             cursor = self.textCursor()
+
+            if not cursor.hasSelection():
+                plain = self._scan_text()
+                pos = cursor.position()
+                if deleting_forward and plain[pos:pos + 2] == LINK_PLACEHOLDER:
+                    cursor.setPosition(pos + 2)
+                    self.setTextCursor(cursor)
+                    return
+                if (not deleting_forward and pos >= 2
+                        and plain[pos - 2:pos] == LINK_PLACEHOLDER):
+                    cursor.setPosition(pos - 2)
+                    self.setTextCursor(cursor)
+                    return
 
             if self._pending_tag_delete and not cursor.hasSelection():
                 if self._pending_open_tag and self._pending_close_tag:
@@ -793,7 +822,7 @@ class XmlTextEdit(QTextEdit):
                 super().keyPressEvent(event)
                 return
 
-            text = self.toPlainText()
+            text = self._scan_text()
             pos = cursor.position()
 
             if is_inside_tag(text, pos):

@@ -3,8 +3,9 @@ import xml.etree.ElementTree as ElementTree
 from collections import OrderedDict
 from .link_handler import LinkHandler
 from .source_mapper import source_mapper
-from dictionary_app.utils.text_utils import remove_accents
-from dictionary_app.utils.content_rules import d_hw_variants
+from dictionary_app.utils.remove_accents import remove_accents
+from dictionary_app.utils.normalize_headword import strip_quotes
+from dictionary_app.utils.extract_content_text import d_hw_variants
 from dictionary_app.utils.constants import ARROW_MARKER, SENSE_ANCHOR_PREFIX
 from dictionary_app.utils.xml_schema import ATTR_ID, ATTR_HW, ATTR_ENTRY, ATTR_N, ATTR_KEEP_ACC
 
@@ -104,7 +105,7 @@ def _bold_brackets(text, positions):
     return ''.join(parts)
 
 
-def _plain_parens(text):
+def plain_parens(text):
     if not text or ('(' not in text and ')' not in text):
         return text
     parts = []
@@ -142,11 +143,8 @@ def clear_target():
     _format_context = None
 
 
-def get_target_subheadword():
-    return _format_context.subheadword if _format_context else None
-
-
 _FORMAT_CACHE_MAX_SIZE = 512
+
 _format_cache = OrderedDict()
 
 
@@ -204,7 +202,7 @@ def process_element(element, context, is_sources=False, current_variants=None):
             children[tail_idx].tail = _bold_brackets(child_tail, tail_pos_list)
 
     if element.text:
-        parts.append(_plain_parens(element.text) if element.tag in _PLAIN_PAREN_TAGS else element.text)
+        parts.append(plain_parens(element.text) if element.tag in _PLAIN_PAREN_TAGS else element.text)
 
     for child in children:
         new_variants = current_variants
@@ -264,7 +262,7 @@ def process_element(element, context, is_sources=False, current_variants=None):
                         if child.tag == 'src':
                             return f'<span class="src">{content}</span>'
                         if child.tag == 'st':
-                            return f'<span class="st">{_plain_parens(content)}</span>'
+                            return f'<span class="st">{plain_parens(content)}</span>'
                         return content
 
                     if not abbreviations:
@@ -334,11 +332,11 @@ def process_element(element, context, is_sources=False, current_variants=None):
                 entry_attr = child.get(ATTR_ENTRY)
                 hw_attr = child.get(ATTR_HW)
                 display_text = ''.join(child.itertext()).strip() or child.text or ''
-                see_text = display_text.strip('"\'„“”') or display_text
+                see_text = strip_quotes(display_text) or display_text
                 if entry_attr:
-                    entry_attr = entry_attr.strip('"\'„“”')
+                    entry_attr = strip_quotes(entry_attr)
                 if hw_attr:
-                    hw_attr = hw_attr.strip('"\'„“”')
+                    hw_attr = strip_quotes(hw_attr)
                 if entry_attr:
                     link_target = '%s|%s' % (entry_attr, hw_attr or see_text)
                 elif hw_attr:
@@ -355,7 +353,7 @@ def process_element(element, context, is_sources=False, current_variants=None):
                         link_html = LinkHandler.create_link('see', link_target, display_text)
                     parts.append(f'<span class="see">{link_html}</span>')
                 else:
-                    parts.append(f'<span class="see">{_plain_parens(display_text)}</span>')
+                    parts.append(f'<span class="see">{plain_parens(display_text)}</span>')
         else:
             inner_parts = []
 
@@ -366,7 +364,7 @@ def process_element(element, context, is_sources=False, current_variants=None):
                 inner_parts.append(process_element(child, context, is_sources, new_variants))
             else:
                 if child.text:
-                    inner_parts.append(_plain_parens(child.text) if child.tag in _PLAIN_PAREN_TAGS else child.text)
+                    inner_parts.append(plain_parens(child.text) if child.tag in _PLAIN_PAREN_TAGS else child.text)
 
             inner_html = ''.join(inner_parts)
 
@@ -402,9 +400,9 @@ def process_element(element, context, is_sources=False, current_variants=None):
                 comma = child.tail[0]
                 remaining = child.tail[1:]
                 if element.tag in _ITALIC_TEXT_TAGS:
-                    remaining = _plain_parens(remaining)
+                    remaining = plain_parens(remaining)
                 parts.append(f'<span class="g">{comma}</span>{remaining}')
             else:
-                parts.append(_plain_parens(child.tail) if element.tag in _PLAIN_PAREN_TAGS else child.tail)
+                parts.append(plain_parens(child.tail) if element.tag in _PLAIN_PAREN_TAGS else child.tail)
 
     return ''.join(parts)

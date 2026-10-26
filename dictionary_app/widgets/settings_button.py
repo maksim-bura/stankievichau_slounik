@@ -3,9 +3,13 @@ from PySide6.QtGui import QCursor, QFont
 from PySide6.QtWidgets import QMenu, QWidgetAction, QLabel, QWidget, QHBoxLayout
 from dictionary_app.localization import strings
 from dictionary_app.theme.layout_constants import SEARCH_BOX_HEIGHT, MENU_OPTION_MARGINS, MENU_INDENT_MARGINS
-from dictionary_app.theme.widget_styles import COLOR_DISABLED_FG
+from dictionary_app.theme.styles import COLOR_DISABLED_FG
 from dictionary_app.utils.constants import CHECK_MARK, CHECK_BLANK, RADIO_ON, RADIO_OFF, GEAR_MARKER
 from dictionary_app.widgets.menu_button import MenuButton
+
+
+PROPERTY_ON = 'true'
+PROPERTY_OFF = 'false'
 
 
 class _ToggleOption(QWidget):
@@ -33,9 +37,6 @@ class _ToggleOption(QWidget):
     def is_checked(self):
         return self._checked
 
-    def mouseReleaseEvent(self, event):
-        event.accept()
-
 
 class _CheckOption(_ToggleOption):
     clicked = Signal(object)
@@ -43,7 +44,6 @@ class _CheckOption(_ToggleOption):
     def __init__(self, text, checked=False, parent=None):
         self._active = True
         super().__init__(text, CHECK_MARK, CHECK_BLANK, checked, parent)
-        self._update_display()
 
     def _update_display(self):
         super()._update_display()
@@ -188,23 +188,24 @@ class SettingsButton(MenuButton):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def _set_dynamic_property(self, widget, name, is_on):
+        widget.setProperty(name, PROPERTY_ON if is_on else PROPERTY_OFF)
+        widget.update_style()
+
     def _update_dual_property(self):
         if self._sources_button:
-            is_dual = self._sources_button.property("pressed") == "true"
-            self.setProperty("dual", "true" if is_dual else "false")
-            self._sources_button.setProperty("dual", "true" if is_dual else "false")
-            self._sources_button.update_style()
+            is_dual = self._sources_button.property("pressed") == PROPERTY_ON
+            self._set_dynamic_property(self, "dual", is_dual)
+            self._set_dynamic_property(self._sources_button, "dual", is_dual)
         else:
-            self.setProperty("dual", "false")
+            self._set_dynamic_property(self, "dual", False)
 
     def _on_menu_closed(self):
         btn_rect = QRect(self.mapToGlobal(QPoint(0, 0)), self.size())
         self._consume_next_press = btn_rect.contains(QCursor.pos())
-        self.setProperty("pressed", "false")
-        self.update_style()
+        self._set_dynamic_property(self, "pressed", False)
         if self._sources_button:
-            self._sources_button.setProperty("dual", "false")
-            self._sources_button.update_style()
+            self._set_dynamic_property(self._sources_button, "dual", False)
 
     def mousePressEvent(self, event):
         if self._consume_next_press:
@@ -218,6 +219,5 @@ class SettingsButton(MenuButton):
         else:
             self._sync_sub_options()
             self._update_dual_property()
-            self.setProperty("pressed", "true")
-            self.update_style()
+            self._set_dynamic_property(self, "pressed", True)
             self.settings_menu.popup(self.mapToGlobal(QPoint(0, self.height())))

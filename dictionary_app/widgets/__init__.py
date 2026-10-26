@@ -3,6 +3,7 @@ from .search_box import SearchBox
 from .menu_button import MenuButton
 from .sources_button import SourcesButton
 from .settings_button import SettingsButton
-from .insert_letter_g import InsertLetterGButton, INSERT_LETTER_G
+from .insert_letter_g_button import INSERT_LETTER_G, InsertLetterGButton
 from .dict_text_browser import DictTextBrowser
-from .result_list_helpers import ElidingDelegate, select_row, navigate_rows, clamped_row
+from .eliding_delegate import ElidingDelegate
+from .navigate_rows import clamped_row, navigate_rows, select_row

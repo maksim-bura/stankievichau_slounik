@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QLineEdit
 from PySide6.QtCore import Qt, Signal
 from dictionary_app.theme.layout_constants import SEARCH_BOX_HEIGHT
-from dictionary_app.theme.widget_styles import SEARCH_BOX_STYLE
+from dictionary_app.theme.styles import SEARCH_BOX_STYLE
 
 
 class SearchBox(QLineEdit):

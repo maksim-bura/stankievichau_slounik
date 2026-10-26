@@ -2,11 +2,11 @@ import sqlite3
 import xml.etree.ElementTree as ElementTree
 from collections import OrderedDict
 
-from dictionary_app.utils.text_utils import remove_accents, resolve_headword, alphabet_sort_key, normalize_jo_to_je, entry_id_sort_key
-from dictionary_app.utils.content_rules import index_text
-from dictionary_app.utils.search_regex import compile_search_regex
-from dictionary_app.utils.constants import SOURCES_PSEUDO_HEADWORD
-from dictionary_app.utils.xml_schema import ATTR_EXCL, ATTR_KEEP_ACC
+from dictionary_app.utils.normalize_headword import normalize_jo_to_je
+from dictionary_app.utils.remove_accents import remove_accents
+from dictionary_app.utils.extract_content_text import index_text
+from dictionary_app.utils.compile_search_regex import compile_search_regex
+from dictionary_app.utils.xml_schema import ATTR_KEEP_ACC
 from dictionary_app.format.highlight_formatter import HighlightFormatter
 
 
@@ -14,29 +14,53 @@ _PARSED_CACHE_MAX_SIZE = 512
 _PREVIEW_CACHE_MAX_SIZE = 2048
 _TRIGRAM_MIN_SPAN = 3
 
-_HEADWORD_ROWS_SQL = """
-    SELECT id, headword, NULL AS full_entry, entry_link, source_file, sort_headword, normalized_headword, keep_acc, hw_xml_id FROM dictionary
-    {dictionary_where}
-    UNION ALL
-    SELECT dictionary.id, sub_headwords.headword, NULL AS full_entry,
-           COALESCE(sub_headwords.link, dictionary.entry_link),
-           dictionary.source_file, sub_headwords.sort_headword, sub_headwords.normalized_headword, sub_headwords.keep_acc, sub_headwords.hw_xml_id
-    FROM sub_headwords
-    JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
-    {sub_headwords_where}
-"""
+_EMPTY_ENTRY_ROW = (None, None, None, None, None, None, None)
 
-_ENTRY_ROWS_SQL = """
-    SELECT id, headword, full_entry, entry_link, source_file, keep_acc FROM dictionary
-    WHERE id IN ({placeholders})
-    UNION
-    SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry,
-           COALESCE(sub_headwords.link, dictionary.entry_link),
-           dictionary.source_file, sub_headwords.keep_acc
-    FROM sub_headwords
-    JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
-    WHERE dictionary.id IN ({placeholders})
-"""
+_ENTRY_SELECT_SQL = (
+    "SELECT dictionary.id, dictionary.headword, entry_body.xml, "
+    "dictionary.entry_link, dictionary.source_file, dictionary.keep_acc "
+    "FROM dictionary LEFT JOIN entry_body ON entry_body.id = dictionary.id "
+)
+
+_SUB_MATCH_SELECT_SQL = (
+    "SELECT dictionary.id, dictionary.headword, entry_body.xml, "
+    "dictionary.entry_link, dictionary.source_file, dictionary.keep_acc, "
+    "sub_headwords.headword, sub_headwords.keep_acc "
+    "FROM sub_headwords "
+    "JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id "
+    "LEFT JOIN entry_body ON entry_body.id = dictionary.id "
+)
+
+_DICTIONARY_HEADWORD_SQL = (
+    "SELECT id, headword, NULL AS full_entry, entry_link, source_file, "
+    "sort_headword, normalized_headword, keep_acc, hw_xml_id, collation_key "
+    "FROM dictionary "
+)
+
+_SUB_HEADWORD_SQL = (
+    "SELECT dictionary.id, sub_headwords.headword, NULL AS full_entry, "
+    "COALESCE(sub_headwords.link, dictionary.entry_link), dictionary.source_file, "
+    "sub_headwords.sort_headword, sub_headwords.normalized_headword, "
+    "sub_headwords.keep_acc, sub_headwords.hw_xml_id, sub_headwords.collation_key "
+    "FROM sub_headwords "
+    "JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id "
+)
+
+_HEADWORD_ROWS_SQL = (
+    _DICTIONARY_HEADWORD_SQL + "{dictionary_where} UNION ALL "
+    + _SUB_HEADWORD_SQL + "{sub_headwords_where}"
+)
+
+_ENTRY_ROWS_SQL = (
+    _ENTRY_SELECT_SQL + "WHERE dictionary.id IN ({placeholders}) UNION "
+    "SELECT dictionary.id, sub_headwords.headword, entry_body.xml, "
+    "COALESCE(sub_headwords.link, dictionary.entry_link), dictionary.source_file, "
+    "sub_headwords.keep_acc "
+    "FROM sub_headwords "
+    "JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id "
+    "LEFT JOIN entry_body ON entry_body.id = dictionary.id "
+    "WHERE dictionary.id IN ({placeholders})"
+)
 
 
 class SearchEngine:
@@ -57,6 +81,10 @@ class SearchEngine:
             self._connection.close()
             self._connection = None
         self._parsed_cache.clear()
+        self._preview_cache.clear()
+
+    def invalidate_entry(self, entry_id):
+        self._parsed_cache.pop(entry_id, None)
         self._preview_cache.clear()
 
     def get_parsed_entry(self, entry_id, xml_string=None):
@@ -90,22 +118,6 @@ class SearchEngine:
             return text
         return remove_accents(text)
 
-    def entry_has_sub_headwords(self, entry_id, xml_string=None):
-        root = self.get_parsed_entry(entry_id, xml_string)
-        if root is None:
-            return False
-        found_main = False
-        for element in root.iter('hw'):
-            if element.get(ATTR_EXCL) is not None:
-                continue
-            if not ''.join(element.itertext()).strip():
-                continue
-            if not found_main:
-                found_main = True
-                continue
-            return True
-        return False
-
     def search(self, text, search_in_headwords=True, search_in_translations=False, search_in_examples=False):
         if not text.strip():
             return self._search_headwords("")
@@ -118,9 +130,6 @@ class SearchEngine:
                 return self._search_examples(text)
         return self._search_headwords(text)
 
-    def search_headwords(self, text):
-        return self.search(text, search_in_headwords=True, search_in_translations=False, search_in_examples=False)
-
     def _search_headwords(self, text):
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -131,8 +140,8 @@ class SearchEngine:
             cursor.execute(_HEADWORD_ROWS_SQL.format(
                 dictionary_where='', sub_headwords_where=''))
             unique = cursor.fetchall()
-            unique.sort(key=self._headword_sort_key)
-            return [self._row_result(r) for r in unique if r[1] != SOURCES_PSEUDO_HEADWORD]
+            unique.sort(key=lambda r: r[9])
+            return [self._row_result(r) for r in unique]
 
         pattern = compile_search_regex(text.strip(), exact_words=text.endswith(' '))
 
@@ -141,24 +150,18 @@ class SearchEngine:
             rows = []
             if dict_ids:
                 placeholders = ','.join(['?'] * len(dict_ids))
-                cursor.execute(f"""
-                    SELECT id, headword, NULL AS full_entry, entry_link, source_file, sort_headword, normalized_headword, keep_acc, hw_xml_id
-                    FROM dictionary WHERE id IN ({placeholders})
-                """, dict_ids)
+                cursor.execute(
+                    _DICTIONARY_HEADWORD_SQL + f"WHERE id IN ({placeholders})",
+                    dict_ids)
                 rows.extend(cursor.fetchall())
             if sub_ids:
                 placeholders = ','.join(['?'] * len(sub_ids))
-                cursor.execute(f"""
-                    SELECT dictionary.id, sub_headwords.headword, NULL AS full_entry,
-                           COALESCE(sub_headwords.link, dictionary.entry_link),
-                           dictionary.source_file, sub_headwords.sort_headword, sub_headwords.normalized_headword, sub_headwords.keep_acc, sub_headwords.hw_xml_id
-                    FROM sub_headwords
-                    JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
-                    WHERE sub_headwords.id IN ({placeholders})
-                """, sub_ids)
+                cursor.execute(
+                    _SUB_HEADWORD_SQL + f"WHERE sub_headwords.id IN ({placeholders})",
+                    sub_ids)
                 rows.extend(cursor.fetchall())
             unique = [r for r in rows if pattern.search(r[1])]
-            unique.sort(key=self._headword_sort_key)
+            unique.sort(key=lambda r: r[9])
             return [self._row_result(r) for r in unique]
 
         sql_pattern = self._like_pattern(clean_text.lower(), collapse_spaces=True)
@@ -170,13 +173,8 @@ class SearchEngine:
         unique = cursor.fetchall()
 
         unique = [r for r in unique if pattern.search(r[1])]
-        unique.sort(key=self._headword_sort_key)
+        unique.sort(key=lambda r: r[9])
         return [self._row_result(r) for r in unique]
-
-    @staticmethod
-    def _headword_sort_key(row):
-        return (alphabet_sort_key(row[5] or row[1]),
-                entry_id_sort_key(row[3]) or entry_id_sort_key(row[8]))
 
     @staticmethod
     def _row_result(r):
@@ -189,17 +187,16 @@ class SearchEngine:
         try:
             cursor = self._get_connection().cursor()
             cursor.execute(
-                "SELECT dict_id, sub_id FROM headword_fts WHERE headword_fts MATCH ?",
+                "SELECT rowid FROM headword_fts WHERE headword_fts MATCH ?",
                 (f'"{span}"',),
             )
-            dict_ids = set()
-            sub_ids = set()
-            for dict_id, sub_id in cursor.fetchall():
-                if dict_id is not None:
-                    dict_ids.add(int(dict_id))
-                if sub_id is not None:
-                    sub_ids.add(int(sub_id))
-            return list(dict_ids), list(sub_ids)
+            dict_ids = [row[0] for row in cursor.fetchall()]
+            cursor.execute(
+                "SELECT rowid FROM sub_headword_fts WHERE sub_headword_fts MATCH ?",
+                (f'"{span}"',),
+            )
+            sub_ids = [row[0] for row in cursor.fetchall()]
+            return dict_ids, sub_ids
         except sqlite3.OperationalError:
             return [], []
 
@@ -317,29 +314,28 @@ class SearchEngine:
     def _get_entry_row(self, where_clause, param):
         cursor = self._get_connection().cursor()
         cursor.execute(
-            "SELECT id, headword, full_entry, entry_link, source_file, keep_acc "
-            "FROM dictionary WHERE " + where_clause,
+            _ENTRY_SELECT_SQL + "WHERE " + where_clause,
             (param,),
         )
         result = cursor.fetchone()
         if not result:
-            return None
+            return _EMPTY_ENTRY_ROW
         return (result[0], result[1], result[2], result[3], result[4], None, result[5])
 
     def _get_exact_headword(self, headword):
         cursor = self._get_connection().cursor()
         rows = []
         cursor.execute(
-            "SELECT id, headword, full_entry, entry_link, source_file, keep_acc "
-            "FROM dictionary WHERE headword = ?",
+            _ENTRY_SELECT_SQL + "WHERE dictionary.headword = ?",
             (headword,),
         )
         for row in cursor.fetchall():
             rows.append((row[0], row[1], row[2], row[3], row[4], None, row[5]))
         cursor.execute(
-            "SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry, "
+            "SELECT dictionary.id, sub_headwords.headword, entry_body.xml, "
             "sub_headwords.link, dictionary.source_file, sub_headwords.keep_acc "
             "FROM sub_headwords JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id "
+            "LEFT JOIN entry_body ON entry_body.id = dictionary.id "
             "WHERE sub_headwords.headword = ?",
             (headword,),
         )
@@ -361,10 +357,9 @@ class SearchEngine:
 
         matches = OrderedDict()
 
-        for where_clause in ("normalized_headword = ?", "normalized_plain_headword = ?"):
+        for where_clause in ("dictionary.normalized_headword = ?", "dictionary.normalized_plain_headword = ?"):
             cursor.execute(
-                "SELECT id, headword, full_entry, entry_link, source_file, keep_acc "
-                "FROM dictionary WHERE " + where_clause,
+                _ENTRY_SELECT_SQL + "WHERE " + where_clause,
                 (search_lower,),
             )
             for row in cursor.fetchall():
@@ -376,67 +371,60 @@ class SearchEngine:
         for where_clause, pack_plain in (
                 ("sub_headwords.normalized_headword = ?", False),
                 ("sub_headwords.normalized_plain_headword = ?", True)):
-            cursor.execute("""
-                SELECT dictionary.id, sub_headwords.headword, dictionary.entry_link,
-                       dictionary.source_file, sub_headwords.keep_acc
-                FROM sub_headwords
-                JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
-                WHERE """ + where_clause, (search_lower,))
-            for entry_id, sub_headword, entry_link, source_file, keep_acc in cursor.fetchall():
-                full_row = self.get_entry_by_id(entry_id)
-                if full_row is None:
-                    continue
+            cursor.execute(
+                _SUB_MATCH_SELECT_SQL + "WHERE " + where_clause,
+                (search_lower,),
+            )
+            for row in cursor.fetchall():
+                entry_id, main_headword, full_entry, entry_link, source_file, main_keep_acc, sub_headword, sub_keep_acc = row
                 if pack_plain:
-                    row = (full_row[0], sub_headword, full_row[2], full_row[3], full_row[4], None, keep_acc)
+                    packed = (entry_id, sub_headword, full_entry, entry_link, source_file, None, sub_keep_acc)
                 else:
-                    row = full_row
-                matches.setdefault((full_row[0], sub_headword), row)
+                    packed = (entry_id, main_headword, full_entry, entry_link, source_file, None, main_keep_acc)
+                matches.setdefault((entry_id, sub_headword), packed)
 
         filtered = [row for (_, matched), row in matches.items() if remove_accents(matched) == exact]
         if len(filtered) == 1:
             return filtered[0]
-        return None, None, None, None, None, None, None
+        return _EMPTY_ENTRY_ROW
 
     def get_entry_by_link(self, entry_link):
-        result = self._get_entry_row("entry_link = ?", entry_link)
-        if result:
+        result = self._get_entry_row("dictionary.entry_link = ?", entry_link)
+        if result[0] is not None:
             return result
         cursor = self._get_connection().cursor()
         cursor.execute("""
-            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry,
+            SELECT dictionary.id, sub_headwords.headword, entry_body.xml,
                    sub_headwords.link, dictionary.source_file, sub_headwords.keep_acc
             FROM sub_headwords
             JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
+            LEFT JOIN entry_body ON entry_body.id = dictionary.id
             WHERE sub_headwords.link = ?
         """, (entry_link,))
         result = cursor.fetchone()
         if result:
             return (result[0], result[1], result[2], result[3], result[4], None, result[5])
-        return None, None, None, None, None, None, None
+        return _EMPTY_ENTRY_ROW
 
     def get_entry_by_xml_id(self, xml_id):
         if not xml_id:
-            return None, None, None, None, None, None, None
+            return _EMPTY_ENTRY_ROW
+        result = self._get_entry_row("dictionary.hw_xml_id = ?", xml_id)
+        if result[0] is not None:
+            return result
         cursor = self._get_connection().cursor()
-        cursor.execute(
-            "SELECT id, headword, full_entry, entry_link, source_file, keep_acc "
-            "FROM dictionary WHERE hw_xml_id = ?",
-            (xml_id,),
-        )
-        result = cursor.fetchone()
-        if result:
-            return (result[0], result[1], result[2], result[3], result[4], None, result[5])
         cursor.execute("""
-            SELECT dictionary.id, sub_headwords.headword, dictionary.full_entry,
+            SELECT dictionary.id, sub_headwords.headword, entry_body.xml,
                    dictionary.entry_link, dictionary.source_file, sub_headwords.keep_acc
             FROM sub_headwords
             JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id
+            LEFT JOIN entry_body ON entry_body.id = dictionary.id
             WHERE sub_headwords.hw_xml_id = ?
         """, (xml_id,))
         result = cursor.fetchone()
         if result:
             return (result[0], result[1], result[2], result[3], result[4], None, result[5])
-        return None, None, None, None, None, None, None
+        return _EMPTY_ENTRY_ROW
 
     def get_entry_sub_headword(self, entry_row_id, target):
         if not entry_row_id or not target:
@@ -463,12 +451,21 @@ class SearchEngine:
     def get_full_entry(self, entry_id):
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT full_entry FROM dictionary WHERE id = ?", (entry_id,))
+        cursor.execute("SELECT xml FROM entry_body WHERE id = ?", (entry_id,))
         row = cursor.fetchone()
         return row[0] if row else None
 
     def get_entry_by_id(self, entry_id):
-        return self._get_entry_row("id = ?", entry_id)
+        return self._get_entry_row("dictionary.id = ?", entry_id)
+
+    def fetch_link_target_rows(self):
+        cursor = self._get_connection().cursor()
+        cursor.execute("SELECT id, headword, entry_link, hw_xml_id FROM dictionary")
+        dict_rows = cursor.fetchall()
+        cursor.execute(
+            "SELECT main_entry_id, headword, link, hw_xml_id FROM sub_headwords")
+        sub_rows = cursor.fetchall()
+        return dict_rows, sub_rows
 
     def materialize_result(self, result):
         if result is None or result[2] is not None:

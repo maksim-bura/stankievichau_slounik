@@ -2,13 +2,12 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QSizePolicy, QV
 from PySide6.QtCore import Qt
 from dictionary_app.localization import strings
 from dictionary_app.theme.layout_constants import (
-    BAR_HEIGHT, NAV_BUTTON_WIDTH, BUTTON_SIZE,
-    BAR_CONTENTS_MARGINS, BAR_SPACING, NAV_SPACER_MIN_WIDTH, NAV_SPACER_MAX_WIDTH,
-    LAYOUT_MARGINS, LAYOUT_SPACING
+    BAR_HEIGHT, NAV_BUTTON_WIDTH, BUTTON_SIZE, BAR_CONTENTS_MARGINS, BAR_SPACING,
+    NAV_SPACER_MIN_WIDTH, NAV_SPACER_MAX_WIDTH, LAYOUT_MARGINS, LAYOUT_SPACING
 )
 from dictionary_app.widgets import IconButton, DictTextBrowser
 from dictionary_app.utils.scroll_state import ScrollState
-from dictionary_app.theme.widget_styles import ENTRY_STYLESHEET, FLAT_BUTTON_STYLE
+from dictionary_app.theme.styles import FLAT_BUTTON_STYLE
 from dictionary_app.utils.constants import CROSS_MARKER, BACK_ARROW, FORWARD_ARROW
 
 
@@ -135,7 +134,6 @@ class EntryViewer:
         self.viewer.setOpenExternalLinks(False)
         self.viewer.setFocusPolicy(Qt.ClickFocus)
         self.viewer.anchorClicked.connect(main_window.on_link_clicked)
-        self.viewer.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
 
         layout.addWidget(self.viewer)
         self.container.setLayout(layout)
@@ -166,6 +164,3 @@ class EntryViewer:
     def clear(self):
         self.viewer.clear()
         self.scroll_manager.clear_cache()
-
-    def scroll_to_anchor(self, anchor_id):
-        self.scroll_manager.scroll_to_anchor(anchor_id)

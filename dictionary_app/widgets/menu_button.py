@@ -1,7 +1,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton, QSizePolicy
 from dictionary_app.theme.layout_constants import BUTTON_SIZE
-from dictionary_app.theme.widget_styles import MENU_BUTTON_STYLE
+from dictionary_app.theme.styles import MENU_BUTTON_STYLE
 
 
 class MenuButton(QPushButton):

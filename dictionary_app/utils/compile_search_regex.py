@@ -1,14 +1,16 @@
 import re
 
+from dictionary_app.utils.remove_accents import APOSTROPHE_CLASS, COMBINING_ACUTE_CLASS, COMBINING_ACUTE_MARKS
 
-_APOS = "'\u2019\u02BC"
-_ACCENT_CLASS = r'\u0300\u0301'
+
+_APOS = APOSTROPHE_CLASS
+_ACCENT_CLASS = COMBINING_ACUTE_CLASS
 _WORD_CHARS = r'\w' + _ACCENT_CLASS + _APOS + r'-'
 _WORD_START = r'(?<![' + _WORD_CHARS + r'])'
 _WORD_END = r'(?![' + _WORD_CHARS + r'])'
-_ACCENT_COMB = r'(?:[\u0300\u0301])?'
-_ACCENT_COMB_REQUIRED = r'(?:[\u0300\u0301])+'
-_ACCENT_ORDS = {0x0300, 0x0301}
+_ACCENT_COMB = '(?:[' + _ACCENT_CLASS + '])?'
+_ACCENT_COMB_REQUIRED = '(?:[' + _ACCENT_CLASS + '])+'
+_ACCENT_ORDS = set(COMBINING_ACUTE_MARKS)
 
 
 def _char_part(ch, required):

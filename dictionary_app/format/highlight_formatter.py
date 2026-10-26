@@ -2,16 +2,20 @@ import copy
 import re
 import xml.etree.ElementTree as ElementTree
 
-from dictionary_app.utils.text_utils import remove_accents, normalize_jo_to_je
-from dictionary_app.utils.content_rules import content_text, hw_text_excluding_n
-from dictionary_app.utils.xml_schema import ATTR_CODE, ATTR_LANG, ATTR_EXCL, ATTR_KEEP_ACC, ATTR_ID
-from dictionary_app.format.entry_formatter import process_element, _plain_parens
+from dictionary_app.utils.normalize_headword import normalize_jo_to_je
+from dictionary_app.utils.remove_accents import remove_accents
+from dictionary_app.utils.extract_content_text import (
+    content_text, hw_text_excluding_n, is_excluded_child
+)
+from dictionary_app.utils.xml_schema import ATTR_EXCL, ATTR_KEEP_ACC, ATTR_ID
+from dictionary_app.format.format_entry import plain_parens, process_element
 
 
 EXCLUDED_HIGHLIGHT_CLASS = 'search-excluded'
 
 _ANCHOR_RANGE_RE = re.compile(r'(<a\s[^>]*>.*?</a>)', re.DOTALL)
 _SAVED_BLOCK_PLACEHOLDER_RE = re.compile(r'\x00A(\d+)\x00')
+_RESTORE_PASSES = 2
 
 
 class HighlightFormatter:
@@ -299,28 +303,6 @@ class HighlightFormatter:
         wrapper.append(child_copy)
         return process_element(wrapper, None)
 
-    def _should_exclude_from_highlight(self, child, tag):
-        if child.tag in ('src', 'st'):
-            return True
-        if tag == 't':
-            if child.tag in ('see', 'g'):
-                return True
-            if child.tag == 'lang':
-                return child.get(ATTR_CODE) in ('vl', 'la') or ATTR_EXCL in child.attrib
-            for attr_name, attr_val in ((ATTR_LANG, 'vl'), (ATTR_EXCL, None)):
-                if attr_val is None:
-                    if attr_name in child.attrib:
-                        return True
-                elif child.get(attr_name) == attr_val:
-                    return True
-            return False
-        if tag == 'ex':
-            if child.tag == 'lang':
-                return child.get(ATTR_CODE) == 'ru'
-            if child.get(ATTR_LANG) == 'ru':
-                return True
-        return False
-
     def _sense_number_for(self, element, parent_map):
         sense_num = ''
         sense_id = None
@@ -351,18 +333,18 @@ class HighlightFormatter:
         excluded_fragments = []
         layout = []
         if element.text:
-            segments.append(_plain_parens(element.text) if tag == 'ex' else element.text)
+            segments.append(plain_parens(element.text) if tag == 'ex' else element.text)
             layout.append(('seg', len(segments) - 1))
         for child in element:
             child_html = self._format_child_for_preview(child)
-            if self._should_exclude_from_highlight(child, tag):
+            if is_excluded_child(child, tag):
                 excluded_fragments.append(child_html)
                 layout.append(('excl', len(excluded_fragments) - 1))
             else:
                 segments.append(child_html)
                 layout.append(('seg', len(segments) - 1))
             if child.tail:
-                segments.append(_plain_parens(child.tail) if tag == 'ex' else child.tail)
+                segments.append(plain_parens(child.tail) if tag == 'ex' else child.tail)
                 layout.append(('seg', len(segments) - 1))
         html_parts = []
         for entry_type, idx in layout:
@@ -494,7 +476,7 @@ class HighlightFormatter:
 def _restore_saved_blocks(html, saved_blocks):
     if not saved_blocks:
         return html
-    for _ in range(2):
+    for _ in range(_RESTORE_PASSES):
         html = _SAVED_BLOCK_PLACEHOLDER_RE.sub(
             lambda m: saved_blocks[int(m.group(1))], html
         )

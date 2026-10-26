@@ -2,10 +2,10 @@ import re
 from urllib.parse import unquote
 
 from dictionary_app.utils.constants import SCHEME_WORD, SCHEME_WORD_ATTR, SCHEME_SOURCE
-from dictionary_app.utils.text_utils import remove_accents
+from dictionary_app.utils.remove_accents import remove_accents
 from .source_mapper import source_mapper
 
-_HOMONYM_NUMERAL_RE = re.compile(r'[ІіIiVvXxХхУу]+')
+_HOMONYM_NUMERAL_RE = re.compile(r'[ІХУ]+')
 _SENSE_LETTER_RE = re.compile(r'[а-яА-Яa-zA-Z]')
 
 
@@ -37,6 +37,13 @@ class LinkHandler:
     @classmethod
     def is_link_tag(cls, tag_name):
         return tag_name in cls.LINK_TAGS
+
+    @classmethod
+    def _split_target(cls, target):
+        if '|' in target:
+            entry_raw, _sep, target_hw = target.partition('|')
+            return entry_raw, target_hw or None
+        return target, None
 
     @classmethod
     def parse_link_text(cls, link_text, keep_accents=False):
@@ -76,20 +83,14 @@ class LinkHandler:
         source_prefix = SCHEME_SOURCE + ':'
         if url_string.startswith(word_attr_prefix):
             target = unquote(url_string[len(word_attr_prefix):])
-            if '|' in target:
-                entry_raw, _sep, target_hw = target.partition('|')
-                entry, sense_parts = cls.parse_link_text(entry_raw, keep_accents=True)
-                return ('word-attr', entry, sense_parts, target_hw or None)
-            entry, sense_parts = cls.parse_link_text(target, keep_accents=True)
-            return ('word-attr', entry, sense_parts, None)
+            entry_raw, target_hw = cls._split_target(target)
+            entry, sense_parts = cls.parse_link_text(entry_raw, keep_accents=True)
+            return ('word-attr', entry, sense_parts, target_hw)
         if url_string.startswith(word_prefix):
             target = unquote(url_string[len(word_prefix):])
-            if '|' in target:
-                entry, _sep, target_hw = target.partition('|')
-                entry, sense_parts = cls.parse_link_text(entry)
-                return ('word', entry, sense_parts, target_hw or None)
-            word, sense_parts = cls.parse_link_text(target)
-            return ('word', word, sense_parts, None)
+            entry, target_hw = cls._split_target(target)
+            word, sense_parts = cls.parse_link_text(entry)
+            return ('word', word, sense_parts, target_hw)
         elif url_string.startswith(source_prefix):
             target = url_string[len(source_prefix):]
             return ('source', target, None, None)

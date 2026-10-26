@@ -1,9 +1,18 @@
-from dictionary_app.theme.widget_styles import (
-    FONT_STACK, COLOR_NORMAL_BG, COLOR_BORDER_DEFAULT, COLOR_SELECTED_BG,
-    COLOR_BORDER_SELECTED, COLOR_HOVER_BG, COLOR_BUTTON_HOVER,
-    COLOR_BUTTON_PRESSED_HOVER, COLOR_MENU_PRESSED_FG,
-    LINEEDIT_RULE, TOOLTIP_RULE, BOLD_LIST_STYLE, flat_button_style, font_rule,
+from dictionary_app.theme.styles import (
+    COLOR_BORDER_DEFAULT, COLOR_BORDER_SELECTED, COLOR_BUTTON_HOVER, COLOR_BUTTON_PRESSED_HOVER,
+    COLOR_HOVER_BG, COLOR_MENU_PRESSED_FG, COLOR_NORMAL_BG, COLOR_SELECTED_BG, FONT_STACK,
+    GLOBAL_STYLE, flat_button_style
 )
+
+COLOR_D_SPAN_UNDERLINE = '#c2571a'
+COLOR_AMBIGUOUS_G_BG = '#ffdab3'
+COLOR_AMBIGUOUS_HW_BG = '#d8d0f2'
+COLOR_CHECKED_BG = '#c8f7c5'
+COLOR_CHECKED_HOVER_BG = '#b8f0b5'
+COLOR_CHECKED_SELECTED_BG = '#7cbf7a'
+COLOR_CHECKED_BORDER = '#a0d8a0'
+COLOR_TRANSPARENT = '#00000000'
+COLOR_TEXT = 'black'
 
 _MARKUP_TAB_STYLE = f"""
     QTabWidget::pane {{
@@ -26,14 +35,7 @@ _MARKUP_TAB_STYLE = f"""
     }}
 """
 
-MARKUP_GLOBAL_STYLE = (
-    font_rule('QWidget')
-    + BOLD_LIST_STYLE
-    + font_rule('QLineEdit')
-    + LINEEDIT_RULE
-    + TOOLTIP_RULE
-    + _MARKUP_TAB_STYLE
-)
+MARKUP_GLOBAL_STYLE = GLOBAL_STYLE + _MARKUP_TAB_STYLE
 
 ENTRY_LIST_STYLE = f"""
     QListView::item {{
@@ -55,29 +57,29 @@ ATTRIBUTE_POPUP_STYLE = f"""
     QListWidget::item {{
         padding: 2px 10px;
         border-left: 3px solid transparent;
-        color: black;
+        color: {COLOR_TEXT};
     }}
     QListWidget::item:hover {{
         background: {COLOR_HOVER_BG};
         border-left: 3px solid {COLOR_BORDER_DEFAULT};
-        color: black;
+        color: {COLOR_TEXT};
     }}
     QListWidget::item:selected {{
         background: {COLOR_SELECTED_BG};
         border-left: 3px solid {COLOR_BORDER_SELECTED};
-        color: black;
+        color: {COLOR_TEXT};
     }}
     QListWidget::item:selected:!active {{
         background: {COLOR_SELECTED_BG};
         border-left: 3px solid {COLOR_BORDER_SELECTED};
-        color: black;
+        color: {COLOR_TEXT};
     }}
 """
 
 _TOGGLE_BUTTON_BASE = f"""
     QPushButton {{
         background-color: {COLOR_HOVER_BG};
-        color: black;
+        color: {COLOR_TEXT};
         font-weight: bold;
         border: 2px solid {COLOR_BORDER_DEFAULT};
         border-radius: 5px;

@@ -1,4 +1,4 @@
-from dictionary_app.utils.text_utils import hw_identity
+from dictionary_app.utils.normalize_headword import resolve_headword
 
 
 def all_ids_resolved(member_ids):
@@ -24,7 +24,7 @@ class DuplicateResolver:
     def filter(self, results):
         by_norm = {}
         for r in results:
-            by_norm.setdefault(hw_identity(r[1], r[6] if len(r) > 6 else 0), []).append(r)
+            by_norm.setdefault(resolve_headword(r[1], r[6] if len(r) > 6 else 0), []).append(r)
 
         unresolved = []
         for rows in by_norm.values():
@@ -34,12 +34,10 @@ class DuplicateResolver:
 
     def _tables(self):
         if self._lookup_cache is None:
-            cursor = self._search_engine._get_connection().cursor()
-            cursor.execute("SELECT id, headword, entry_link, hw_xml_id FROM dictionary")
-            dict_rows = {row[0]: row[1:] for row in cursor.fetchall()}
-            cursor.execute("SELECT main_entry_id, headword, link, hw_xml_id FROM sub_headwords")
+            dict_rows_raw, sub_rows = self._search_engine.fetch_link_target_rows()
+            dict_rows = {row[0]: row[1:] for row in dict_rows_raw}
             sub_by_key = {}
-            for main_id, headword, link, hw_xml_id in cursor.fetchall():
+            for main_id, headword, link, hw_xml_id in sub_rows:
                 sub_by_key.setdefault((main_id, headword, link), []).append(hw_xml_id)
             self._lookup_cache = (dict_rows, sub_by_key)
         return self._lookup_cache

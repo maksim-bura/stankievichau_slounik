@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import QStyle, QStyleOptionFrame, QProxyStyle, QTextBrowser, QTextEdit
 from dictionary_app.theme.layout_constants import DOCUMENT_MARGIN
+from dictionary_app.theme.styles import ENTRY_STYLESHEET
 from dictionary_app.utils.constants import SCHEME_WORD, SCHEME_SOURCE, SCHEME_PREVIEW
 
 
@@ -16,6 +17,7 @@ class DictTextBrowser(QTextBrowser):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyle(NoBlueFocusFrameStyle(self.style()))
+        self.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
 
     def setSource(self, url):
         if url.scheme() in (SCHEME_WORD, SCHEME_SOURCE, SCHEME_PREVIEW):

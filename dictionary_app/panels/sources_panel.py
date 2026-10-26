@@ -3,15 +3,16 @@ import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget, QGridLayout, QHBoxLayout
 from PySide6.QtCore import Qt
 from dictionary_app.utils.scroll_state import ScrollState
-from dictionary_app.utils.scrollbar_geometry import overlay_right_inset
+from dictionary_app.utils.measure_scrollbars import overlay_right_inset
 from dictionary_app.localization import strings
 from dictionary_app.theme.layout_constants import (
-    BUTTON_SIZE, BAR_CONTENTS_MARGINS, BAR_SPACING, LAYOUT_MARGINS, LAYOUT_SPACING,
+    BUTTON_SIZE, BAR_CONTENTS_MARGINS, BAR_SPACING, LAYOUT_MARGINS, LAYOUT_SPACING
 )
 from dictionary_app.widgets import IconButton, SearchBox, DictTextBrowser
-from dictionary_app.theme.widget_styles import ENTRY_STYLESHEET
-from dictionary_app.utils.search_regex import compile_search_regex
-from dictionary_app.panels.sources_renderer import build_filtered_html, section_matches
+from dictionary_app.utils.compile_search_regex import compile_search_regex
+from dictionary_app.format.render_sources import (
+    build_filtered_html, normalize_anchor, section_matches
+)
 from dictionary_app.utils.constants import CROSS_MARKER, MAGNIFIER_MARKER, SCHEME_TOGGLE_SECTION
 
 
@@ -69,7 +70,6 @@ class SourcesPanel:
         self.viewer.setOpenExternalLinks(False)
         self.viewer.anchorClicked.connect(self._on_anchor_clicked)
         self.viewer.setFocusPolicy(Qt.NoFocus)
-        self.viewer.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
         wrapper_layout.addWidget(self.viewer, 0, 0, 1, 2)
         wrapper_layout.setColumnStretch(0, 1)
         wrapper_layout.setColumnStretch(1, 0)
@@ -122,21 +122,42 @@ class SourcesPanel:
         self.close_search_button.setVisible(False)
         self.floating_button.setVisible(True)
 
+    def _rebuild_content(self, **kwargs):
+        self.content = build_filtered_html(self._all_children, self._collapsed_sections, **kwargs)
+        self.viewer.setHtml(self.content)
+
+    def _show_panel(self):
+        self.container.show()
+        self._update_floating_button_inset()
+
+    def _capture_view_state(self):
+        return (self.main_window.entry_viewer.get_viewer().hasFocus(),
+                self.viewer.verticalScrollBar().value())
+
+    def _restore_view_state(self, old_focus, current_scroll):
+        self.viewer.verticalScrollBar().setValue(current_scroll)
+        if old_focus:
+            self.main_window.entry_viewer.get_viewer().setFocus()
+
+    def _expand_matching_sections(self, predicate):
+        for child in self._all_children:
+            if child.tag == 'section' and child.get('id') in self._collapsed_sections:
+                if predicate(child):
+                    self._collapsed_sections.discard(child.get('id'))
+
+    def _section_has_anchor(self, section, anchor):
+        return any(anchor == normalize_anchor(abbr.text) for abbr in section.iter('abbr'))
+
     def _toggle_section(self, section_id):
         self._collapsed_sections ^= {section_id}
 
-        old_focus = self.main_window.entry_viewer.get_viewer().hasFocus()
-        current_scroll = self.viewer.verticalScrollBar().value()
+        old_focus, current_scroll = self._capture_view_state()
 
         text = self.search_line.text() if self.search_visible else None
         marker = None if (self.search_visible and text) else self.current_anchor
-        self.content = build_filtered_html(self._all_children, self._collapsed_sections, search_text=text, marker_anchor=marker)
+        self._rebuild_content(search_text=text, marker_anchor=marker)
 
-        self.viewer.setHtml(self.content)
-        self.viewer.verticalScrollBar().setValue(current_scroll)
-
-        if old_focus:
-            self.main_window.entry_viewer.get_viewer().setFocus()
+        self._restore_view_state(old_focus, current_scroll)
 
     def _on_anchor_clicked(self, url):
         url_str = url.toString()
@@ -158,31 +179,22 @@ class SourcesPanel:
 
         anchor = source_abbreviation.rstrip(':').rstrip('.')
 
-        for child in self._all_children:
-            if child.tag == 'section' and child.get('id') in self._collapsed_sections:
-                for abbr in child.iter('abbr'):
-                    if anchor == (abbr.text or '').rstrip(':').rstrip('.'):
-                        self._collapsed_sections.discard(child.get('id'))
-                        break
+        self._expand_matching_sections(
+            lambda section: self._section_has_anchor(section, anchor))
 
         self.current_anchor = anchor
         was_visible = self.sources_visible
 
         if was_visible:
-            old_focus = self.main_window.entry_viewer.get_viewer().hasFocus()
-            current_scroll = self.viewer.verticalScrollBar().value()
+            old_focus, current_scroll = self._capture_view_state()
 
-        self.content = build_filtered_html(self._all_children, self._collapsed_sections, marker_anchor=anchor)
-        self.viewer.setHtml(self.content)
+        self._rebuild_content(marker_anchor=anchor)
 
         if not was_visible:
-            self.container.show()
-            self._update_floating_button_inset()
+            self._show_panel()
             self.sources_visible = True
         else:
-            self.viewer.verticalScrollBar().setValue(current_scroll)
-            if old_focus:
-                self.main_window.entry_viewer.get_viewer().setFocus()
+            self._restore_view_state(old_focus, current_scroll)
 
         QApplication.processEvents()
         self.scroll_manager.scroll_to_anchor(anchor)
@@ -205,13 +217,10 @@ class SourcesPanel:
                 self._pre_search_collapsed = set(self._collapsed_sections)
 
             pattern = compile_search_regex(text)
-            for child in self._all_children:
-                if child.tag == 'section' and child.get('id') in self._collapsed_sections:
-                    if section_matches(child, pattern):
-                        self._collapsed_sections.discard(child.get('id'))
+            self._expand_matching_sections(
+                lambda section: section_matches(section, pattern))
 
-            self.content = build_filtered_html(self._all_children, self._collapsed_sections, search_text=text)
-            self.viewer.setHtml(self.content)
+            self._rebuild_content(search_text=text)
 
     def toggle(self):
         self.sources_visible = not self.sources_visible
@@ -221,8 +230,7 @@ class SourcesPanel:
                 QApplication.processEvents()
                 if self.current_anchor:
                     self.scroll_manager.scroll_to_anchor(self.current_anchor)
-            self.container.show()
-            self._update_floating_button_inset()
+            self._show_panel()
         else:
             self.container.hide()
             self.content = self.original_content

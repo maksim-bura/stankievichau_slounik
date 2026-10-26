@@ -1,11 +1,18 @@
 import re
 import html
 from dictionary_app.localization import strings
-from dictionary_app.utils.search_regex import compile_search_regex
+from dictionary_app.utils.compile_search_regex import compile_search_regex
 from dictionary_app.utils.constants import (
     ARROW_MARKER, COLLAPSED_TRIANGLE_ENTITY, EXPANDED_TRIANGLE_ENTITY,
     SCHEME_TOGGLE_SECTION,
 )
+
+
+GABBR_SECTION_ID = '4'
+
+
+def normalize_anchor(text):
+    return (text or '').rstrip(':').rstrip('.')
 
 
 def build_filtered_html(all_children, collapsed_sections, search_text=None, marker_anchor=None):
@@ -62,7 +69,7 @@ def _parse_section(section):
         h2_br.append('<br>')
         idx += 1
     gabbr_elem = None
-    if section.get('id') == '4' and idx < len(sec_children) and sec_children[idx].tag == 'gabbr':
+    if section.get('id') == GABBR_SECTION_ID and idx < len(sec_children) and sec_children[idx].tag == 'gabbr':
         gabbr_elem = sec_children[idx]
         idx += 1
     content = sec_children[idx:]
@@ -171,15 +178,12 @@ def _element_to_html(elem, pattern=None):
         inner_parts.append(text)
 
     for child in elem:
-        inner_parts.append(_element_to_html(child, pattern))
-        if child.tail:
-            tail = _highlight_text(html.escape(child.tail), pattern)
-            inner_parts.append(tail)
+        inner_parts.append(_element_with_tail_to_html(child, pattern))
 
     inner_html = ''.join(inner_parts)
 
     if tag == 'abbr':
-        anchor = (elem.text or '').rstrip(':').rstrip('.')
+        anchor = normalize_anchor(elem.text)
         return f'<span id="{anchor}" class="abbr">{inner_html}</span>'
     elif tag == 'i':
         return f'<span class="i">{inner_html}</span>'
@@ -195,14 +199,15 @@ def _element_to_html(elem, pattern=None):
         return inner_html
 
 
-def _render_elements(elements, pattern=None):
-    parts = []
-    for elem in elements:
-        parts.append(_element_to_html(elem, pattern))
-        if elem.tail:
-            tail = _highlight_text(html.escape(elem.tail), pattern)
-            parts.append(tail)
+def _element_with_tail_to_html(elem, pattern=None):
+    parts = [_element_to_html(elem, pattern)]
+    if elem.tail:
+        parts.append(_highlight_text(html.escape(elem.tail), pattern))
     return ''.join(parts)
+
+
+def _render_elements(elements, pattern=None):
+    return ''.join(_element_with_tail_to_html(elem, pattern) for elem in elements)
 
 
 def _highlight_text(text, pattern):

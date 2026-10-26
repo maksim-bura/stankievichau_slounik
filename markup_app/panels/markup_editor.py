@@ -1,25 +1,25 @@
 import xml.etree.ElementTree as ElementTree
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit,
-    QTabWidget, QTabBar, QPushButton, QGridLayout
+    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, QTabWidget, QPushButton, QGridLayout
 )
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QTextCursor, QTextCharFormat
 
-from dictionary_app.format.entry_formatter import format_entry
+from dictionary_app.format.format_entry import format_entry
 from dictionary_app.widgets.dict_text_browser import NoBlueFocusFrameStyle
-from dictionary_app.theme.widget_styles import ENTRY_STYLESHEET
+from dictionary_app.theme.styles import ENTRY_STYLESHEET
 from dictionary_app.theme.layout_constants import LAYOUT_MARGINS, LAYOUT_SPACING, BUTTON_SIZE
 from markup_app.theme.layout_constants import (
-    EDITOR_TOOLBAR_MARGINS, EDITOR_TOOLBAR_SPACING, EDITOR_TOOLBAR_GAP,
+    EDITOR_TOOLBAR_MARGINS, EDITOR_TOOLBAR_SPACING, EDITOR_TOOLBAR_GAP
 )
-from markup_app.theme.styles import TAG_BUTTON_STYLE, ENTRY_CHECKED_TOGGLE_STYLE
+from markup_app.theme.styles import ENTRY_CHECKED_TOGGLE_STYLE
 from markup_app.utils.constants import FLOPPY_MARKER
 from markup_app.localization import strings
-from markup_app.panels.xml_edit_widget import XmlTextEdit
-from dictionary_app.utils.text_utils import hw_identity
-from dictionary_app.utils.scrollbar_geometry import overlay_right_inset
+from markup_app.panels.tag_button import TagButton, UniformTabBar
+from markup_app.panels.xml_text_edit import XmlTextEdit, strip_link_markers
+from dictionary_app.utils.normalize_headword import resolve_headword
+from dictionary_app.utils.measure_scrollbars import overlay_right_inset
 from dictionary_app.utils.constants import CHECK_BLANK
 
 
@@ -30,32 +30,12 @@ TAG_BUTTON_GROUPS = [
 ]
 
 
-class _UniformTabBar(QTabBar):
-    def tabSizeHint(self, index):
-        hint = super().tabSizeHint(index)
-        widths = [super().tabSizeHint(i).width() for i in range(self.count())]
-        return QSize(max(widths), hint.height()) if widths else hint
-
-
-class TagButton(QPushButton):
-    clicked_with_tag = Signal(str)
-
-    def __init__(self, label, tag_name, parent=None):
-        super().__init__(label, parent)
-        self._tag_name = tag_name
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFlat(True)
-        self.setStyleSheet(TAG_BUTTON_STYLE)
-        self.clicked.connect(lambda: self.clicked_with_tag.emit(self._tag_name))
-
-
 class EditorPane(QWidget):
     content_changed = Signal()
+    link_marks_stale = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._xml_text = ''
-        self._entry_id = None
         self._is_modified = False
         self._baseline = ''
         self._overlay_layout = None
@@ -66,7 +46,7 @@ class EditorPane(QWidget):
 
         self._tabs = QTabWidget()
         self._tabs.setTabPosition(QTabWidget.South)
-        uniform_bar = _UniformTabBar()
+        uniform_bar = UniformTabBar()
         uniform_bar.setExpanding(False)
         self._tabs.setTabBar(uniform_bar)
         self._tabs.currentChanged.connect(self._on_tab_changed)
@@ -74,6 +54,7 @@ class EditorPane(QWidget):
         self._text_edit = XmlTextEdit()
         self._text_edit.setReadOnly(False)
         self._text_edit.textChanged.connect(self._on_text_changed)
+        self._text_edit.link_marks_stale.connect(self.link_marks_stale)
 
         self._author_edit = QTextEdit()
         self._author_edit.setReadOnly(True)
@@ -125,43 +106,27 @@ class EditorPane(QWidget):
         self._text_edit.verticalScrollBar().rangeChanged.connect(self._update_overlay_inset)
         self._author_edit.verticalScrollBar().rangeChanged.connect(self._update_overlay_inset)
 
-    def set_entry(self, entry_id, xml_text):
-        self._entry_id = entry_id
-        self._xml_text = xml_text
+    def set_entry(self, xml_text):
         self._is_modified = False
         self._text_edit.blockSignals(True)
+        self._text_edit.setCurrentCharFormat(QTextCharFormat())
         self._text_edit.setPlainText(xml_text)
         self._text_edit.blockSignals(False)
-        self._baseline = self._text_edit.toPlainText()
-        self._text_edit._pending_tag_delete = False
-        self._text_edit._pending_delete_forward = None
-        self._text_edit._pair_delete_snapshot = None
-        self._text_edit._last_deleted_open = None
-        self._text_edit._last_deleted_close = None
-        self._text_edit._last_deleted_forward = None
-        self._text_edit._rogue_tags = []
-        self._text_edit._d_span_sels = []
-        self._text_edit._non_d_underline = []
-        self._text_edit._target_hw = None
-        self._text_edit._separate_occurrences = False
-        self._text_edit._broken_link_spans = []
-        self._text_edit._grammar_g_spans = []
-        self._text_edit._grammar_hw_spans = []
-        self._text_edit._link_marks = []
-        self._text_edit._link_mark_tooltips = {}
+        self._baseline = self.get_xml()
+        self._text_edit.reset_state()
         self._text_edit.setExtraSelections([])
         self._render_author()
 
     def mark_sub_hw(self, headword, occurrence_index=0, keep_acc=0, separate_occurrences=False):
         if not headword:
             return
-        norm = hw_identity(headword.strip(), keep_acc)
+        norm = resolve_headword(headword.strip(), keep_acc)
         self._text_edit.mark_sub_hw(norm, occurrence_index, separate_occurrences)
 
     def mark_main_non_d(self, headword, occurrence_index=0, keep_acc=0):
         if not headword:
             return
-        norm = hw_identity(headword.strip(), keep_acc)
+        norm = resolve_headword(headword.strip(), keep_acc)
         self._text_edit.mark_main_non_d(norm, occurrence_index)
 
     def highlight_broken_links(self, spans):
@@ -181,54 +146,25 @@ class EditorPane(QWidget):
         self._text_edit._refresh_selections()
 
     def get_xml(self):
-        return self._text_edit.toPlainText()
+        return strip_link_markers(self._text_edit.toPlainText())
 
     def is_modified(self):
         return self._is_modified
 
     def mark_saved(self):
         self._is_modified = False
-        self._baseline = self._text_edit.toPlainText()
+        self._baseline = self.get_xml()
         self._text_edit.document().clearUndoRedoStacks()
         self._text_edit._pair_delete_snapshot = None
         self._text_edit._last_deleted_open = None
         self._text_edit._last_deleted_close = None
         self._text_edit._last_deleted_forward = None
 
-    def clear(self):
-        self._entry_id = None
-        self._xml_text = ''
-        self._is_modified = False
-        self._baseline = ''
-        self._text_edit.blockSignals(True)
-        self._text_edit.clear()
-        self._text_edit.blockSignals(False)
-        self._text_edit._rogue_tags = []
-        self._text_edit._d_span_sels = []
-        self._text_edit._non_d_underline = []
-        self._text_edit._target_hw = None
-        self._text_edit._separate_occurrences = False
-        self._text_edit._broken_link_spans = []
-        self._text_edit._grammar_g_spans = []
-        self._text_edit._grammar_hw_spans = []
-        self._text_edit._link_marks = []
-        self._text_edit._link_mark_tooltips = {}
-        self._text_edit.setExtraSelections([])
-        self._text_edit._pending_tag_delete = False
-        self._text_edit._pending_open_tag = None
-        self._text_edit._pending_close_tag = None
-        self._text_edit._pending_delete_forward = None
-        self._text_edit._pair_delete_snapshot = None
-        self._text_edit._last_deleted_open = None
-        self._text_edit._last_deleted_close = None
-        self._text_edit._last_deleted_forward = None
-        self._author_edit.clear()
-
-    def set_link_marks(self, offsets, tooltips=None):
-        self._text_edit.set_link_marks(offsets, tooltips)
+    def set_link_marks(self, offsets, tooltips=None, reset_undo=False):
+        self._text_edit.set_link_marks(offsets, tooltips, reset_undo)
 
     def _render_author(self):
-        xml = self._text_edit.toPlainText()
+        xml = self.get_xml()
         try:
             root = ElementTree.fromstring(xml)
             html = format_entry(xml)
@@ -255,7 +191,7 @@ class EditorPane(QWidget):
         self._overlay_layout.setColumnMinimumWidth(1, inset)
 
     def _on_text_changed(self):
-        self._is_modified = self._text_edit.toPlainText() != self._baseline
+        self._is_modified = self.get_xml() != self._baseline
         self.content_changed.emit()
 
     def insert_tag(self, tag_name):

@@ -1,11 +1,10 @@
 import re
 import xml.etree.ElementTree as ElementTree
 
-from dictionary_app.utils.text_utils import (
-    has_keep_acc, normalize_jo_to_je, remove_accents, resolve_headword,
-)
+from dictionary_app.utils.normalize_headword import has_keep_acc, resolve_headword, strip_quotes
+from dictionary_app.utils.remove_accents import remove_accents
 from dictionary_app.utils.xml_schema import (
-    ATTR_HW, ATTR_ID, ATTR_ENTRY, ATTR_N, ATTR_EXCL, ATTR_KEEP_ACC,
+    ATTR_HW, ATTR_ID, ATTR_ENTRY, ATTR_N, ATTR_EXCL, ATTR_KEEP_ACC
 )
 
 
@@ -33,7 +32,6 @@ _OUTCOME_FLAGS = {
     OUTCOME_UNRESOLVED: MODE_UNRESOLVED,
 }
 
-_QUOTE_CHARS = '"\'„“”'
 _TAG_RE = re.compile(r'<[^>]+>')
 _SEE_RE = re.compile(r'<see\b([^>]*?)>(.*?)</see>', re.DOTALL)
 _SEE_ATTR_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
@@ -46,19 +44,11 @@ _SEE_TAIL_SUFFIX_RE = re.compile(r'[,\s]*\d+(?:[,.]\s*\d+)*$')
 
 
 def normalize_headword(text):
-    return normalize_jo_to_je(remove_accents(text))
-
-
-def hw_identity(text, keep_acc):
-    return normalize_jo_to_je(text) if keep_acc else normalize_headword(text)
+    return remove_accents(text)
 
 
 def row_norm(text):
     return remove_accents(text).lower()
-
-
-def strip_quotes(text):
-    return text.strip(_QUOTE_CHARS) if text else text
 
 
 def strip_tags(text):
@@ -76,11 +66,7 @@ def split_sense_tail(text):
     return word, senses
 
 
-def strip_sense_tail(text):
-    return split_sense_tail(text)[0]
-
-
-def _attr_matches(attr, headword):
+def attr_matches(attr, headword):
     if not attr:
         return False
     if remove_accents(attr) != attr:
@@ -108,6 +94,7 @@ class BrokenLinkAnalyzer:
         self._norm_index = None
         self._exact_index = None
         self._entry_senses = None
+        self._entry_indexes = None
 
     def invalidate(self):
         self._flags = None
@@ -115,22 +102,13 @@ class BrokenLinkAnalyzer:
         self._norm_index = None
         self._exact_index = None
         self._entry_senses = None
+        self._entry_indexes = None
 
     def flags(self):
         if self._flags is not None:
             return self._flags
 
-        cursor = self._connection().cursor()
-        by_link = {}
-        by_hw = {}
-        cursor.execute("SELECT id, headword, entry_link, source_file FROM dictionary")
-        for entry_id, headword, entry_link, source_file in cursor.fetchall():
-            if entry_link:
-                by_link.setdefault(
-                    (source_file, normalize_headword(entry_link)), []
-                ).append(entry_id)
-            by_hw.setdefault((source_file, row_norm(headword)), []).append(entry_id)
-
+        by_link, by_hw = self._entry_id_indexes()
         flags = {}
         for source_file, block in self._source_blocks():
             entry_ids = self._entry_ids(block, source_file, by_link, by_hw)
@@ -336,25 +314,30 @@ class BrokenLinkAnalyzer:
             return self._exact_index
         index = {}
         for row in self._headword_rows():
-            index.setdefault(hw_identity(row[1], row[4]), []).append(row)
+            index.setdefault(resolve_headword(row[1], row[4]), []).append(row)
         self._exact_index = index
         return index
 
-    def _entry_senses_cache(self):
-        if self._entry_senses is not None:
-            return self._entry_senses
+    def _entry_id_indexes(self):
+        if self._entry_indexes is not None:
+            return self._entry_indexes
         cursor = self._connection().cursor()
         by_link = {}
         by_hw = {}
-        cursor.execute(
-            "SELECT id, headword, entry_link, source_file FROM dictionary"
-        )
+        cursor.execute("SELECT id, headword, entry_link, source_file FROM dictionary")
         for entry_id, headword, entry_link, source_file in cursor.fetchall():
             if entry_link:
                 by_link.setdefault(
                     (source_file, normalize_headword(entry_link)), []
                 ).append(entry_id)
             by_hw.setdefault((source_file, row_norm(headword)), []).append(entry_id)
+        self._entry_indexes = (by_link, by_hw)
+        return self._entry_indexes
+
+    def _entry_senses_cache(self):
+        if self._entry_senses is not None:
+            return self._entry_senses
+        by_link, by_hw = self._entry_id_indexes()
         entry_senses = {}
         for source_file, block in self._source_blocks():
             entry_ids = self._entry_ids(block, source_file, by_link, by_hw)
@@ -456,19 +439,17 @@ class BrokenLinkAnalyzer:
         norm = normalize_headword(word)
         word_rows = self._headword_index().get(norm, ())
         if word_rows and remove_accents(word) != word:
-            exact = self._exact_headword_index().get(normalize_jo_to_je(word))
+            exact = self._exact_headword_index().get(word)
             if exact:
                 word_rows = exact
         rows = self._headword_rows()
-
-        if len(word_rows) == 1:
-            return self._finalize_resolved(word_rows[0], senses)
 
         def handle_attrs():
             if entry_attr:
                 entry_ids = {
                     entry_id for entry_id, headword, _link, _hw, _keep_acc in rows
-                    if _attr_matches(entry_attr, headword)
+                    if (_link and attr_matches(entry_attr, _link))
+                    or attr_matches(entry_attr, headword)
                 }
                 if not entry_ids:
                     return OUTCOME_MISSING, None
@@ -482,7 +463,7 @@ class BrokenLinkAnalyzer:
                     matched = [
                         row for row in in_entry
                         if (row[3] and row[3] == hw_attr)
-                        or _attr_matches(hw_attr, row[1])
+                        or attr_matches(hw_attr, row[1])
                     ]
                 else:
                     matched = [
@@ -503,6 +484,14 @@ class BrokenLinkAnalyzer:
                 return OUTCOME_UNRESOLVED, None
             return None, None
 
+        if entry_attr or hw_attr:
+            outcome, row = handle_attrs()
+            if outcome is not None:
+                return outcome, row
+
+        if len(word_rows) == 1:
+            return self._finalize_resolved(word_rows[0], senses)
+
         outcome, row = handle_attrs()
         if not word_rows:
             return (outcome or OUTCOME_MISSING), row
@@ -513,7 +502,7 @@ class BrokenLinkAnalyzer:
         for entry_id, headword, link, hw_xml_id, keep_acc in self._headword_rows():
             if hw_xml_id and hw_xml_id == attr:
                 matches.append((entry_id, headword, link, hw_xml_id, keep_acc))
-            elif _attr_matches(attr, headword):
+            elif attr_matches(attr, headword):
                 matches.append((entry_id, headword, link, hw_xml_id, keep_acc))
         return matches
 

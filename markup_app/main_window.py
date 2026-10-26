@@ -2,61 +2,56 @@ import os
 import re
 import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QListView, QApplication, QPushButton, QMessageBox,
-    QMenu, QWidgetAction
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListView, QApplication, QPushButton,
+    QMessageBox, QMenu, QWidgetAction
 )
 from PySide6.QtCore import Qt, QPoint, QEvent, QRect, QItemSelectionModel
 from PySide6.QtGui import QCursor
-from dictionary_app.utils.text_utils import remove_accents, resolve_headword, hw_identity, has_keep_acc, collapse_same_entry_duplicates
+from dictionary_app.utils.collapse_duplicates import collapse_same_entry_duplicates
+from dictionary_app.utils.normalize_headword import has_keep_acc, resolve_headword
 from dictionary_app.utils.xml_schema import ATTR_ID
-from dictionary_app.db.build_database import build_database, get_source_path
-from markup_app.services.broken_links import (
-    BrokenLinkAnalyzer,
-    MODE_AMBIGUOUS_G,
-    MODE_MISSING,
-    MODE_UNRESOLVED,
-    MODE_UNION,
-    normalize_headword,
-    row_norm,
+from dictionary_app.db.build_database import build_database, get_source_path, reindex_entry
+from markup_app.services.broken_link_analyzer import (
+    BrokenLinkAnalyzer, MODE_AMBIGUOUS_G, MODE_MISSING, MODE_UNION, MODE_UNRESOLVED,
+    normalize_headword, row_norm
 )
 from dictionary_app.widgets import (
-    SearchBox, select_row, navigate_rows, INSERT_LETTER_G,
-    InsertLetterGButton
+    SearchBox, select_row, navigate_rows, INSERT_LETTER_G, InsertLetterGButton
 )
-from markup_app.panels.editor import MarkupEditor
+from markup_app.panels.markup_editor import MarkupEditor
 from markup_app.services.checked_state import CheckedState
-from markup_app.services.duplicates import DuplicateResolver
-from markup_app.services.link_marks import build_link_marks
-from markup_app.panels.results_widgets import (
-    BorderDelegate, BrokenCheckOption, MenuCommandOption, ResultsListModel,
-    apply_pressed,
-)
-from markup_app.theme.styles import (
-    MARKUP_GLOBAL_STYLE, ENTRY_LIST_STYLE,
-    REBUILD_BUTTON_STYLE
-)
+from markup_app.services.duplicate_resolver import DuplicateResolver
+from markup_app.services.link_marks_builder import build_link_marks
+from markup_app.panels.apply_pressed import apply_pressed
+from markup_app.panels.border_delegate import BorderDelegate
+from markup_app.panels.menu_options import BrokenCheckOption, MenuCommandOption
+from markup_app.panels.results_list_model import ResultsListModel
+from markup_app.theme.styles import ( MARKUP_GLOBAL_STYLE, ENTRY_LIST_STYLE, REBUILD_BUTTON_STYLE )
 from markup_app.localization import strings
 from dictionary_app.theme.layout_constants import (
-    RESULTS_MIN_WIDTH, ENTRY_MIN_WIDTH,
-    WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT,
-    LAYOUT_MARGINS, LAYOUT_SPACING, TOP_LAYOUT_SPACING,
-    BUTTON_SIZE,
+    RESULTS_MIN_WIDTH, ENTRY_MIN_WIDTH, WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT,
+    LAYOUT_MARGINS, LAYOUT_SPACING, TOP_LAYOUT_SPACING, BUTTON_SIZE
 )
-from dictionary_app.theme.widget_styles import MENU_BUTTON_STYLE
+from dictionary_app.theme.styles import MENU_BUTTON_STYLE
 from dictionary_app.utils.constants import CHECK_MARK, CHECK_BLANK
-from dictionary_app.utils.item_roles import (
-    ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_ENTRY_ID,
-)
-from markup_app.utils.constants import (
-    RELOAD_MARKER, DUPLICATES_MARKER, BROKEN_LINKS_MARKER,
-)
+from dictionary_app.utils.item_roles import ( ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_ENTRY_ID, )
+from markup_app.utils.constants import ( RELOAD_MARKER, DUPLICATES_MARKER, BROKEN_LINKS_MARKER, )
 
 _ENTRY_BLOCK_RE = re.compile(r'<entry\b.*?</entry>', re.DOTALL)
+
+_ALL_BROKEN_MODES = frozenset({MODE_MISSING, MODE_UNRESOLVED, MODE_AMBIGUOUS_G})
 
 
 def find_entry_blocks(content):
     return _ENTRY_BLOCK_RE.findall(content)
+
+
+def expand_broken_mode(mode):
+    if isinstance(mode, str):
+        if mode == MODE_UNION:
+            return set(_ALL_BROKEN_MODES)
+        return {mode}
+    return set(mode)
 
 
 class MarkupMainWindow(QMainWindow):
@@ -124,7 +119,7 @@ class MarkupMainWindow(QMainWindow):
         self._duplicates_toggle.setStyleSheet(MENU_BUTTON_STYLE)
         self._duplicates_toggle.setToolTip(strings.app_buttons.duplicates.tooltip)
         self._duplicates_toggle.clicked.connect(self._on_duplicates_toggle)
-        self._update_duplicates_pressed()
+        apply_pressed(self._duplicates_toggle)
 
         self._broken_links_toggle = QPushButton(BROKEN_LINKS_MARKER)
         self._broken_links_toggle.setCheckable(True)
@@ -134,7 +129,7 @@ class MarkupMainWindow(QMainWindow):
         self._broken_links_toggle.setStyleSheet(MENU_BUTTON_STYLE)
         self._broken_links_toggle.setToolTip(strings.app_buttons.broken_links.tooltip)
         self._broken_links_toggle.clicked.connect(self._on_broken_links_toggle)
-        self._update_broken_links_pressed()
+        apply_pressed(self._broken_links_toggle)
 
         self._broken_menu = QMenu(self)
         self._broken_menu_options = {}
@@ -196,6 +191,7 @@ class MarkupMainWindow(QMainWindow):
         self.editor = MarkupEditor()
         self.editor.pane.setMinimumWidth(ENTRY_MIN_WIDTH)
         self.editor.pane.content_changed.connect(self._on_content_changed)
+        self.editor.pane.link_marks_stale.connect(self._refresh_link_marks)
         self._checked_toggle = self.editor.checked_toggle
         self._checked_toggle.clicked.connect(self._on_checked_toggle)
         self._checked_toggle.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -239,24 +235,20 @@ class MarkupMainWindow(QMainWindow):
                 pos = event.position()
                 index = self.results_box.indexAt(pos.toPoint())
                 row = index.row() if index.isValid() else -1
-                if row != self._delegate._hovered_row:
-                    self._delegate._hovered_row = row
-                    self.results_box.viewport().update()
+                self._delegate.set_hovered_row(row)
             elif event.type() == event.Type.Leave:
-                if self._delegate._hovered_row != -1:
-                    self._delegate._hovered_row = -1
-                    self.results_box.viewport().update()
+                self._delegate.set_hovered_row(-1)
         return super().eventFilter(obj, event)
 
     def load_styles(self):
         QApplication.instance().setStyleSheet(MARKUP_GLOBAL_STYLE)
 
     def show_all_entries(self):
-        results = self.search_engine.search_headwords('')
+        results = self.search_engine.search('')
         self._display_results(results)
 
     def on_search(self, text):
-        results = self.search_engine.search_headwords(text.strip())
+        results = self.search_engine.search(text.strip())
         self._display_results(results)
 
     def _display_results(self, results):
@@ -276,13 +268,7 @@ class MarkupMainWindow(QMainWindow):
 
     def _broken_filter(self, results, mode):
         flags = self._broken_links.flags()
-        if isinstance(mode, str):
-            wanted = (
-                {MODE_MISSING, MODE_UNRESOLVED, MODE_AMBIGUOUS_G}
-                if mode == MODE_UNION else {mode}
-            )
-        else:
-            wanted = set(mode)
+        wanted = set(mode)
         if not wanted:
             return list(results)
         filtered = []
@@ -315,13 +301,13 @@ class MarkupMainWindow(QMainWindow):
         else:
             self.editor.pane.clear_grammar_marks()
 
-    def _refresh_link_marks(self):
+    def _refresh_link_marks(self, reset_undo=False):
         if not self.current_result:
             return
         offsets, tooltips = build_link_marks(
             self._broken_links, self.editor.pane.get_xml(), self.current_result[0]
         )
-        self.editor.pane.set_link_marks(offsets, tooltips)
+        self.editor.pane.set_link_marks(offsets, tooltips, reset_undo)
 
     def _iter_source_blocks(self):
         cursor = self.search_engine._get_connection().cursor()
@@ -361,18 +347,13 @@ class MarkupMainWindow(QMainWindow):
     def _apply_broken_mode(self, mode):
         if mode is None:
             self._broken_mode = None
-        elif isinstance(mode, str):
-            self._broken_mode = (
-                {MODE_MISSING, MODE_UNRESOLVED, MODE_AMBIGUOUS_G}
-                if mode == MODE_UNION else {mode}
-            )
         else:
-            self._broken_mode = set(mode)
+            self._broken_mode = expand_broken_mode(mode)
         if not self._broken_mode:
             self._broken_mode = None
         self._broken_links_toggle.setChecked(self._broken_mode is not None)
         self._sync_broken_options()
-        self._update_broken_links_pressed()
+        apply_pressed(self._broken_links_toggle)
         self._display_results(self.current_results)
         self._refresh_broken_highlight()
 
@@ -398,12 +379,6 @@ class MarkupMainWindow(QMainWindow):
 
     def _on_broken_menu_closed(self):
         self._broken_menu_consume = self._button_menu_consumed(self._broken_links_toggle)
-        self._update_broken_links_pressed()
-
-    def _update_duplicates_pressed(self):
-        apply_pressed(self._duplicates_toggle)
-
-    def _update_broken_links_pressed(self):
         apply_pressed(self._broken_links_toggle)
 
     def _update_checked_pressed(self):
@@ -445,7 +420,7 @@ class MarkupMainWindow(QMainWindow):
         self.search_box.insert(INSERT_LETTER_G)
 
     def _on_duplicates_toggle(self):
-        self._update_duplicates_pressed()
+        apply_pressed(self._duplicates_toggle)
         self._display_results(self.current_results)
 
     def _on_activate(self):
@@ -469,11 +444,7 @@ class MarkupMainWindow(QMainWindow):
 
         clicked = box.clickedButton()
         if clicked is save_btn:
-            if self.editor.pane.is_modified() and self.current_result:
-                self._save_current()
-                if self.editor.pane.is_modified():
-                    return False
-            return True
+            return self._save_current()
         if clicked is leave_btn:
             return True
         return False
@@ -548,12 +519,7 @@ class MarkupMainWindow(QMainWindow):
 
         self.current_result = (result[0], result[1], xml_text, result[3], source_file, keep_acc)
         self.current_occurrence = occurrence
-        self.editor.pane.set_entry(result[0], xml_text)
-        if self._is_sub_headword(result):
-            self.editor.pane.mark_sub_hw(
-                result[1], occurrence, keep_acc, separate_occurrences)
-        else:
-            self.editor.pane.mark_main_non_d(result[1], occurrence, keep_acc)
+        self.editor.pane.set_entry(xml_text)
         self._has_unsaved = False
 
         is_checked = self.checked_state.is_checked(source_file, result[3], result[1])
@@ -561,7 +527,12 @@ class MarkupMainWindow(QMainWindow):
         self._save_button.hide()
         self._checked_toggle.show()
         self._refresh_broken_highlight()
-        self._refresh_link_marks()
+        self._refresh_link_marks(reset_undo=True)
+        if self._is_sub_headword(result):
+            self.editor.pane.mark_sub_hw(
+                result[1], occurrence, keep_acc, separate_occurrences)
+        else:
+            self.editor.pane.mark_main_non_d(result[1], occurrence, keep_acc)
 
     def _read_entry_from_source(self, entry_id, source_file, headword=None, entry_link=None, keep_acc=0):
         if not source_file:
@@ -575,7 +546,7 @@ class MarkupMainWindow(QMainWindow):
         if loaded is None:
             return None
         blocks = loaded['blocks']
-        t_norm = hw_identity(headword, keep_acc) if headword else None
+        t_norm = resolve_headword(headword, keep_acc) if headword else None
         link_norm = normalize_headword(entry_link) if entry_link else None
 
         def _matches_own_entry(candidates):
@@ -650,7 +621,7 @@ class MarkupMainWindow(QMainWindow):
         norms = []
         for m in re.finditer(r'<hw\b([^>]*)>(.*?)</hw>', block, re.DOTALL):
             inner = re.sub(r'<[^>]+>', '', m.group(2))
-            norms.append(hw_identity(inner.strip(), has_keep_acc(m.group(1))))
+            norms.append(resolve_headword(inner.strip(), has_keep_acc(m.group(1))))
         return norms
 
     @staticmethod
@@ -734,7 +705,7 @@ class MarkupMainWindow(QMainWindow):
 
     def _save_current(self):
         if not self.current_result or not self.editor.pane.is_modified():
-            return
+            return True
 
         entry_id = self.current_result[0]
         source_file = self.current_result[4]
@@ -746,17 +717,17 @@ class MarkupMainWindow(QMainWindow):
         except ElementTree.ParseError:
             QMessageBox.warning(self, strings.dialog.invalid_xml.title,
                 strings.dialog.invalid_xml.body)
-            return
+            return False
 
         if not source_file:
             QMessageBox.warning(self, 'Save Error', 'No source file found for this entry.')
-            return
+            return False
 
         file_path = get_source_path(source_file)
 
         if not os.path.exists(file_path):
             QMessageBox.warning(self, 'Save Error', f'Source file not found: {source_file}')
-            return
+            return False
 
         headword = self.current_result[1]
         entry_link = self.current_result[3]
@@ -766,7 +737,7 @@ class MarkupMainWindow(QMainWindow):
         blocks = loaded['blocks'] if loaded else []
         if not blocks:
             QMessageBox.warning(self, 'Save Error', 'Could not locate the original entry in the source file.')
-            return
+            return False
 
         old_raw = self._loaded_raw.get(entry_id)
         if old_raw is None:
@@ -776,29 +747,64 @@ class MarkupMainWindow(QMainWindow):
 
         if not indices:
             QMessageBox.warning(self, 'Save Error', 'Could not locate the original entry in the source file.')
-            return
+            return False
         if len(indices) != 1:
             QMessageBox.warning(self, 'Save Error',
                 'The original entry could not be matched uniquely; no changes were saved.')
-            return
+            return False
 
         new_content = content.replace(blocks[indices[0]], new_entry_string, 1)
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
+        reindexed = reindex_entry(entry_id, new_entry_string)
+        if reindexed is not None:
+            new_headword, new_entry_link, new_keep_acc = reindexed
+        else:
+            new_headword = headword
+            new_entry_link = entry_link
+            new_keep_acc = self.current_result[5] or 0
+
         self._source_cache.pop(source_file, None)
         self._loaded_raw[entry_id] = new_entry_string
+        self.search_engine.invalidate_entry(entry_id)
         self._broken_links.invalidate()
         self._has_unsaved = False
         self.editor.pane.mark_saved()
         self._save_button.hide()
 
-        updated = (entry_id, self.current_result[1], new_entry_string, entry_link, source_file, None)
-        self.current_result = updated
-        self._by_id_headword[(entry_id, updated[1], entry_link)] = updated
+        self._apply_saved_result(
+            entry_id, new_headword, new_entry_link, new_entry_string,
+            source_file, new_keep_acc)
+        self._refresh_link_marks(reset_undo=True)
+        return True
+
+    def _apply_saved_result(self, entry_id, headword, entry_link, xml_text,
+                            source_file, keep_acc):
+        self.current_result = (
+            entry_id, headword, xml_text, entry_link, source_file, keep_acc
+        )
         for i, r in enumerate(self.current_results):
             if r[0] == entry_id:
-                self.current_results[i] = (r[0], r[1], new_entry_string, r[3], r[4], None)
+                self.current_results[i] = (
+                    r[0], headword, r[2], entry_link, r[4], r[5], keep_acc
+                )
+        rows = self.results_model.rows
+        for i, (_display, result) in enumerate(rows):
+            if result[0] != entry_id:
+                continue
+            rows[i] = (
+                resolve_headword(headword, keep_acc),
+                (result[0], headword, result[2], entry_link, result[4],
+                 result[5], keep_acc),
+            )
+        if rows:
+            self.results_model.dataChanged.emit(
+                self.results_model.index(0, 0),
+                self.results_model.index(len(rows) - 1, 0),
+            )
+        self._by_id_headword = {(r[0], r[1], r[3]): r for _display, r in rows}
+        self._sub_headword_cache.clear()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_S and event.modifiers() == Qt.ControlModifier:

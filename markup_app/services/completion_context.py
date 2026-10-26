@@ -1,6 +1,7 @@
 import re
 
 from dictionary_app.utils.xml_schema import ATTRIBUTES
+from markup_app.utils.constants import LINK_PLACEHOLDER
 
 _NAME_RE = re.compile(r'[A-Za-z][\w.-]*')
 
@@ -29,6 +30,8 @@ def detect_context(text, pos):
     if lt == -1:
         return None
     region = text[lt + 1:pos]
+    if region.startswith(LINK_PLACEHOLDER):
+        region = region[len(LINK_PLACEHOLDER):]
     if '>' in region:
         return None
     head = _NAME_RE.match(region)

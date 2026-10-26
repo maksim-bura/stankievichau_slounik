@@ -1,17 +1,30 @@
 import re
 
-from dictionary_app.utils.text_utils import has_keep_acc, hw_identity
+from dictionary_app.utils.normalize_headword import has_keep_acc, resolve_headword
+from markup_app.utils.constants import LINK_PLACEHOLDER
 
 
-_TAG_RE = re.compile(r'<(/?)(\w+)[^>]*>')
-_ENTRY_OPEN_RE = re.compile(r'<entry\b[^>]*>')
+_TAG_RE = re.compile(r'<(/?)(?:' + LINK_PLACEHOLDER + r')?(\w+)[^>]*>')
+_ENTRY_OPEN_RE = re.compile(
+    r'<(?:' + LINK_PLACEHOLDER + r')?entry\b[^>]*>'
+)
 _ENTRY_CLOSE_RE = re.compile(r'</entry\s*>')
-_HW_TEXT_RE = re.compile(r'<hw\b([^>]*)>(.*?)</hw>', re.DOTALL)
+_HW_TEXT_RE = re.compile(
+    r'<(?:' + LINK_PLACEHOLDER + r')?hw\b([^>]*)>(.*?)</hw>', re.DOTALL
+)
 _NAME_CHAR_RE = re.compile(r'[A-Za-z0-9_]')
 
 
 def is_name_char(ch):
     return len(ch) == 1 and _NAME_CHAR_RE.fullmatch(ch) is not None
+
+
+def placeholder_positions(text):
+    return [match.start() for match in re.finditer(LINK_PLACEHOLDER, text)]
+
+
+def placeholder_clean_starts(positions):
+    return [position - 1 - 2 * index for index, position in enumerate(positions)]
 
 
 def scan_tags(text):
@@ -27,6 +40,8 @@ def scan_tags(text):
             break
         closing = text[lt + 1:lt + 2] == '/'
         ns = lt + (2 if closing else 1)
+        if not closing and text[ns:ns + 2] == LINK_PLACEHOLDER:
+            ns += 2
         ne = ns
         while ne < gt and is_name_char(text[ne]):
             ne += 1
@@ -157,7 +172,7 @@ def innermost_d_span(text, pos):
 def find_hw_occurrences(text, headword_key):
     return [
         m for m in _HW_TEXT_RE.finditer(text)
-        if hw_identity(
+        if resolve_headword(
             re.sub(r'<[^>]+>', '', m.group(2)).strip(),
             has_keep_acc(m.group(1)),
         ) == headword_key
@@ -176,8 +191,8 @@ def find_hw_occurrence(text, headword_key, occurrence_index):
 
 
 def entry_block_span(text):
-    m_open = re.search(r'<entry\b[^>]*>', text)
-    m_close = re.search(r'</entry>', text)
+    m_open = _ENTRY_OPEN_RE.search(text)
+    m_close = _ENTRY_CLOSE_RE.search(text)
     if m_open and m_close and m_close.start() > m_open.start():
         return m_open.start(), m_close.end()
     return None

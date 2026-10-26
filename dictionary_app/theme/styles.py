@@ -1,5 +1,19 @@
 FONT_STACK = "'Cambria', 'Times New Roman', Times, serif"
 
+FONT_SIZE_BASE = '12pt'
+FONT_SIZE_HEADING_LARGE = '16pt'
+FONT_SIZE_HEADING_MEDIUM = '14pt'
+
+BORDER_WIDTH_THIN = '1px'
+BORDER_WIDTH_THICK = '2px'
+BORDER_WIDTH_ACCENT = '3px'
+BORDER_RADIUS_SMALL = '3px'
+BORDER_RADIUS_MEDIUM = '5px'
+
+PADDING_NONE = '0px'
+PADDING_THIN = '2px'
+PADDING_MEDIUM = '5px'
+
 COLOR_BORDER_DEFAULT = '#c0c0c0'
 COLOR_NORMAL_BG = '#ffffff'
 COLOR_HOVER_BG = '#fafafa'
@@ -13,7 +27,7 @@ COLOR_BUTTON_HOVER = '#ececec'
 COLOR_BUTTON_PRESSED_HOVER = '#e0eefb'
 
 
-def font_rule(widget, size='12pt'):
+def font_rule(widget, size=FONT_SIZE_BASE):
     return (f"    {widget} {{\n"
             f"    font-family: {FONT_STACK};\n"
             f"    font-size: {size};\n"
@@ -23,9 +37,9 @@ def font_rule(widget, size='12pt'):
 LINEEDIT_RULE = f"""
     QLineEdit {{
         background-color: white;
-        border: 1px solid {COLOR_BORDER_DEFAULT};
-        border-radius: 3px;
-        padding: 2px;
+        border: {BORDER_WIDTH_THIN} solid {COLOR_BORDER_DEFAULT};
+        border-radius: {BORDER_RADIUS_SMALL};
+        padding: {PADDING_THIN};
     }}
     QLineEdit:focus {{
         background-color: white;
@@ -35,10 +49,10 @@ LINEEDIT_RULE = f"""
 TOOLTIP_RULE = f"""
     QToolTip {{
         font-family: {FONT_STACK};
-        font-size: 12pt;
+        font-size: {FONT_SIZE_BASE};
         background-color: {COLOR_TOOLTIP_BG};
         color: black;
-        border: 1px solid {COLOR_BORDER_DEFAULT};
+        border: {BORDER_WIDTH_THIN} solid {COLOR_BORDER_DEFAULT};
     }}
 """
 
@@ -55,7 +69,7 @@ GLOBAL_STYLE = (
 )
 
 
-def flat_button_style(padding='0px', declarations='', hover=''):
+def flat_button_style(padding=PADDING_NONE, declarations='', hover=''):
     style = (f"    QPushButton {{\n"
              f"        border: none;\n"
              f"        background-color: transparent;\n"
@@ -77,11 +91,11 @@ MENU_BUTTON_STYLE = f"""
         background-color: {COLOR_HOVER_BG};
         color: black;
         font-weight: bold;
-        border: 2px solid {COLOR_BORDER_DEFAULT};
-        border-radius: 5px;
-        padding: 5px;
+        border: {BORDER_WIDTH_THICK} solid {COLOR_BORDER_DEFAULT};
+        border-radius: {BORDER_RADIUS_MEDIUM};
+        padding: {PADDING_MEDIUM};
         font-family: {FONT_STACK};
-        font-size: 12pt;
+        font-size: {FONT_SIZE_BASE};
     }}
     QPushButton[class="menu-button"]:hover {{
         background-color: {COLOR_BUTTON_HOVER};
@@ -91,7 +105,7 @@ MENU_BUTTON_STYLE = f"""
     QPushButton[class="menu-button"][pressed="menu"] {{
         background-color: {COLOR_SELECTED_BG};
         color: {COLOR_MENU_PRESSED_FG};
-        border: 2px solid {COLOR_BORDER_SELECTED};
+        border: {BORDER_WIDTH_THICK} solid {COLOR_BORDER_SELECTED};
     }}
     QPushButton[class="menu-button"][pressed="true"]:hover,
     QPushButton[class="menu-button"][pressed="true"][dual="true"]:hover,
@@ -102,20 +116,20 @@ MENU_BUTTON_STYLE = f"""
 
 RESULTS_LIST_STYLE = f"""
     QListView::item {{
-        border-left: 3px solid transparent;
+        border-left: {BORDER_WIDTH_ACCENT} solid transparent;
     }}
     QListView::item:hover {{
-        border-left: 3px solid {COLOR_BORDER_DEFAULT};
+        border-left: {BORDER_WIDTH_ACCENT} solid {COLOR_BORDER_DEFAULT};
         background: {COLOR_HOVER_BG};
         color: black;
     }}
     QListView::item:selected {{
-        border-left: 3px solid {COLOR_BORDER_SELECTED};
+        border-left: {BORDER_WIDTH_ACCENT} solid {COLOR_BORDER_SELECTED};
         background: {COLOR_SELECTED_BG};
         color: black;
     }}
     QListView::item:selected:!active {{
-        border-left: 3px solid {COLOR_BORDER_SELECTED};
+        border-left: {BORDER_WIDTH_ACCENT} solid {COLOR_BORDER_SELECTED};
         background: {COLOR_SELECTED_BG};
         color: black;
     }}
@@ -124,7 +138,7 @@ RESULTS_LIST_STYLE = f"""
 ENTRY_STYLESHEET = f"""
     body {{
         font-family: {FONT_STACK};
-        font-size: 12pt;
+        font-size: {FONT_SIZE_BASE};
         line-height: 1.4;
         margin: 0;
         text-align: justify;
@@ -139,9 +153,8 @@ ENTRY_STYLESHEET = f"""
     .abbr {{ font-weight: bold; }}
     .see {{ font-style: italic; }}
     .p {{ font-style: normal; font-weight: normal; }}
-    .h1 {{ font-weight: bold; font-size: 16pt; }}
-    .h2 {{ font-weight: bold; font-size: 14pt; }}
-    h1, h2 {{ margin: 0; }}
+    .h1 {{ font-weight: bold; font-size: {FONT_SIZE_HEADING_LARGE}; }}
+    .h2 {{ font-weight: bold; font-size: {FONT_SIZE_HEADING_MEDIUM}; }}
 
     .sense {{ font-style: normal; }}
     .headword-arrow {{ font-weight: normal; margin-right: 4px; font-style: normal; }}
@@ -163,27 +176,5 @@ ENTRY_STYLESHEET = f"""
     a:hover {{ text-decoration: underline; }}
     .toggle-btn, .toggle-btn:visited, .toggle-btn:hover {{
         text-decoration: none; color: inherit; cursor: pointer;
-    }}
-    h1 {{ font-weight: bold; font-size: 16pt; }}
-    h2 {{ font-weight: bold; font-size: 14pt; }}
-    .preview-hw {{
-        border-left: 3px solid transparent;
-        padding: 2px 0 2px 5px;
-        margin-top: 4px;
-        font-weight: bold;
-    }}
-    .preview-no-results {{
-        border-left: 3px solid transparent;
-        padding: 2px 0 2px 5px;
-    }}
-    a.preview-hw-link {{
-        color: black;
-        text-decoration: none;
-    }}
-    a.preview-hw-link:hover {{
-        color: black;
-        text-decoration: none;
-        border-left: 3px solid {COLOR_BORDER_DEFAULT};
-        background: {COLOR_HOVER_BG};
     }}
 """
