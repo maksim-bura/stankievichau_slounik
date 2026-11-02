@@ -7,6 +7,7 @@ from dictionary_app.utils.remove_accents import remove_accents
 from dictionary_app.utils.extract_content_text import (
     content_text, hw_text_excluding_n, is_excluded_child
 )
+from dictionary_app.utils.constants import SEP_SORT_SENTINEL
 from dictionary_app.utils.xml_schema import ATTR_EXCL, ATTR_KEEP_ACC, ATTR_ID
 from dictionary_app.format.format_entry import plain_parens, process_element
 
@@ -435,7 +436,7 @@ class HighlightFormatter:
                         hw_id = child.get(ATTR_ID)
                     child_keep = child.get(ATTR_KEEP_ACC) is not None
                     variants.append(text if child_keep else remove_accents(text))
-                    sort_variants.append(hw_text_excluding_n(child).strip() or text)
+                    sort_variants.append(hw_text_excluding_n(child, SEP_SORT_SENTINEL).strip() or text)
                 if variants:
                     return '|'.join(variants), '|'.join(sort_variants), hw_id
         element_sense = self._enclosing_sense(element, parent_map)
@@ -454,7 +455,7 @@ class HighlightFormatter:
                     hw_id = h.get(ATTR_ID)
                 child_keep = h.get(ATTR_KEEP_ACC) is not None
                 relevant.append(text if child_keep else remove_accents(text))
-                relevant_sort.append(hw_text_excluding_n(h).strip() or text)
+                relevant_sort.append(hw_text_excluding_n(h, SEP_SORT_SENTINEL).strip() or text)
         if relevant:
             if root.find('.//d') is None:
                 return '|'.join(relevant), '|'.join(relevant_sort), hw_id

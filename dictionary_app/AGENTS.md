@@ -50,15 +50,15 @@ stankievichau_slounik/
 | module | contents |
 |---|---|
 | `remove_accents.py` | `remove_accents` |
-| `sort_keys.py` | `alphabet_sort_key`, `entry_id_sort_key`, `encode_order_key` |
+| `sort_keys.py` | `alphabet_sort_key`, `SORT_ORDER_STANDARD`/`SORT_ORDER_DICTIONARY`, `entry_id_sort_key`, `encode_order_key` |
 | `normalize_headword.py` | `strip_quotes`, `resolve_headword`, `has_keep_acc`, `normalize_jo_to_je` |
-| `collapse_duplicates.py` | `collapse_with_identities`, `collapse_same_entry_duplicates` |
+| `collapse_duplicates.py` | `collapse_with_identities` |
 | `compile_search_regex.py` | `compile_search_regex` |
-| `extract_content_text.py` | `is_excluded_child`, `content_text`, `hw_text_excluding_n`, `d_hw_variants`, `index_text` |
+| `extract_content_text.py` | `is_excluded_child`, `content_text`, `hw_text_excluding_n(…, sep_marker)`, `d_hw_variants`, `index_text` |
 | `measure_scrollbars.py` | `scrollbar_extent`, `vertical_scrollbar_shown`, `overlay_right_inset` |
 | `scroll_state.py` | `ScrollState` |
 | `install_global_copy.py` | `install_global_copy` |
-| `constants.py` | glyphs + URL schemes (single source) |
+| `constants.py` | glyphs + URL schemes + `SEP_SORT_SENTINEL` (single source) |
 | `xml_schema.py` | tag attribute registry (single source) |
 | `item_roles.py` | Qt item role constants |
 
@@ -75,8 +75,9 @@ stankievichau_slounik/
 - **Any other combination** (or headwords-only) → standard headword search with
   the results list visible.
 - Empty main-search results leave the entry pane empty and clear the list. The
-  "no results" message (`strings.nav.no_results`, "Няма вынікаў.") is used ONLY
-  by `render_sources.build_filtered_html` when a sources search matches nothing.
+  "no results" message (`strings.sources_panel.no_results.message`,
+  "Няма вынікаў.") is used ONLY by `render_sources.build_filtered_html` when a
+  sources search matches nothing.
 - **Settings state machine** (`SettingsButton.get_option_states`):
   `_russian_radio` → `{headwords:False, translations:True, examples:False}`;
   `_belarusian_radio` → `{headwords:_headwords_option(), translations:False,
@@ -175,8 +176,10 @@ and the search engine.
   are documented in `markup_app/data/MARKUP_PATTERNS.md`; this file covers only
   app behavior.
 - Every letter file keeps its raw file's print order. On-screen order is
-  alphabetical because results are sorted by `collation_key`; file order and list
-  order are intentionally different. Do not re-sort the XML files.
+  alphabetical because results are sorted by a precomputed collation column
+  (`collation_key`, or `collation_key_dictionary` when the dictionary alphabet is
+  selected); file order and list order are intentionally different. Do not
+  re-sort the XML files.
 
 ### Cross-Reference IDs (`<hw id>` / `<see>`)
 
@@ -240,7 +243,8 @@ and the search engine.
   first headword. `<hw excl="true">` is skipped in both paths.
 - Each preview is
   `{'headword', 'sort_headword', 'sort_hw_id', 'preview_html', 'paragraph_break'}`;
-  `_show_previews` groups by display headword, sorts by `sort_headword`, and
+  `_show_previews` groups by display headword, sorts by
+  `alphabet_sort_key(sort_headword, sort_order)` for the active order, and
   tie-breaks on `entry_id_sort_key(sort_id)` / `entry_id_sort_key(sort_hw_id)`.
 
 ### Search Regex (`compile_search_regex`)
@@ -293,10 +297,11 @@ headwords. Never drop it on one layer only.
 - The regex is case-sensitive per letter (lowercase `ю` → `[юЮ]` matches both
   cases; uppercase `Ю` matches only `Ю`), so an uppercase query finds only
   uppercase headwords.
-- Headword-search and empty-query results sort by the precomputed `collation_key`
-  column (`r[9]`). It encodes
-  `(alphabet_sort_key(sort_headword), entry_id_sort_key(entry_link) or
-  entry_id_sort_key(hw_xml_id))` via `sort_keys.encode_order_key`, whose byte
+- Headword-search and empty-query results sort by a precomputed collation column:
+  `collation_key` (`r[9]`) for the standard alphabet, `collation_key_dictionary`
+  (`r[10]`) for dictionary order. Each encodes
+  `(alphabet_sort_key(sort_headword, sort_order), entry_id_sort_key(entry_link)
+  or entry_id_sort_key(hw_xml_id))` via `sort_keys.encode_order_key`, whose byte
   order equals the Python tuple order.
 - Headword results keep their **display** headword (homonym number intact, e.g.
   `ґале́ра ІІ`); only the SORT key is stripped (`sort_headword` removes embedded
@@ -308,26 +313,51 @@ headwords. Never drop it on one layer only.
 
 ### Collation Rules (`alphabet_sort_key` in `dictionary_app/utils/sort_keys.py`)
 
-- Letter-by-letter over the Belarusian alphabet (`ґ` after `г`, before `д`; `ё`
-  between `е` and `ж`).
+`alphabet_sort_key(text, sort_order=SORT_ORDER_STANDARD)` returns
+`(ranks, case_flags, accent_positions)`; Python compares ranks first, then case
+flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
+
+- `SORT_ORDER_STANDARD` (`'standard'`) — the ordinary Belarusian alphabet
+  `абвгґдеёжзійклмнопрстуўфхцчшыьэюя` (`ґ` after `г`, before `д`; `ё` between
+  `е` and `ж`). Every letter is its own token, so `дз`/`дж` rank as two letters.
+- `SORT_ORDER_DICTIONARY` (`'dictionary'`) — the printed dictionary's order:
+  `о, а, э, б, г, ґ, х, д, е, ё, я, дз, дж, з, ж, і, й, к, л, м, н, ф, п, р,`
+  `с, ш, т, в, у, ў, ь, ц, ч, ы, ю`. The vowels `о`, `а`, `э` lead, `ґ` follows
+  `г`, `х` appears once, `ь` sorts before `ц`, and `дз`/`дж` are SINGLE tokens
+  ranked between `я` and `з`.
+
+- **`<sep />` breaks a digraph.** `hw_text_excluding_n(hw, SEP_SORT_SENTINEL)`
+  (`SEP_SORT_SENTINEL` = `'\u0000'`, `utils/constants.py`) inserts the sentinel
+  where the element sits, and `alphabet_sort_key` skips it, so `д<sep />з` ranks
+  as `д` then `з` instead of the `дз` token. `_normalized_headword` strips the
+  sentinel, so search text and the normalized columns still read `дз`; the
+  element renders as an empty span and adds nothing to the display `headword`.
+  No `<sep />` exists in the corpus yet.
 - Combining accents (U+0300/U+0301) are skipped, so accented and unaccented
-  letters compare equally.
+  letters compare equally. A combining mark after a vowel records its rank index
+  in `accent_positions`, so the unaccented form sorts first.
 - Apostrophes (`'`, `’`, `ʼ`) are skipped entirely: `Юр'е` collates as `Юре`.
-- Word breaks rank BELOW all letters (`-` = 0, space = 1; letters `а…я` = 2…34),
-  so a multi-word entry groups right after its single headword; space ranks after
-  hyphen.
+- Word breaks rank BELOW all letters (`-` = 0, space = 1; letters start at rank
+  2), so a multi-word entry groups right after its single headword; space ranks
+  after hyphen.
 - The pipe `|` (joining multiple `<hw>`s in a preview sort key) ranks like a
   space, so a completed first headword sorts before longer words with the same
   prefix; groups tie-break by second, third, … headword.
 - Among equal prefixes, shorter words come first.
 - Case is NOT in the letter rank: uppercase letters only decide ties AFTER
   character ranks, so `юр` sorts before `Юр` (and `юрка` before `Юрка`).
-  `alphabet_sort_key` returns `(ranks, case_flags, accent_positions)`; Python
-  compares ranks, then case flags, then accent positions (indices where a
-  combining accent followed a vowel) — so an unaccented form sorts first.
 - Other non-alphabet characters fall back to `len(alphabet) + ord(ch)`, sorting
   after letters with stable relative order.
-- Both apps sort through this single key; XML files keep print order.
+- Both orders are precomputed at build time into DB columns (see Database
+  Schema): `collation_key` for standard, `collation_key_dictionary` for
+  dictionary order. `SearchEngine.search(..., sort_order=…)` picks the matching
+  column in `_sorted` (row index 9 or 10), so switching order is a column
+  choice, never a Python re-sort. `MainWindow._show_previews` builds its groups
+  with the same `sort_order` for `alphabet_sort_key`.
+- The active order is chosen at runtime — dictionary: Settings → alphabet
+  section; markup: the 🔠 dropdown — and both apps re-run the current query when
+  it changes (see Settings Button / `markup_app/AGENTS.md` → Toolbar Buttons).
+- XML files keep print order.
 
 ### Entry Formatting
 
@@ -376,7 +406,8 @@ headwords. Never drop it on one layer only.
   defines every emoji/scheme — `ARROW_MARKER` (`👉`), `CROSS_MARKER` (`❌`),
   `BACK_ARROW` (`⬅️`), `FORWARD_ARROW` (`➡️`), `CHECK_MARK` (`✅`),
   `CHECK_BLANK` (`⬜`), `RADIO_ON` (`🟢`), `RADIO_OFF` (`⚪`), `GEAR_MARKER`
-  (`⚙️`), `MAGNIFIER_MARKER` (`🔍`), `BOOKS_MARKER` (`📚`),
+  (`⚙️`), `MAGNIFIER_MARKER` (`🔍`), `BOOKS_MARKER` (`📚`), `ALPHABET_MARKER`
+  (`🔠`),
   `COLLAPSED_TRIANGLE_ENTITY`/`EXPANDED_TRIANGLE_ENTITY` (`▶`/`▼`),
   `SENSE_ANCHOR_PREFIX`, and `SCHEME_WORD/SOURCE/PREVIEW/WORD_ATTR/TOGGLE_SECTION`.
   Import the constant; never re-type a glyph/scheme. The arrow is used in the
@@ -484,13 +515,10 @@ headwords. Never drop it on one layer only.
   `ToolTipRole`). Keep the strict `>` comparison.
 - **Tooltip show/hide (preserve):** `helpEvent` passes `view.viewport()` and
   `option.rect` (viewport coordinates) to `QToolTip.showText`, so Qt hides the tip
-  ~300 ms after the cursor leaves the row instead of leaving it until Leave or the
-  display-time expiry. `SearchResultsList` wraps the viewport style in
-  `TooltipDelayStyle`, lowering `SH_ToolTip_WakeUpDelay` to
-  `RESULTS_TOOLTIP_WAKE_UP_DELAY` (400 ms). Keep the proxy on the list
-  (`_tooltip_style`) — PySide deletes an unreferenced style object. `MainWindow`
-  applies `GLOBAL_STYLE` AFTER constructing the list (the stylesheet must wrap,
-  never re-wrap, that proxy); the ordering is required.
+  as soon as the cursor leaves the row (rect-bound tips have no fall-asleep
+  delay). A row whose text is NOT elided calls `QToolTip.hideText()` and accepts
+  the event, so moving onto a short row never leaves the neighbour's tip visible.
+  The wake-up delay is the app-wide `TOOLTIP_WAKE_UP_DELAY` (see Tooltip Timing).
 - Tooltip = the row's `DisplayRole` (accent-RESOLVED headword).
 - Font: single-family `'Cambria'` (`FONT_STACK`), 12pt bold (via `GLOBAL_STYLE`,
   which also covers `QListView`) — see Startup Latency.
@@ -512,6 +540,26 @@ headwords. Never drop it on one layer only.
   applied target (keep that order).
 - `find_by_headword` / `find_by_identity` / `find_by_id` serve navigation.
 
+### Tooltip Timing (`dictionary_app/widgets/tooltip_timing.py`)
+
+- Both launchers call `configure_tooltips(app)` right after constructing
+  `QApplication`, before any window exists. It installs ONE app-level
+  `TooltipDelayStyle` (`QProxyStyle`) returning the shared
+  `TOOLTIP_WAKE_UP_DELAY` (`dictionary_app/theme/layout_constants.py`, 150 ms vs
+  Qt's 700 ms default) for `SH_ToolTip_WakeUpDelay`, plus ONE app-level
+  `TooltipShowFilter`.
+- `TooltipShowFilter` intercepts every widget `QEvent.ToolTip` whose
+  `toolTip()` is non-empty and re-shows it with `QToolTip.showText(globalPos,
+  text, widget, widget.rect())`. Binding the tip to the widget rect makes Qt hide
+  it the moment the cursor leaves, whereas `QToolTip.hideText()` alone only fades
+  after ~300 ms. Widgets that draw their own tip (elided rows, `🔗` markers) keep
+  their handlers and simply pass a rect to `showText`.
+- One place covers every `setToolTip` widget (menu/icon/overlay buttons, search
+  box); no per-widget style proxies. `configure_tooltips` keeps the style and
+  filter in a module-level list — PySide deletes unreferenced style/filter
+  objects. Call it before applying `GLOBAL_STYLE` (a stylesheet does not replace
+  the proxy style).
+
 ### Search Box (`SearchBox`)
 
 - `QLineEdit` subclass, fixed height `SEARCH_BOX_HEIGHT`.
@@ -525,14 +573,28 @@ headwords. Never drop it on one layer only.
 - Emoji gear (`GEAR_MARKER`), `BUTTON_SIZE`, subclass of `MenuButton` (shared
   size/cursor/`class="menu-button"`/style), opens `QMenu` on click.
 - Menu: heading → separator → `_belarusian_radio` "Belarusian" (with
-  sub-options) → `_russian_radio` "Russian".
-- Built from `_ToggleOption` with `_RadioOption` and `_CheckOption`; radios use
-  `RADIO_ON`/`RADIO_OFF`, sub-options use `CHECK_MARK`/`CHECK_BLANK`, indented
-  with `MENU_INDENT_MARGINS`, inserted BEFORE the russian radio
-  (`_add_scope_option` + `_all_scope_actions`).
+  sub-options) → `_russian_radio` "Russian" → separator → alphabet heading →
+  separator → `_standard_radio` → `_dictionary_radio`.
+- Built from the shared `CheckOption` / `RadioOption`
+  (`dictionary_app/widgets/menu_options.py`); radios use `RADIO_ON`/`RADIO_OFF`,
+  sub-options use `CHECK_MARK`/`CHECK_BLANK`, indented with
+  `MENU_INDENT_MARGINS`, inserted BEFORE the russian radio (`_add_scope_option`
+  + `_all_scope_actions`).
 - Sub-options (Belarusian): at least one stays checked — `_sync_sub_options`
-  disables the only-checked one (`_CheckOption.set_active` applies
+  disables the only-checked one (`CheckOption.set_active` applies
   `COLOR_DISABLED_FG`).
+- **Alphabet section:** heading built with `_add_heading(ALPHABET_MARKER,
+  strings.app_buttons.settings.dropdown.alphabet_order.title)`; two radios
+  labelled `alphabet_order.standard` / `alphabet_order.dictionary`.
+  `get_sort_order()` returns the matching `SORT_ORDER_STANDARD` /
+  `SORT_ORDER_DICTIONARY`; `_on_alphabet_toggled` clears the other radio and
+  emits `sort_order_changed`, which `MainWindow._on_sort_order_changed` turns
+  into a re-run of the current query (see Collation Rules).
+- **Option clicks keep the menu open (preserve):** `ToggleOption` (base of
+  `CheckOption`/`RadioOption`) accepts the mouse **release** as well as the
+  press. An ignored release propagates to `QMenu`, which can activate the
+  `QWidgetAction` and hide the menu; accepting it keeps the dropdown open until
+  the settings button, Esc, or a click outside the menu.
 - `_headwords_option()` / `_examples_option()` return the sub-options;
   `_update_sub_visibility` hides them while the russian radio is active.
 - `get_option_states()` returns the three-option dict (see Search Modes).
@@ -564,7 +626,8 @@ headwords. Never drop it on one layer only.
   `_ensure_loaded()` (called from `_rebuild_content`, `scroll_to_source`,
   `_on_search`, `toggle`), so window startup never pays for it. `content` /
   `original_content` are `None` until then.
-- Search filters sections by text; no match renders `strings.nav.no_results`.
+- Search filters sections by text; no match renders
+  `strings.sources_panel.no_results.message`.
 - **Parse-once rendering:** in search mode `build_filtered_html` parses each
   `<section>` once while collecting matches and passes those parsed groups to
   `_render_section`; with no search it parses lazily in the render pass. Never
@@ -799,7 +862,7 @@ headwords. Never drop it on one layer only.
 
 ## Writing Conventions
 
-- No comments in code unless essential.
+- No comments in code (hard rule; see `tools/DEVELOPMENT_PRACTICES.md`).
 - Module-level constants, no inline literals (`theme/layout_constants.py` for
   metrics, `utils/constants.py` for glyphs/schemes, `theme/styles.py` for
   colors/styles).
@@ -820,22 +883,23 @@ headwords. Never drop it on one layer only.
 
 - `dictionary`: `(id INTEGER PRIMARY KEY, headword, sort_headword,
   normalized_headword, normalized_plain_headword, collation_key BLOB, entry_link,
-  hw_xml_id, source_file, keep_acc)` — `headword` keeps the full display text;
-  `sort_headword` drops embedded `<n>`; `collation_key` is the precomputed
-  order-preserving key (see Collation Rules); `entry_link` is the entry's
-  `<entry id>`; `hw_xml_id` its main `<hw id>`; `keep_acc` the main `<hw>`'s flag.
-  Full XML lives in `entry_body`.
+  hw_xml_id, source_file, keep_acc, collation_key_dictionary BLOB)` — `headword`
+  keeps the full display text; `sort_headword` drops embedded `<n>` (and encodes
+  `<sep />` as `SEP_SORT_SENTINEL`); `collation_key` /
+  `collation_key_dictionary` are the two precomputed order-preserving keys (see
+  Collation Rules); `entry_link` is the entry's `<entry id>`; `hw_xml_id` its main
+  `<hw id>`; `keep_acc` the main `<hw>`'s flag. Full XML lives in `entry_body`.
 - `entry_body`: `(id INTEGER PRIMARY KEY, xml TEXT)` — full `<entry>` XML keyed
   by `dictionary.id`; joined by `materialize_result` and preview clicks, never
   carried by list queries.
 - `sub_headwords`: `(id, headword, sort_headword, normalized_headword,
   normalized_plain_headword, collation_key BLOB, main_entry_id, link, hw_xml_id,
-  keep_acc)` — `main_entry_id` points at the parent; `link` is the OWNING entry's
-  XML ID (never an `E#H` compound); `hw_xml_id` is the sub-`<hw id>`; `keep_acc`
-  is the sub-headword's own flag.
+  keep_acc, collation_key_dictionary BLOB)` — `main_entry_id` points at the
+  parent; `link` is the OWNING entry's XML ID (never an `E#H` compound);
+  `hw_xml_id` is the sub-`<hw id>`; `keep_acc` is the sub-headword's own flag.
 - `content_index`: `(id, entry_id, tag_type, searchable_text)`.
 - `schema_meta`: `(key, value)` — holds `schema_version` (`_SCHEMA_VERSION`,
-  currently 5).
+  currently 6; a version bump forces a full rebuild).
 - FTS5 trigram tables: `headword_fts(word)` (rowid = `dictionary.id`),
   `sub_headword_fts(word)` (rowid = `sub_headwords.id`) — populated from
   `normalized_headword`; `content_fts_t`/`content_fts_ex` (rowid =
@@ -887,7 +951,14 @@ headwords. Never drop it on one layer only.
   remove_accents(headword).lower()` keeps them.
 - `sort_headword` = headword with embedded `<n>` removed
   (`hw_text_excluding_n`), used for ordering and as the discriminated text; the
-  `headword` column keeps the full text.
+  `headword` column keeps the full text. A `<sep />` child is encoded as
+  `SEP_SORT_SENTINEL` here only (see Collation Rules); the normalized columns and
+  the display headword never see the sentinel, because `_normalized_headword`
+  strips it before `remove_accents(...).lower()`.
+- `collation_key` and `collation_key_dictionary` are built in the same insert by
+  `_collation_key` = `encode_order_key(*alphabet_sort_key(sort_headword, order),
+  entry_id_sort_key(entry_link) or entry_id_sort_key(hw_xml_id))` for
+  `SORT_ORDER_STANDARD` and `SORT_ORDER_DICTIONARY`.
 
 ## Performance / Scale Notes
 
@@ -939,14 +1010,14 @@ Measured with `py -3` (Python 3.14): both launchers reach first paint in
   `by_headword` index directly instead of re-running `_block_matches` over each
   candidate block.
 - **Row tooltips touch no model state:** `ElidingDelegate.helpEvent` shows the
-  hovered row's text directly, with the viewport style proxy lowering only the
-  wake-up delay (see Results List); no `ToolTipRole` request or per-row widget
-  is created.
+  hovered row's text through the shared rect-bound `QToolTip.showText` (see
+  Tooltip Timing); no `ToolTipRole` request or per-row widget is created.
 
 ### Scale
 
 - Already scale-safe: trigram FTS5 for headword (`headword_fts`/`sub_headword_fts`)
-  and content (`content_fts_t`/`content_fts_ex`), precomputed `collation_key`,
+  and content (`content_fts_t`/`content_fts_ex`), precomputed `collation_key` /
+  `collation_key_dictionary` (switching alphabet order never re-sorts in Python),
   list rows carrying `NULL` instead of entry XML, indexes on the normalized
   headword columns, LRU `_parsed_cache` (≤ `_PARSED_CACHE_MAX_SIZE`) and
   `_preview_cache` (≤ `_PREVIEW_CACHE_MAX_SIZE`), LRU `_format_cache` in

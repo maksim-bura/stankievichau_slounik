@@ -3,11 +3,9 @@ from PySide6.QtWidgets import QListView
 from dictionary_app.utils.collapse_duplicates import collapse_with_identities
 from dictionary_app.utils.normalize_headword import resolve_headword
 from dictionary_app.utils.item_roles import ROLE_HEADWORD
-from dictionary_app.theme.layout_constants import (
-    RESULTS_MIN_WIDTH, RESULTS_TOOLTIP_WAKE_UP_DELAY,
-)
+from dictionary_app.theme.layout_constants import RESULTS_MIN_WIDTH
 from dictionary_app.widgets import (
-    ElidingDelegate, TooltipDelayStyle, navigate_rows, select_row,
+    ElidingDelegate, navigate_rows, select_row,
 )
 
 
@@ -54,9 +52,6 @@ class SearchResultsList:
         self._view.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self._view.setUniformItemSizes(True)
         self._view.setItemDelegate(ElidingDelegate(self._view))
-        viewport = self._view.viewport()
-        self._tooltip_style = TooltipDelayStyle(viewport.style(), RESULTS_TOOLTIP_WAKE_UP_DELAY)
-        viewport.setStyle(self._tooltip_style)
 
     def display_results(self, results):
         results, identities = collapse_with_identities(results)

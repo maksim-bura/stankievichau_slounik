@@ -1,86 +1,22 @@
 from PySide6.QtCore import QPoint, QRect, Signal
 from PySide6.QtGui import QCursor, QFont
-from PySide6.QtWidgets import QMenu, QWidgetAction, QLabel, QWidget, QHBoxLayout
+from PySide6.QtWidgets import QMenu, QWidgetAction, QLabel
 from dictionary_app.localization import strings
-from dictionary_app.theme.layout_constants import SEARCH_BOX_HEIGHT, MENU_OPTION_MARGINS, MENU_INDENT_MARGINS
-from dictionary_app.theme.styles import COLOR_DISABLED_FG
-from dictionary_app.utils.constants import CHECK_MARK, CHECK_BLANK, RADIO_ON, RADIO_OFF, GEAR_MARKER
+from dictionary_app.theme.layout_constants import MENU_OPTION_MARGINS, MENU_INDENT_MARGINS
+from dictionary_app.utils.constants import GEAR_MARKER, MAGNIFIER_MARKER, ALPHABET_MARKER
+from dictionary_app.utils.sort_keys import SORT_ORDER_DICTIONARY, SORT_ORDER_STANDARD
 from dictionary_app.widgets.emoji_label import set_emoji_prefixed_text
 from dictionary_app.widgets.menu_button import MenuButton
+from dictionary_app.widgets.menu_options import CheckOption, RadioOption
 
 
 PROPERTY_ON = 'true'
 PROPERTY_OFF = 'false'
 
 
-class _ToggleOption(QWidget):
-    def __init__(self, text, glyph_checked, glyph_unchecked, checked=False, parent=None):
-        super().__init__(parent)
-        self._checked = checked
-        self._text = text
-        self._glyph_checked = glyph_checked
-        self._glyph_unchecked = glyph_unchecked
-        self._label = QLabel(self)
-        layout = QHBoxLayout(self)
-        layout.addWidget(self._label)
-        self.setMinimumHeight(SEARCH_BOX_HEIGHT)
-        layout.setContentsMargins(*MENU_OPTION_MARGINS)
-        self._update_display()
-
-    def _update_display(self):
-        prefix = self._glyph_checked if self._checked else self._glyph_unchecked
-        set_emoji_prefixed_text(self._label, prefix, self._text)
-
-    def set_checked(self, checked):
-        self._checked = checked
-        self._update_display()
-
-    def is_checked(self):
-        return self._checked
-
-
-class _CheckOption(_ToggleOption):
-    clicked = Signal(object)
-
-    def __init__(self, text, checked=False, parent=None):
-        self._active = True
-        super().__init__(text, CHECK_MARK, CHECK_BLANK, checked, parent)
-
-    def _update_display(self):
-        super()._update_display()
-        if not self._active:
-            self._label.setStyleSheet(f'color: {COLOR_DISABLED_FG};')
-        else:
-            self._label.setStyleSheet('')
-
-    def set_active(self, active):
-        self._active = active
-        self._update_display()
-
-    def mousePressEvent(self, event):
-        event.accept()
-        if self._active:
-            self._checked = not self._checked
-            self._update_display()
-            self.clicked.emit(self)
-
-
-class _RadioOption(_ToggleOption):
-    toggled = Signal(object)
-
-    def __init__(self, text, checked=False, parent=None):
-        super().__init__(text, RADIO_ON, RADIO_OFF, checked, parent)
-
-    def mousePressEvent(self, event):
-        event.accept()
-        if not self._checked:
-            self._checked = True
-            self._update_display()
-            self.toggled.emit(self)
-
-
 class SettingsButton(MenuButton):
     search_mode_changed = Signal()
+    sort_order_changed = Signal()
 
     def __init__(self, sources_button=None, parent=None):
         super().__init__(GEAR_MARKER, strings.app_buttons.settings.tooltip, parent, emoji_font=True)
@@ -88,46 +24,72 @@ class SettingsButton(MenuButton):
         self._consume_next_press = False
 
         self.settings_menu = QMenu(self)
-        heading_action = QWidgetAction(self.settings_menu)
-        heading_label = QLabel(strings.app_buttons.settings.dropdown.title)
-        heading_label.setContentsMargins(*MENU_OPTION_MARGINS)
-        font = QFont()
-        font.setBold(True)
-        heading_label.setFont(font)
-        heading_action.setDefaultWidget(heading_label)
-        self.settings_menu.addAction(heading_action)
+        self._add_heading(
+            MAGNIFIER_MARKER, strings.app_buttons.settings.dropdown.title)
         self.settings_menu.addSeparator()
 
         belarusian_data = strings.app_buttons.settings.dropdown.search_in_belarusian
-        russian_label = strings.app_buttons.settings.dropdown.search_in_russian
+        russian_label = strings.app_buttons.settings.dropdown.search_in_russian.label
 
-        self._belarusian_radio = _RadioOption(belarusian_data.name, checked=True)
+        self._belarusian_radio = RadioOption(belarusian_data.label, checked=True)
         self._belarusian_radio.toggled.connect(self._on_radio_toggled)
-        self._belarusian_radio_action = QWidgetAction(self.settings_menu)
-        self._belarusian_radio_action.setDefaultWidget(self._belarusian_radio)
-        self.settings_menu.addAction(self._belarusian_radio_action)
-
-        self._russian_radio = _RadioOption(russian_label)
-        self._russian_radio.toggled.connect(self._on_radio_toggled)
-        self._russian_radio_action = QWidgetAction(self.settings_menu)
-        self._russian_radio_action.setDefaultWidget(self._russian_radio)
-        self.settings_menu.addAction(self._russian_radio_action)
+        self._belarusian_radio_action = self._add_option(self._belarusian_radio)
 
         self._scope_actions = []
         self._add_scope_option(belarusian_data.headwords, checked=True)
         self._add_scope_option(belarusian_data.examples, checked=True)
 
+        self._russian_radio = RadioOption(russian_label)
+        self._russian_radio.toggled.connect(self._on_radio_toggled)
+        self._russian_radio_action = self._add_option(self._russian_radio)
+
+        self._position_scope_options()
+
+        self.settings_menu.addSeparator()
+
+        alphabet_data = strings.app_buttons.settings.dropdown.alphabet_order
+        self._add_heading(ALPHABET_MARKER, alphabet_data.title)
+        self.settings_menu.addSeparator()
+        self._standard_radio = RadioOption(alphabet_data.standard, checked=True)
+        self._standard_radio.toggled.connect(self._on_alphabet_toggled)
+        self._standard_radio_action = self._add_option(self._standard_radio)
+
+        self._dictionary_radio = RadioOption(alphabet_data.dictionary)
+        self._dictionary_radio.toggled.connect(self._on_alphabet_toggled)
+        self._dictionary_radio_action = self._add_option(self._dictionary_radio)
+
         self.settings_menu.aboutToHide.connect(self._on_menu_closed)
         self.clicked.connect(self._on_clicked)
 
+    def _add_heading(self, glyph, text):
+        action = QWidgetAction(self.settings_menu)
+        label = QLabel()
+        label.setContentsMargins(*MENU_OPTION_MARGINS)
+        font = QFont()
+        font.setBold(True)
+        label.setFont(font)
+        set_emoji_prefixed_text(label, glyph, text)
+        action.setDefaultWidget(label)
+        self.settings_menu.addAction(action)
+        return action
+
+    def _add_option(self, option):
+        action = QWidgetAction(self.settings_menu)
+        action.setDefaultWidget(option)
+        self.settings_menu.addAction(action)
+        return action
+
     def _add_scope_option(self, text, checked=False):
-        option = _CheckOption(text, checked)
+        option = CheckOption(text, checked)
         option.layout().setContentsMargins(*MENU_INDENT_MARGINS)
         option.clicked.connect(self._on_sub_option_clicked)
         action = QWidgetAction(self.settings_menu)
         action.setDefaultWidget(option)
-        self.settings_menu.insertAction(self._russian_radio_action, action)
         self._scope_actions.append((option, action))
+
+    def _position_scope_options(self):
+        for _, action in self._scope_actions:
+            self.settings_menu.insertAction(self._russian_radio_action, action)
 
     def _headwords_option(self):
         return self._scope_actions[0][0]
@@ -140,6 +102,18 @@ class SettingsButton(MenuButton):
 
     def _all_scope_actions(self):
         return [action for _, action in self._scope_actions]
+
+    def get_sort_order(self):
+        if self._dictionary_radio.is_checked():
+            return SORT_ORDER_DICTIONARY
+        return SORT_ORDER_STANDARD
+
+    def _on_alphabet_toggled(self, radio):
+        if radio is self._standard_radio:
+            self._dictionary_radio.set_checked(False)
+        else:
+            self._standard_radio.set_checked(False)
+        self.sort_order_changed.emit()
 
     def get_option_states(self):
         if self._russian_radio.is_checked():

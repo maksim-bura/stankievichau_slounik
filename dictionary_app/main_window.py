@@ -73,7 +73,6 @@ class MainWindow(QMainWindow):
 
         self.entry_viewer.navigation_bar.close_button.clicked.connect(self._dismiss_highlight)
 
-        # Applied after SearchResultsList: the app stylesheet must wrap its tooltip proxy style.
         self.load_styles()
 
     def showEvent(self, event):
@@ -296,6 +295,7 @@ class MainWindow(QMainWindow):
 
         self.settings_button = SettingsButton(sources_button=self.sources_button)
         self.settings_button.search_mode_changed.connect(self._on_search_mode_changed)
+        self.settings_button.sort_order_changed.connect(self._on_sort_order_changed)
 
         self.search_box = SearchBox(strings.search_boxes.entries.placeholder)
         self.search_box.textChanged.connect(self.on_search)
@@ -378,7 +378,8 @@ class MainWindow(QMainWindow):
     def show_all_entries(self):
         self._set_results_visible(True)
         options = self.settings_button.get_option_states()
-        results = self.search_engine.search("", **options)
+        results = self.search_engine.search(
+            "", sort_order=self.settings_button.get_sort_order(), **options)
         self.results_list.display_results(results)
 
     @staticmethod
@@ -406,20 +407,21 @@ class MainWindow(QMainWindow):
 
         is_exclusive = self._is_exclusive(options)
         is_combined = self._is_combined(options)
+        sort_order = self.settings_button.get_sort_order()
 
         if is_combined and text.strip():
             self._set_results_visible(True)
-            hw_results = self.search_engine.search(text, search_in_headwords=True, search_in_translations=False, search_in_examples=False)
+            hw_results = self.search_engine.search(text, search_in_headwords=True, search_in_translations=False, search_in_examples=False, sort_order=sort_order)
             self.results_list.display_results(hw_results)
-            ex_results = self.search_engine.search(text, search_in_headwords=False, search_in_translations=False, search_in_examples=True)
+            ex_results = self.search_engine.search(text, search_in_headwords=False, search_in_translations=False, search_in_examples=True, sort_order=sort_order)
             self._show_previews(ex_results, translations_mode=False)
         elif is_exclusive and text.strip():
             self._set_results_visible(False)
-            results = self.search_engine.search(text, **options)
+            results = self.search_engine.search(text, sort_order=sort_order, **options)
             self.results_list.display_results(results)
             self._show_previews(results, translations_mode=options['search_in_translations'])
         else:
-            results = self.search_engine.search(text, **options)
+            results = self.search_engine.search(text, sort_order=sort_order, **options)
             self.results_list.display_results(results)
             if is_exclusive:
                 self._set_results_visible(False)
@@ -443,6 +445,13 @@ class MainWindow(QMainWindow):
         else:
             options = self.settings_button.get_option_states()
             self._set_results_visible(not self._is_exclusive(options))
+
+    def _on_sort_order_changed(self):
+        text = self.search_box.text()
+        if text.strip():
+            self.on_search(text)
+        else:
+            self.show_all_entries()
 
     def _on_keyboard_activate(self):
         index = self.results_list.current_item()
@@ -488,7 +497,8 @@ class MainWindow(QMainWindow):
             return
         html_parts = ['<body>']
         first_group = True
-        for key, g in sorted(groups.items(), key=lambda kv: (alphabet_sort_key(kv[1]['sort_headword']), entry_id_sort_key(kv[1]['sort_id']) or entry_id_sort_key(kv[1]['sort_hw_id']))):
+        sort_order = self.settings_button.get_sort_order()
+        for key, g in sorted(groups.items(), key=lambda kv: (alphabet_sort_key(kv[1]['sort_headword'], sort_order), entry_id_sort_key(kv[1]['sort_id']) or entry_id_sort_key(kv[1]['sort_hw_id']))):
             if not first_group:
                 html_parts.append('<br><br>')
             first_group = False

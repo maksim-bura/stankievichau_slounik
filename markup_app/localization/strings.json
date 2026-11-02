@@ -21,11 +21,22 @@
         },
         "rebuild_database": {
             "tooltip": "Паднавіць базу даных"
+        },
+        "alphabet_order": {
+            "tooltip": "Парадак літараў абэцады",
+            "dropdown": {
+                "standard": "Звычайны (а, б, в…)",
+                "dictionary": "Як у слоўніку (о, а, э…)"
+            }
         }
     },
     "tabs": {
-        "xml": "XML",
-        "ui": "UI"
+        "xml": {
+            "title": "XML"
+        },
+        "ui": {
+            "title": "UI"
+        }
     },
     "editor": {
         "link_dependencies": {
@@ -49,6 +60,9 @@
         },
         "save": {
             "tooltip": "Захаваць зьмены"
+        },
+        "digraph_separator": {
+            "tooltip": "Магчыма, прымеж літараў трэба ўставіць значок <sep />"
         }
     },
     "dialog": {

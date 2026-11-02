@@ -1,21 +1,24 @@
+import math
 import re
 from bisect import bisect_left
-from html import unescape
+from html import escape, unescape
 
 from PySide6.QtWidgets import ( QTextEdit, QListWidgetItem, QApplication, QToolTip )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QEvent, QRect, QTimer, Signal
 from PySide6.QtGui import ( QTextCursor, QTextCharFormat, QFontMetricsF, )
 
 from dictionary_app.widgets.dict_text_browser import NoBlueFocusFrameStyle
+from dictionary_app.theme.layout_constants import TOOLTIP_MAX_WIDTH
 from markup_app.theme.layout_constants import (
     COMPLETION_FRAME_PADDING, COMPLETION_MIN_WIDTH, COMPLETION_ROW_PADDING,
-    LINK_TOOLTIP_DELAY_MS, TOOLTIP_WIDTH_FACTOR, TOOLTIP_WIDTH_PAD
+    TOOLTIP_WIDTH_PAD
 )
 from markup_app.theme.styles import (
     COLOR_AMBIGUOUS_G_BG, COLOR_AMBIGUOUS_HW_BG, COLOR_D_SPAN_UNDERLINE
 )
 from dictionary_app.theme.styles import COLOR_HIGHLIGHT_BG, FONT_STACK
 from dictionary_app.utils.xml_schema import BOOL as _ATTR_BOOL
+from markup_app.localization import strings
 from markup_app.panels.attribute_popup import AttributePopup
 from markup_app.panels.build_selections import ( background_selections, underline_selections, )
 from markup_app.services.completion_context import detect_context as _detect_completion_context
@@ -50,10 +53,6 @@ class XmlTextEdit(QTextEdit):
         self.reset_state()
         self._last_scan_text = None
         self._hovered_link_mark = None
-        self._pending_link_tooltip = None
-        self._link_tooltip_timer = QTimer(self)
-        self._link_tooltip_timer.setSingleShot(True)
-        self._link_tooltip_timer.timeout.connect(self._show_pending_link_tooltip)
         self.setMouseTracking(True)
         self._completion_popup = AttributePopup(self)
         self._completion_popup.hide()
@@ -80,10 +79,13 @@ class XmlTextEdit(QTextEdit):
         self._broken_link_spans = []
         self._grammar_g_spans = []
         self._grammar_hw_spans = []
+        self._digraph_spans = []
         self._link_marks = []
         self._link_mark_tooltips = {}
+        self._link_mark_highlights = {}
         self._link_mark_texts = set()
         self._emoji_clean_starts = []
+        self._hovered_link_g_spans = []
 
     def _reset_pending_tag_delete(self):
         if self._pending_tag_delete:
@@ -233,6 +235,10 @@ class XmlTextEdit(QTextEdit):
             COLOR_HIGHLIGHT_BG,
         ))
         sels.extend(background_selections(
+            self, self._clean_spans(self._digraph_spans),
+            COLOR_HIGHLIGHT_BG,
+        ))
+        sels.extend(background_selections(
             self, self._clean_spans(self._broken_link_spans),
             COLOR_HIGHLIGHT_BG,
         ))
@@ -243,6 +249,10 @@ class XmlTextEdit(QTextEdit):
         sels.extend(background_selections(
             self, self._clean_spans(self._grammar_hw_spans),
             COLOR_AMBIGUOUS_HW_BG,
+        ))
+        sels.extend(background_selections(
+            self, self._clean_spans(self._hovered_link_g_spans),
+            COLOR_HIGHLIGHT_BG,
         ))
         sels.extend(underline_selections(
             self, self._non_d_underline, COLOR_D_SPAN_UNDERLINE,
@@ -259,13 +269,13 @@ class XmlTextEdit(QTextEdit):
     def _clean_to_qt(self, clean_pos):
         return clean_pos + 2 * bisect_left(self._emoji_clean_starts, clean_pos)
 
-    def set_link_marks(self, offsets, tooltips=None, reset_undo=False):
+    def set_link_marks(self, offsets, tooltips=None, highlights=None, reset_undo=False):
         QToolTip.hideText()
         self._hovered_link_mark = None
-        self._pending_link_tooltip = None
-        self._link_tooltip_timer.stop()
+        self._hovered_link_g_spans = []
         desired = sorted(set(offsets or ()))
         tooltips = tooltips or {}
+        highlights = highlights or {}
         text = self._scan_text()
         emojis = placeholder_positions(text)
         stray = [p for p in emojis if p == 0 or text[p - 1] != '<']
@@ -296,6 +306,7 @@ class XmlTextEdit(QTextEdit):
             self._link_mark_texts = set(desired_texts.values())
         new_marks = []
         new_tooltips = {}
+        new_highlights = {}
         new_emoji_clean = []
         self.blockSignals(True)
         try:
@@ -322,11 +333,15 @@ class XmlTextEdit(QTextEdit):
                 tip = tooltips.get(off)
                 if tip is not None:
                     new_tooltips[doc_lt] = tip
+                spans = highlights.get(off)
+                if spans:
+                    new_highlights[doc_lt] = spans
             cursor.endEditBlock()
         finally:
             self.blockSignals(False)
         self._link_marks = new_marks
         self._link_mark_tooltips = new_tooltips
+        self._link_mark_highlights = new_highlights
         self._emoji_clean_starts = new_emoji_clean
         if reset_undo:
             self.document().clearUndoRedoStacks()
@@ -389,45 +404,110 @@ class XmlTextEdit(QTextEdit):
             k: v for k, v in self._link_mark_tooltips.items()
             if k in mark_set
         }
+        self._link_mark_highlights = {
+            k: v for k, v in self._link_mark_highlights.items()
+            if k in mark_set
+        }
+
+    def _link_mark_start(self, pos):
+        marks = self._link_marks
+        index = bisect_left(marks, pos - 3)
+        while index < len(marks):
+            mark = marks[index]
+            if mark > pos:
+                return None
+            if mark + 1 <= pos <= mark + 3:
+                return mark
+            index += 1
+        return None
+
+    def _link_marker_rect(self, start):
+        return self._span_rect(start + 1, start + 3)
+
+    def _span_rect(self, start, end):
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(start)
+        left = self.cursorRect(cursor)
+        right_cursor = QTextCursor(self.document())
+        right_cursor.setPosition(end)
+        right = self.cursorRect(right_cursor)
+        rect = QRect(left)
+        if right.top() == left.top():
+            rect.setWidth(max(right.left() - left.left(), left.width()))
+        return rect
+
+    def _apply_link_hover(self, start):
+        if start == self._hovered_link_mark:
+            return
+        self._hovered_link_mark = start
+        self._hovered_link_g_spans = list(self._link_mark_highlights.get(start, ()))
+        self._refresh_selections()
+
+    def _clear_link_hover(self):
+        if self._hovered_link_mark is None and not self._hovered_link_g_spans:
+            return
+        self._hovered_link_mark = None
+        self._hovered_link_g_spans = []
+        QToolTip.hideText()
+        self._refresh_selections()
+
+    def _show_link_tooltip(self, event):
+        pos = self.cursorForPosition(event.pos()).position()
+        start = self._link_mark_start(pos)
+        text = self._link_mark_tooltips.get(start)
+        if text is None:
+            return False
+        self._apply_link_hover(start)
+        QToolTip.showText(
+            event.globalPos(), self._widen_tooltip_html(text),
+            self.viewport(), self._link_marker_rect(start),
+        )
+        return True
+
+    def _digraph_span_at(self, pos):
+        for start, end in self._digraph_spans:
+            doc_start = self._clean_to_qt(start)
+            doc_end = self._clean_to_qt(end)
+            if doc_start <= pos < doc_end:
+                return doc_start, doc_end
+        return None
+
+    def _show_digraph_tooltip(self, event):
+        pos = self.cursorForPosition(event.pos()).position()
+        span = self._digraph_span_at(pos)
+        if span is None:
+            return False
+        QToolTip.showText(
+            event.globalPos(),
+            self._widen_tooltip_html(escape(strings.editor.digraph_separator.tooltip)),
+            self.viewport(), self._span_rect(*span),
+        )
+        return True
+
+    def viewportEvent(self, event):
+        if event.type() == QEvent.Type.ToolTip:
+            if self._show_digraph_tooltip(event):
+                return True
+            if self._show_link_tooltip(event):
+                return True
+        return super().viewportEvent(event)
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
         pos = self.cursorForPosition(event.position().toPoint()).position()
-        text = self._scan_text()
-        start = None
-        if text[pos:pos + 2] == LINK_PLACEHOLDER:
-            start = pos - 1
-        elif 0 < pos < len(text) and text[pos - 1:pos + 1] == LINK_PLACEHOLDER:
-            start = pos - 2
-        elif pos >= 2 and text[pos - 2:pos] == LINK_PLACEHOLDER:
-            start = pos - 3
-        if start is None or start not in self._link_mark_tooltips:
-            self._hovered_link_mark = None
-            self._pending_link_tooltip = None
-            self._link_tooltip_timer.stop()
-            QToolTip.hideText()
+        start = self._link_mark_start(pos)
+        if start is None or start in self._link_mark_tooltips:
+            if start != self._hovered_link_mark:
+                self._clear_link_hover()
             return
-        if start == self._hovered_link_mark:
+        if not self._link_mark_highlights.get(start):
+            self._clear_link_hover()
             return
-        self._hovered_link_mark = start
-        self._pending_link_tooltip = (
-            self.viewport().mapToGlobal(event.position().toPoint()),
-            self._link_mark_tooltips[start],
-        )
-        self._link_tooltip_timer.start(LINK_TOOLTIP_DELAY_MS)
+        self._apply_link_hover(start)
 
     def leaveEvent(self, event):
-        self._hovered_link_mark = None
-        self._pending_link_tooltip = None
-        self._link_tooltip_timer.stop()
-        QToolTip.hideText()
+        self._clear_link_hover()
         super().leaveEvent(event)
-
-    def _show_pending_link_tooltip(self):
-        if self._pending_link_tooltip is None:
-            return
-        pos, text = self._pending_link_tooltip
-        QToolTip.showText(pos, self._widen_tooltip_html(text), self)
 
     def _widen_tooltip_html(self, text):
         metrics = QFontMetricsF(self.font())
@@ -435,7 +515,7 @@ class XmlTextEdit(QTextEdit):
         for line in text.split('<br>'):
             plain = unescape(re.sub(r'<[^>]+>', '', line))
             widest = max(widest, metrics.horizontalAdvance(plain))
-        width = int(widest * TOOLTIP_WIDTH_FACTOR) + TOOLTIP_WIDTH_PAD
+        width = min(math.ceil(widest) + TOOLTIP_WIDTH_PAD, TOOLTIP_MAX_WIDTH)
         return (
             f'<table width="{width}" cellpadding="0" cellspacing="0">'
             f'<tr><td>{text}</td></tr></table>'

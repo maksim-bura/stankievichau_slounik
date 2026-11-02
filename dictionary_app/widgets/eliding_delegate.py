@@ -26,4 +26,6 @@ class ElidingDelegate(QStyledItemDelegate):
                 if option.fontMetrics.horizontalAdvance(text) > max_width:
                     QToolTip.showText(event.globalPos(), text, view.viewport(), option.rect)
                     return True
+            QToolTip.hideText()
+            return True
         return super().helpEvent(event, view, option, index)

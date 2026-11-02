@@ -92,6 +92,58 @@ The sequence that keeps cycles fast:
   on; re-running the same probe "to be sure" doubles wall-clock time for zero
   new information. Re-run only after a NEW change touches the same layer.
 
+### 3.2 Project docs: read once, reuse; requests are the budget
+
+The binding budget is the **number of requests (turns)**, not the context
+window. Every turn re-sends the cached conversation, so one extra round-trip
+costs more than a few thousand tokens of reading.
+
+- **Read `dictionary_app/AGENTS.md` and `markup_app/AGENTS.md` only if they are
+  not already in context.** The harness injects the folder's `AGENTS.md`
+  automatically after the first file access in that folder; reading it again
+  duplicates it. Read it explicitly only when working in a folder whose
+  `AGENTS.md` has not appeared yet.
+- **Read this file and the project docs in full, once per session**, at the
+  point they become relevant — not repeatedly, and not section-by-section.
+  They are rule systems; a partial read silently misses the rule that governs
+  the case at hand, and splitting the read into `Grep` → `Read` chains adds a
+  round-trip per step for a few hundred tokens saved.
+- **Do not re-read docs to answer a mid-task question.** The invariants,
+  paths, and quirks are already in context or reachable by one `rg` for a
+  single term. Re-reading a 15k-token doc to confirm one fact is the most
+  expensive way to get it.
+- **`tools/SOFTWARE_OPTIMIZATION_TECHNIQUES.md` is a catalogue, not a
+  standing read.** Only for a performance/memory task, open the one section
+  that matches the symptom; it is generic taxonomy and does not belong in
+  every session's context.
+- **Fewer, larger steps.** Prefer one message with several independent tool
+  calls over several dependent ones; fold doc updates into the final
+  verification step instead of a separate pass.
+
+### 3.3 Drift check (restatement)
+
+Long sessions erode §3.2 and §4.4: the rules stay in context but lose weight,
+and a compaction summary keeps the gist while dropping the details. The
+symptoms are visible — re-reading `AGENTS.md`, grep→read chains on a small
+file, re-running a probe "to be sure", a fourth probe run, checks after every
+edit.
+
+When that happens, send this block as a new message. It is a compressed
+restatement of §3.2 and §4.4; on conflict, those sections win.
+
+```text
+Rules still apply; re-align:
+- Do not read AGENTS.md or tools/DEVELOPMENT_PRACTICES.md again — both are
+  already in context. One `rg` for a single fact.
+- Requests are the budget, not tokens: batch independent tool calls in one
+  message; locate with `rg`, then read the narrow range.
+- Probe only the invisible. One probe script per task, at most three runs.
+  Colours, spacing, hover and tooltip feel are mine to check.
+- Run `tools/check_cleanup.py --clean` (code) or
+  `tools/check_doc_references.py` (docs) once, at the end.
+- Finish with what was verified and what I need to look at.
+```
+
 ## 4. Probes and verification
 
 ### 4.1 Probes: minimal, and honest about the fixture
@@ -158,6 +210,33 @@ What must stay small is the number of probes and the size of each.
   Every non-BMP character shifts all positions after it. When both spaces
   coexist, convert only at the boundary through a named helper and never mix
   the two in one expression.
+
+### 4.4 Testing budget (what the agent verifies, what the user checks)
+
+Verification is expensive in requests; spending it on what the user can see in
+one glance is waste. Split the work:
+
+- **Probe only the invisible.** Mechanism, data, and side effects that cannot
+  be seen on screen: index/derived state, coordinate conversions, signal order,
+  persistence round-trips, cleanup after a view closes. These are the failures
+  the user cannot spot by clicking.
+- **Leave the visible to the user's manual pass.** Colours, spacing, hover and
+  tooltip feel, focus rings, animation timing, and overall look. Do not write
+  probes that assert appearance; state the change and ask for a visual check.
+- **One probe script per task, three runs maximum.** First run exploratory
+  (print state), second after the fix, third only if a new change touched the
+  same layer. A fourth run means the hypothesis is wrong — rewrite the probe
+  smaller instead of re-running it.
+- **Run the standard checks once per task, at the end.** `tools/check_cleanup.py
+  --clean` after code changes and `tools/check_doc_references.py` after doc
+  changes. Not after every edit.
+- **Report honestly what was and was not verified**, in one short paragraph:
+  what the probe proved, and what is left to the user's eyes. "Not verified"
+  is an acceptable outcome; a probe that pretends to cover appearance is not.
+- **PySide6 details differ from Qt's C++ API.** In this build,
+  `QTextEditExtraSelection.cursor` / `.format` are properties, while
+  `cursorRect()` / `position()` are methods. Probe the accessor once rather
+  than assuming; a wrong call looks like a feature bug.
 
 ## 5. Working with the user
 
@@ -244,11 +323,14 @@ and memory as first-class constraints throughout.
 
 - **Never touch real data**: dictionary XML (`dictionary_*.xml`, `sources.xml`,
   `data/dictionary/`) and the Belarusian text in localization JSON are
-  off-limits. The DB rebuild reads XML only and must not rewrite it.
+  off-limits. The DB rebuild reads XML only and must not rewrite it. Inspect it
+  with the read-only `tools/inspect_data.py` (§9.9) instead of reading whole
+  files into the conversation.
 - **Localization JSON is manually maintained** — edit individual keys only,
   never re-serialize or reformat.
 - **No comments in source code.** This codebase is comment-free by convention;
   rationale lives in the `.md` docs. (At cleanup: delete every comment.)
+  `tools/strip_comments.py` (§9.6) deletes them; no confirmation needed.
 
 ### 8.1 Naming and terminology
 
@@ -284,11 +366,23 @@ and memory as first-class constraints throughout.
   adopt the correction consistently everywhere.
 - Audit localization JSON **structure and key names** (never the Belarusian
   text) so keys match the entities they describe.
-- Keep file, folder, and entity naming consistent across both apps (§8.8).
+- When reviewing or editing localization JSON keys, keep the groupings and
+  names logical and human-readable: group by the element's position in the
+  UI, and make sure the name/grouping includes the function the string
+  serves (title, button, tooltip, placeholder, message, …). Determine the
+  function from code usage: search for the key and inspect only the relevant
+  surrounding context. Group by where the element sits in the UI and name by
+  what it is for — the editor save tooltip is editor.save.tooltip, not a
+  bare save. Renaming or regrouping keys is fine; the Belarusian text
+  values are not (see the hard rules above).
 
 ### 8.2 Structure and file layout
 
 - Split files that have grown too large into smaller, single-purpose modules.
+- During a refactor or cleanup pass, you may **provisionally merge** the
+  files/modules being split and then **split them again along different logical
+  boundaries** as you see fit — behavior and design stay unchanged, only the
+  boundaries move.
 - Make every module, class, and function cohesive: one clear responsibility
   each.
 - When one functionality produces several pieces, **split it finely and put the
@@ -314,13 +408,18 @@ and memory as first-class constraints throughout.
   gitignored** (documented in Part III). **The cleanup pass does not
   revise `tools/` content:** amend a tool ad hoc, at the moment it is called or
   used — stale expectations, new checks, and renamed helpers are fixed then, and
-  only then. A tool must exit 0 whenever it is run: if the pass made it fail, fix
-  it in that moment, so no red tool is left behind. The whole directory is
+  only then. A tool must not be left red *because of* the pass: exit codes follow
+  §10 (0 when clean, 1 on findings or failures), so a red scan is a real finding,
+  not a broken script — if a rename or a moved file made a scan fail, fix it in
+  that moment. The whole directory is
   deletable as a unit: nothing in `dictionary_app/` or `markup_app/` imports it
   (grep for `import tools` / `from tools` to confirm before deleting); keep only
   the scripts you actively rely on.
 - Delete code that became redundant as a result of the fixes: obsolete helpers,
   flags, branches, imports, parameters, CSS rules, localization keys.
+  `tools/find_unused_definitions.py` (§9.7) lists module-level functions and
+  classes nothing references; `tools/find_unused_imports.py` covers imports.
+  Resolve its hits by the flow in §9.7.
 - Delete **all comments** in code (hard rule above).
 
 ### 8.4 Composition and modularity — compose reusable pieces, never stack named behaviors
@@ -375,6 +474,10 @@ composing those primitives** — not by extending or aliasing a lower-level
 - **Optimize from measurement, not intuition.** Measure the real entry point
   before changing it and re-measure after; a change that cannot be shown to
   move the number is churn.
+- **Do not overengineer.** Add an abstraction, cache, option, or generalization
+  only when a measured need or a second real caller justifies it; speculative
+  flexibility is churn. Prefer the simplest code that meets the measured
+  requirement and the rules here.
 - **Balance speed against footprint.** Never buy faster startup or computation
   with an unbounded cache, a larger on-disk artifact, or permanently retained
   state; every cached byte must be cheaper than recomputing it.
@@ -393,11 +496,18 @@ composing those primitives** — not by extending or aliasing a lower-level
   loops.
 - Watch memory retention: do not hold large XML strings or parsed roots longer
   than necessary.
+- **Known pain points (candidates to measure, in rough order):** launch time —
+  including database build time (the main one); search/lookup latency at
+  200,000 headwords; markup-app document load and render; link resolution
+  (`<see>`) over the entry index; memory retention of the loaded index and
+  parsed roots; and full vs. incremental DB rebuild. Treat each as a candidate,
+  not a mandate: measurement above decides whether it is worth changing.
 - **Reference catalog:** `tools/SOFTWARE_OPTIMIZATION_TECHNIQUES.md` is a
   menu of optimization techniques by level (architecture, algorithms, data
-  structures, memory, I/O, databases, concurrency, deployment). Consult it when
-  choosing an approach, but it is guidance, not a mandate: measurement and the
-  footprint rules above decide whether a technique is used.
+  structures, memory, I/O, databases, concurrency, deployment). Use it during
+  refactors, with special attention to **app launch time — including database
+  build time**, the main pain point. It is guidance, not a mandate: measurement
+  and the footprint rules above decide whether a technique is used.
 
 ### 8.7 Constants and styling
 
@@ -421,7 +531,9 @@ composing those primitives** — not by extending or aliasing a lower-level
 ### 8.9 .gitignore
 
 - Update it so build outputs, generated databases, caches, and scratch artifacts
-  remain untracked.
+  remain untracked. Generated data exports go with them: `tools/*.xlsx`
+  (produced by the export scripts in §9.10) is ignored, while the scripts
+  themselves stay tracked.
 
 ### 8.10 Auditing this document
 
@@ -438,7 +550,9 @@ audit target, not only as a reference:
   longer work) should be cut or tightened.
 - **Verify the facts.** Check that named commands, paths, tools, and
   cross-references still exist and work (`rg` the symbols; run the command if it
-  is cheap).
+  is cheap). `tools/check_doc_references.py` (§9.8) resolves every `§N` section
+  and backticked repo path mechanically; it proves a reference *exists*, not that
+  it points at the right place, so still read the passage it lands on.
 - **Ask the user about the ultimate choices.** Do not silently pick a winner for
   a conflict or ambiguity. Present each finding as: the conflict/inefficiency,
   the realistic options, and a recommendation; wait for the user's decision.
@@ -489,7 +603,10 @@ every change:
   structure, isolate app-specific code).
 - **Tooling:** use `tools/read_codebase.py` to map unfamiliar areas,
   `tools/rewrite_imports.py` for safe renames/moves, and
-  `tools/check_cleanup.py` to verify after structural changes. For
+  `tools/check_cleanup.py` to verify after structural changes. Run
+  `tools/strip_comments.py` after adding code that may carry comments, and
+  `tools/find_unused_definitions.py` before finishing a change that may have
+  orphaned code. For
   `<see>` / link-resolution changes, use a targeted probe (§4.1) or the markup
   app's broken-links filter.
 - **Scope discipline:** for a small change, do not do a full-cycle cleanup —
@@ -541,6 +658,14 @@ applications and is not gitignored. Nothing in `dictionary_app/` or
 | `rewrite_imports.py` | safe import renames/moves/splits | `py -3 tools/rewrite_imports.py plan.json` |
 | `find_unused_imports.py` | AST scan for unused imports | `py -3 tools/find_unused_imports.py .` |
 | `check_cleanup.py` | run the built-in checks, then clean artifacts | `py -3 tools/check_cleanup.py --clean --status` |
+| `strip_comments.py` | delete source comments (see below) | `py -3 tools/strip_comments.py` |
+| `find_unused_definitions.py` | module-level defs/classes nothing references (see below) | `py -3 tools/find_unused_definitions.py` |
+| `check_doc_references.py` | unresolved `§` sections and repo paths in docs (see below) | `py -3 tools/check_doc_references.py` |
+| `inspect_data.py` | read-only data queries: counts, lookup, duplicates, attribute census (see below) | `py -3 tools/inspect_data.py --count` |
+| `digraph_export.py` | shared xlsx writer + digraph row builders; imported, no CLI (see below) | — |
+| `export_hw_digraphs.py` | every `<hw>` containing `дз`/`дж` → xlsx | `py -3 tools/export_hw_digraphs.py` |
+| `export_hw_separated_digraphs.py` | every `<hw>` whose digraph is split by `<sep />` → xlsx | `py -3 tools/export_hw_separated_digraphs.py` |
+| `export_see_hw.py` | every `<see hw="…">` with its entry's main headword → xlsx | `py -3 tools/export_see_hw.py` |
 
 ### 9.1 `read_codebase.py` — map a repo quickly
 
@@ -641,13 +766,191 @@ py -3 tools/check_cleanup.py
 py -3 tools/check_cleanup.py --probes "$env:TEMP\opencode" --clean --status
 ```
 
+### 9.6 `strip_comments.py` — delete source comments
+
+Deletes comments from source files, enforcing the "no comments in source code"
+hard rule without asking. Tokenizes each file, so a `#` inside a string (CSS
+colours, URL schemes) is not a comment and docstrings are untouched; shebangs,
+coding cookies, and `--allow` matches are kept. Line endings and the source
+encoding are preserved, and a write is refused if the `ast` tree would change.
+
+| flag | purpose |
+|---|---|
+| `--root DIR` | repo root |
+| `--ext .py` | extensions to scan |
+| `--exclude parts` | extra path parts to skip |
+| `--allow REGEX` | keep matching comments (repeatable) |
+| `--dry-run` | list what would be deleted, change nothing |
+
+Exits `0` after cleaning (also when there was nothing to delete) and `1` only
+when a file cannot be read, parsed, or safely rewritten.
+
+```powershell
+py -3 tools/strip_comments.py
+py -3 tools/strip_comments.py --dry-run
+```
+
+### 9.7 `find_unused_definitions.py` — dead definition scan
+
+Complements `find_unused_imports.py` (imports only): reports module-level
+functions and classes that nothing else in the tree references.
+
+| flag | purpose |
+|---|---|
+| `--root DIR` | repo root |
+| `--ext .py` | extensions to scan |
+| `--kinds def,class[,constant]` | definition kinds to report |
+| `--ignore REGEX` | names to exempt (repeatable), e.g. public API kept for callers |
+| `--show-used` | also print candidates that are referenced |
+
+The scan is name-based: `getattr`, string dispatch, and PEP 562 `__getattr__`
+exports are invisible, so hits are candidates, not proof. Names listed in
+`__all__`, dunders, and `__init__.py` are skipped. Exits `1` on findings; not
+wired into `check_cleanup.py`, because a hit must be classified below before it
+can be fixed.
+
+Resolve every hit the same way:
+
+1. **Obviously stale** — nothing can reach it and it has no documented purpose
+   (an alias of another function, a helper superseded by its replacement):
+   delete it without asking.
+2. **Questionable** — public API, a documented helper, or possible dynamic use:
+   ask the user before deleting.
+3. In both cases update every doc that names the symbol (module tables, symbol
+   lists, cross-references) in the same change. This flow is the standing
+   consent for those doc edits (§8.11).
+
+```powershell
+py -3 tools/find_unused_definitions.py
+py -3 tools/find_unused_definitions.py --kinds def,class,constant --ignore '^main$'
+```
+
+### 9.8 `check_doc_references.py` — doc cross-reference check
+
+Mechanizes the "cross-references still exist" part of §8.10. Reports a `§N` /
+`§N.M` that matches no numbered heading in its own document, and a backticked
+repo path that does not exist relative to the root or to the file that names it.
+
+| flag | purpose |
+|---|---|
+| `--root DIR` | repo root |
+| `--ext .md` | extensions to scan |
+| `--exclude parts` | extra path parts to skip |
+| `--sections-from PATH` | also accept section numbers from this doc (repeatable) |
+| `--ignore-glob PATTERN` | skip matching path references (repeatable) |
+| `--path-ext LIST` | extensions that make a token count as a path |
+| `--checks sections,paths` | run one class of check only |
+| `--show-ignored` | list the references skipped via `.gitignore` |
+| `--no-gitignore` | do not skip paths matched by `.gitignore` |
+
+Sections resolve against the same document by default — the usual meaning of a
+`§7` inside a doc that has its own §7 — so pass `--sections-from` for a doc that
+cites another doc's numbering. A bare `§8` resolves when `8` or any `8.x` exists.
+Only path-like tokens are checked (first segment exists at the root, or the
+extension is in `--path-ext`), so prose slashes such as `back/forward` and module
+mentions such as `theme/styles` are ignored. `.gitignore` is honoured, so
+generated outputs (`build/`, `*.db`) never fail the check; `!` negation patterns
+are not interpreted.
+
+Exits `1` on any unresolved reference. It proves a reference resolves, never that
+it points at the right content — read the target when the meaning matters.
+
+```powershell
+py -3 tools/check_doc_references.py
+py -3 tools/check_doc_references.py --sections-from docs/index.md
+py -3 tools/check_doc_references.py --checks sections
+```
+
+### 9.9 `inspect_data.py` — query data files read-only
+
+Answers questions about data files (dictionary XML, raw OCR `.txt`) without
+reading them into the conversation. **Never writes:** no query opens a file for
+writing, creates a file, or touches the database. The tag scan is line-oriented,
+so it reports `path:line` and survives malformed markup; records are discovered
+at runtime as the most common child of the root element.
+
+| flag | purpose |
+|---|---|
+| `--root DIR` | repo root |
+| `--glob PATTERNS` | comma-separated file patterns (default `*.xml,*.txt`) |
+| `--exclude parts` | extra path parts to skip |
+| `--count` | per-file bytes, lines, tags, records, top tags |
+| `--lookup TEXT` | substring search; `--ignore-case`, `--context N`, `--snippet N` |
+| `--duplicates SPEC` | duplicate attribute values; `TAG/ATTR` or bare `ATTR` |
+| `--attribute-audit` | tag/attr census with distinct counts, samples, single-use list |
+| `--tag TAG` | restrict count/audit/duplicates to one element |
+| `--record TAG` | record element for `--count` (default: auto-detect) |
+| `--limit N` | max printed rows/groups (0 = all) |
+| `--top N` | sample values per attribute pair (default 3) |
+
+```powershell
+$env:PYTHONUTF8="1"
+py -3 tools/inspect_data.py --count
+py -3 tools/inspect_data.py --lookup "ча́паць" --limit 5
+py -3 tools/inspect_data.py --lookup "чохаўка" --context 1
+py -3 tools/inspect_data.py --duplicates entry/id
+py -3 tools/inspect_data.py --attribute-audit --tag hw
+```
+
+Use it before reading a data file: one count or lookup replaces a 6k–44k-token
+file read with a few hundred tokens of ASCII-labelled lines. Cyrillic appears
+only in the answer (a matched line, a duplicated value, a sample), never in the
+labels. Exits `0` when the query ran and `1` when no file matched or a file could
+not be read — the failure is reported and the remaining files are still queried,
+so one bad file never hides the rest.
+
+Limits: the scanner assumes XML-like markup and does not resolve entities or
+CDATA; `--duplicates` compares raw attribute strings without normalization. It is
+an inspector, not a validator.
+
+### 9.10 Data exports (`digraph_export.py` + `export_*.py`)
+
+Small, project-specific exporters that turn a corpus question into one xlsx the
+user can scan in Excel. They read the source XML only — the database is not
+opened, and nothing is written except the workbook.
+
+- **`digraph_export.py` is a library, not a script.** It imports the repo
+  (`get_source_names` / `get_source_path`, `hw_text_excluding_n`,
+  `SEP_SORT_SENTINEL`, `ATTR_*`) and provides:
+  - `digraph_rows()` — every `<hw>` whose text contains `дз`/`дж` (case-folded);
+  - `separated_digraph_rows()` — every `<hw>` where `д`, the `SEP_SORT_SENTINEL`
+    and `з`/`ж` are adjacent, i.e. a `<sep />` splits the digraph;
+  - `write_workbook(rows, output_name, headers=HEADERS,
+    column_widths=COLUMN_WIDTHS, sheet_title=SHEET_TITLE)` — writes the header
+    (bold, wrapped), the rows (wrapped, top-aligned), the column widths, and
+    freeze panes `A2`; a relative `output_name` resolves against `tools/`. The
+    defaults are the digraph table (`Файл`, `Артыкул`, `Загаловак`,
+    `XML загалоўка`, `XML артыкула`); `export_see_hw.py` overrides all three.
+  Header text in these exporters is Belarusian, so the console output stays
+  ASCII (`N row(s) written to <path>`).
+- **Row shape:** digraph exports emit `(source_file, entry_id, headword_text,
+  headword_xml, entry_xml)` with the sentinel rendered as `<sep />` in the display
+  column; the see export emits `(main headword, <see …>…</see> span)` and skips
+  sees without `hw`. `_main_headword` returns the first non-`excl` `<hw>`
+  (falling back to the first non-empty one), so the label is the entry's real
+  main headword, not the first `<hw excl="true">`.
+- **Invocation:** each `export_*.py` takes an optional output name as `argv[1]`
+  and otherwise writes its `DEFAULT_OUTPUT` (`hw_digraphs.xlsx`,
+  `hw_separated_digraphs.xlsx`, `see_hw_links.xlsx`) into `tools/`. Output is
+  gitignored (§8.9); add `openpyxl` to the environment before use.
+- **Adding a new export:** put the row builder next to the existing ones (or a
+  new `export_*.py` for a different corpus question), reuse `write_workbook`
+  instead of duplicating styling, and keep the script read-only.
+
 ## 10. Exit codes
 
 Scripts exit `0` on success and `1` on findings/failures.
 
 ## 11. Reuse
 
-Copy the scripts in `tools/` into another repo; `read_codebase.py`/`plan_cleanup.py` are
-project-agnostic. `rewrite_imports.py` only touches imports. For per-repo policy,
+Copy the scripts in `tools/` into another repo; `read_codebase.py`,
+`plan_cleanup.py`, `strip_comments.py`, `find_unused_definitions.py`,
+`check_doc_references.py`, and `inspect_data.py` are project-agnostic. The data
+inspector learns the record tag at runtime and takes `--glob`/`--tag`/`--record`,
+so it works on any XML-like dataset without edits. `rewrite_imports.py` only
+touches imports. `digraph_export.py` and the `export_*.py` scripts (§9.10) are
+the exception: they import `dictionary_app` and encode this corpus's `<hw>` /
+`<sep />` / `<see hw>` shapes, so copy them only when the target repo has the
+same schema (the `write_workbook` writer itself is generic). For per-repo policy,
 write a local config and a plan JSON (populate from the repo's actual module
 names).

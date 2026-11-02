@@ -33,7 +33,7 @@ def content_text(element, tag):
     return ''.join(parts)
 
 
-def hw_text_excluding_n(element):
+def hw_text_excluding_n(element, sep_marker=''):
     parts = []
     if element.text:
         parts.append(element.text)
@@ -42,7 +42,10 @@ def hw_text_excluding_n(element):
             if child.tail:
                 parts.append(child.tail)
             continue
-        parts.append(hw_text_excluding_n(child))
+        if child.tag == 'sep' and sep_marker:
+            parts.append(sep_marker)
+        else:
+            parts.append(hw_text_excluding_n(child, sep_marker))
         if child.tail:
             parts.append(child.tail)
     return ''.join(parts)

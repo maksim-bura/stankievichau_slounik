@@ -13,4 +13,5 @@ build/
 *.db-journal
 *.db-wal
 *.db-shm
+tools/*.xlsx
 db/test_*.py

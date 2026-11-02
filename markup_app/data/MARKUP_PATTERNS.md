@@ -371,7 +371,7 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
 
 | failure | cause | avoidance |
 |---|---|---|
-| A headword silently vanishes | a `•` inside a merged raw line was treated as punctuation | split at every `•`; check the bullet count (§11.2) |
+| A headword silently vanishes | a `•` inside a merged raw line was treated as punctuation | split at every `•`; check the bullet count (§11, item 2) |
 | An entry exists twice | the same raw block was appended twice after a context reset | track the last written headword; read the XML tail before appending |
 | File ends up alphabetized or reordered | "tidying" the file, or inserting a new entry in the middle | never sort or move blocks; print order is the invariant; append at the end |
 | Cross-refs point nowhere | `<see>` uses the raw's OCR spelling | normalize to the real headword; check with the broken-links filter in the markup app |
@@ -383,7 +383,7 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
 
 ## 13. Verification and commit
 
-- Parse check per chunk (§11.1); the full-file parse happens when the app starts.
+- Parse check per chunk (§11, item 1); the full-file parse happens when the app starts.
 - Output must stay loadable by both apps: the markup editor and
   `dictionary_app.db.build_database` parse the same `<entry>` blocks.
 - **Do not** validate every `<src>` against `dictionary_app/data/source_mappings.json`

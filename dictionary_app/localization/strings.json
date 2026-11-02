@@ -21,12 +21,19 @@
             "tooltip": "Налады",
             "dropdown": {
                 "title": "Налады шуканьня",
+                "alphabet_order": {
+                    "title": "Парадак літараў абэцады",
+                    "standard": "Звычайны (а, б, в…)",
+                    "dictionary": "Як у слоўніку (о, а, э…)"
+                },
                 "search_in_belarusian": {
-                    "name": "Шукаць пабеларуску",
+                    "label": "Шукаць пабеларуску",
                     "headwords": "Шукаць у загалоўках",
                     "examples": "Шукаць у прыкладах"
                 },
-                "search_in_russian": "Шукаць парасійску (у перакладах)"
+                "search_in_russian": {
+                    "label": "Шукаць парасійску (у перакладах)"
+                }
             }
         }
     },
@@ -34,7 +41,9 @@
         "back": "Назад",
         "forward": "Наперад"
     },
-    "messages": {
-        "no_results": "Няма вынікаў."
+    "sources_panel": {
+        "no_results": {
+            "message": "Няма вынікаў."
+        }
     }
 }

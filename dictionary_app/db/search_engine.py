@@ -6,6 +6,7 @@ from dictionary_app.utils.normalize_headword import normalize_jo_to_je
 from dictionary_app.utils.remove_accents import remove_accents
 from dictionary_app.utils.extract_content_text import index_text
 from dictionary_app.utils.compile_search_regex import compile_search_regex
+from dictionary_app.utils.sort_keys import SORT_ORDER_DICTIONARY, SORT_ORDER_STANDARD
 from dictionary_app.utils.xml_schema import ATTR_KEEP_ACC
 from dictionary_app.format.highlight_formatter import HighlightFormatter
 
@@ -33,7 +34,8 @@ _SUB_MATCH_SELECT_SQL = (
 
 _DICTIONARY_HEADWORD_SQL = (
     "SELECT id, headword, NULL AS full_entry, entry_link, source_file, "
-    "sort_headword, normalized_headword, keep_acc, hw_xml_id, collation_key "
+    "sort_headword, normalized_headword, keep_acc, hw_xml_id, collation_key, "
+    "collation_key_dictionary "
     "FROM dictionary "
 )
 
@@ -41,7 +43,8 @@ _SUB_HEADWORD_SQL = (
     "SELECT dictionary.id, sub_headwords.headword, NULL AS full_entry, "
     "COALESCE(sub_headwords.link, dictionary.entry_link), dictionary.source_file, "
     "sub_headwords.sort_headword, sub_headwords.normalized_headword, "
-    "sub_headwords.keep_acc, sub_headwords.hw_xml_id, sub_headwords.collation_key "
+    "sub_headwords.keep_acc, sub_headwords.hw_xml_id, sub_headwords.collation_key, "
+    "sub_headwords.collation_key_dictionary "
     "FROM sub_headwords "
     "JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id "
 )
@@ -118,9 +121,10 @@ class SearchEngine:
             return text
         return remove_accents(text)
 
-    def search(self, text, search_in_headwords=True, search_in_translations=False, search_in_examples=False):
+    def search(self, text, search_in_headwords=True, search_in_translations=False, search_in_examples=False,
+               sort_order=SORT_ORDER_STANDARD):
         if not text.strip():
-            return self._search_headwords("")
+            return self._search_headwords("", sort_order)
         if search_in_translations and search_in_examples:
             raise ValueError("combined translations+examples search is not implemented")
         if not search_in_headwords:
@@ -128,9 +132,9 @@ class SearchEngine:
                 return self._search_translations(text)
             if search_in_examples:
                 return self._search_examples(text)
-        return self._search_headwords(text)
+        return self._search_headwords(text, sort_order)
 
-    def _search_headwords(self, text):
+    def _search_headwords(self, text, sort_order):
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -140,8 +144,7 @@ class SearchEngine:
             cursor.execute(_HEADWORD_ROWS_SQL.format(
                 dictionary_where='', sub_headwords_where=''))
             unique = cursor.fetchall()
-            unique.sort(key=lambda r: r[9])
-            return [self._row_result(r) for r in unique]
+            return [self._row_result(r) for r in self._sorted(unique, sort_order)]
 
         pattern = compile_search_regex(text.strip(), exact_words=text.endswith(' '))
 
@@ -161,8 +164,7 @@ class SearchEngine:
                     sub_ids)
                 rows.extend(cursor.fetchall())
             unique = [r for r in rows if pattern.search(r[1])]
-            unique.sort(key=lambda r: r[9])
-            return [self._row_result(r) for r in unique]
+            return [self._row_result(r) for r in self._sorted(unique, sort_order)]
 
         sql_pattern = self._like_pattern(clean_text.lower(), collapse_spaces=True)
 
@@ -173,8 +175,13 @@ class SearchEngine:
         unique = cursor.fetchall()
 
         unique = [r for r in unique if pattern.search(r[1])]
-        unique.sort(key=lambda r: r[9])
-        return [self._row_result(r) for r in unique]
+        return [self._row_result(r) for r in self._sorted(unique, sort_order)]
+
+    @staticmethod
+    def _sorted(rows, sort_order):
+        index = 10 if sort_order == SORT_ORDER_DICTIONARY else 9
+        rows.sort(key=lambda r: r[index])
+        return rows
 
     @staticmethod
     def _row_result(r):

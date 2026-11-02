@@ -80,20 +80,27 @@ def build_link_marks(broken_links, text, entry_id):
             'hws': broken_links.owning_hw_texts(occ['block'], occ['start']),
             'raw': occ['block'][occ['start']:occ['end']],
         })
-    g_hw_attrs = []
+    g_elements = []
     for match in re.finditer(r'<g\b([^>]*)>', text):
         attr = re.search(r'\bhw\s*=\s*"([^"]*)"', match.group(1))
         if attr and attr.group(1):
-            g_hw_attrs.append(attr.group(1))
+            close = text.find('</g>', match.end())
+            g_end = close + len('</g>') if close != -1 else match.end()
+            g_elements.append({
+                'attr': attr.group(1),
+                'span': (match.start(), g_end),
+            })
             target_ids.add(attr.group(1))
+    g_attrs = [g['attr'] for g in g_elements]
     hw_offsets = []
     tooltips = {}
+    highlights = {}
     for match in re.finditer(r'<hw\b([^>]*)>(.*?)</hw>', text, re.DOTALL):
         hw_id = re.search(r'\bid\s*=\s*"([^"]*)"', match.group(1))
         hw_text = strip_tags(match.group(2)).strip()
         inner = resolve_headword(hw_text, has_keep_acc(match.group(1)))
         if (inner in target_norms
-                or any(attr_matches(attr, hw_text) for attr in g_hw_attrs)
+                or any(attr_matches(attr, hw_text) for attr in g_attrs)
                 or (hw_id and hw_id.group(1) in target_ids)):
             hw_offsets.append(match.start())
             hw_deps = [
@@ -105,8 +112,15 @@ def build_link_marks(broken_links, text, entry_id):
                 tooltips[match.start()] = format_link_tooltip(
                     hw_deps, strings.editor.link_dependencies.headword.tooltip
                 )
+            g_spans = [
+                g['span'] for g in g_elements
+                if attr_matches(g['attr'], hw_text)
+                or (hw_id and g['attr'] == hw_id.group(1))
+            ]
+            if g_spans:
+                highlights[match.start()] = g_spans
     if not entry_targeted and not hw_offsets:
-        return [], {}
+        return [], {}, {}
     offsets = list(hw_offsets)
     entry_tooltip = format_link_tooltip(
         deps, strings.editor.link_dependencies.entry.tooltip
@@ -115,4 +129,4 @@ def build_link_marks(broken_links, text, entry_id):
         offsets.append(match.start())
         if entry_tooltip is not None:
             tooltips[match.start()] = entry_tooltip
-    return offsets, tooltips
+    return offsets, tooltips, highlights

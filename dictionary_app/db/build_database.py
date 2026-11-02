@@ -3,21 +3,27 @@ import xml.etree.ElementTree as ElementTree
 import os
 import stat
 from dictionary_app.utils.remove_accents import remove_accents
-from dictionary_app.utils.sort_keys import alphabet_sort_key, encode_order_key, entry_id_sort_key
+from dictionary_app.utils.sort_keys import (
+    SORT_ORDER_DICTIONARY, SORT_ORDER_STANDARD, alphabet_sort_key, encode_order_key,
+    entry_id_sort_key
+)
 from dictionary_app.utils.extract_content_text import content_text, index_text, hw_text_excluding_n
+from dictionary_app.utils.constants import SEP_SORT_SENTINEL
 from dictionary_app.utils.xml_schema import ATTR_ID, ATTR_EXCL, ATTR_KEEP_ACC
 
 
 _DICTIONARY_INSERT_SQL = (
     "INSERT INTO dictionary (id, headword, sort_headword, normalized_headword, "
-    "normalized_plain_headword, collation_key, entry_link, hw_xml_id, source_file, keep_acc) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "normalized_plain_headword, collation_key, entry_link, hw_xml_id, source_file, keep_acc, "
+    "collation_key_dictionary) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _ENTRY_BODY_INSERT_SQL = "INSERT INTO entry_body (id, xml) VALUES (?, ?)"
 _SUB_HEADWORD_INSERT_SQL = (
     "INSERT INTO sub_headwords (headword, sort_headword, normalized_headword, "
-    "normalized_plain_headword, collation_key, main_entry_id, link, hw_xml_id, keep_acc) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "normalized_plain_headword, collation_key, main_entry_id, link, hw_xml_id, keep_acc, "
+    "collation_key_dictionary) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 _CONTENT_INDEX_INSERT_SQL = (
     "INSERT INTO content_index (entry_id, tag_type, searchable_text) VALUES (?, ?, ?)"
@@ -29,7 +35,7 @@ _SQLITE_CACHE_SIZE_KIB = "PRAGMA cache_size = -20000"
 _SQLITE_CACHE_SIZE_VALUE = -20000
 
 _SCHEMA_VERSION_KEY = 'schema_version'
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 _SOURCES_XML = 'sources.xml'
 
@@ -41,11 +47,15 @@ _FTS_TABLES = (_FTS_HEADWORD, _FTS_SUB_HEADWORD, _FTS_CONTENT_T, _FTS_CONTENT_EX
 _BASE_TABLES = ('dictionary', 'entry_body', 'sub_headwords', 'content_index')
 
 
-def _collation_key(sort_headword, entry_link, hw_xml_id):
+def _collation_key(sort_headword, sort_order, entry_link, hw_xml_id):
     return encode_order_key(
-        *alphabet_sort_key(sort_headword),
+        *alphabet_sort_key(sort_headword, sort_order),
         entry_id_sort_key(entry_link) or entry_id_sort_key(hw_xml_id),
     )
+
+
+def _normalized_headword(text):
+    return remove_accents(text.replace(SEP_SORT_SENTINEL, '')).lower()
 
 
 def _parse_xml_file(file_path):
@@ -114,10 +124,10 @@ def _schema_is_current(cursor):
     if not {'dictionary', 'sub_headwords', 'entry_body', 'schema_meta'}.issubset(tables):
         return False
     columns = {row[1] for row in cursor.execute("PRAGMA table_info(sub_headwords)")}
-    if not {'link', 'hw_xml_id', 'keep_acc', 'collation_key'}.issubset(columns):
+    if not {'link', 'hw_xml_id', 'keep_acc', 'collation_key', 'collation_key_dictionary'}.issubset(columns):
         return False
     dict_columns = {row[1] for row in cursor.execute("PRAGMA table_info(dictionary)")}
-    if not {'hw_xml_id', 'keep_acc', 'collation_key'}.issubset(dict_columns):
+    if not {'hw_xml_id', 'keep_acc', 'collation_key', 'collation_key_dictionary'}.issubset(dict_columns):
         return False
     row = cursor.execute("SELECT value FROM schema_meta WHERE key = ?", (_SCHEMA_VERSION_KEY,)).fetchone()
     return bool(row) and row[0] == str(_SCHEMA_VERSION)
@@ -215,7 +225,8 @@ def build_database(file_names=None):
                 entry_link TEXT,
                 hw_xml_id TEXT,
                 source_file TEXT,
-                keep_acc INTEGER
+                keep_acc INTEGER,
+                collation_key_dictionary BLOB
             )
         """)
 
@@ -237,7 +248,8 @@ def build_database(file_names=None):
                 main_entry_id INTEGER,
                 link TEXT,
                 hw_xml_id TEXT,
-                keep_acc INTEGER
+                keep_acc INTEGER,
+                collation_key_dictionary BLOB
             )
         """)
 
@@ -375,8 +387,8 @@ def insert_entry(entry, source_file, main_entry_id):
     if not headword:
         return None
 
-    sort_headword = hw_text_excluding_n(headword_element).strip() or headword
-    normalized_headword = remove_accents(sort_headword).lower()
+    sort_headword = hw_text_excluding_n(headword_element, SEP_SORT_SENTINEL).strip() or headword
+    normalized_headword = _normalized_headword(sort_headword)
     entry_string = ElementTree.tostring(entry, encoding="unicode")
     entry_xml_id = entry.get(ATTR_ID)
     main_hw_xml_id = headword_element.get(ATTR_ID)
@@ -385,8 +397,9 @@ def insert_entry(entry, source_file, main_entry_id):
     dict_row = (
         main_entry_id, headword, sort_headword, normalized_headword,
         remove_accents(headword).lower(),
-        _collation_key(sort_headword, entry_xml_id, main_hw_xml_id),
-        entry_xml_id, main_hw_xml_id, source_file, main_hw_keep_acc
+        _collation_key(sort_headword, SORT_ORDER_STANDARD, entry_xml_id, main_hw_xml_id),
+        entry_xml_id, main_hw_xml_id, source_file, main_hw_keep_acc,
+        _collation_key(sort_headword, SORT_ORDER_DICTIONARY, entry_xml_id, main_hw_xml_id)
     )
     body_row = (main_entry_id, entry_string)
 
@@ -401,8 +414,8 @@ def insert_entry(entry, source_file, main_entry_id):
         if sub_text:
             descriptor = sub_headword_element.get(ATTR_ID)
             sub_link = entry.get(ATTR_ID)
-            sub_sort = hw_text_excluding_n(sub_headword_element).strip() or sub_text
-            sub_normalized = remove_accents(sub_sort).lower()
+            sub_sort = hw_text_excluding_n(sub_headword_element, SEP_SORT_SENTINEL).strip() or sub_text
+            sub_normalized = _normalized_headword(sub_sort)
             if descriptor is not None:
                 dedup_key = (sub_normalized, descriptor)
                 if dedup_key in seen_sub_headwords:
@@ -411,8 +424,9 @@ def insert_entry(entry, source_file, main_entry_id):
             sub_keep_acc = 1 if sub_headword_element.get(ATTR_KEEP_ACC) is not None else 0
             sub_rows.append(
                 (sub_text, sub_sort, sub_normalized, remove_accents(sub_text).lower(),
-                 _collation_key(sub_sort, sub_link, descriptor),
-                 main_entry_id, sub_link, descriptor, sub_keep_acc)
+                 _collation_key(sub_sort, SORT_ORDER_STANDARD, sub_link, descriptor),
+                 main_entry_id, sub_link, descriptor, sub_keep_acc,
+                 _collation_key(sub_sort, SORT_ORDER_DICTIONARY, sub_link, descriptor))
             )
 
     content_rows = []

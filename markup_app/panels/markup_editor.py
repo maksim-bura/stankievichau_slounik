@@ -18,16 +18,19 @@ from markup_app.utils.constants import FLOPPY_MARKER
 from markup_app.localization import strings
 from markup_app.panels.tag_button import TagButton, UniformTabBar
 from markup_app.panels.xml_text_edit import XmlTextEdit, strip_link_markers
+from markup_app.services.find_digraph_spans import find_digraph_spans
 from dictionary_app.utils.normalize_headword import resolve_headword
 from dictionary_app.utils.measure_scrollbars import overlay_right_inset
 from dictionary_app.utils.constants import CHECK_BLANK
 
 
 TAG_BUTTON_GROUPS = [
-    ['d', 'hw', 'n', 'g', 'sense', 't', 'ex', 'st', 'src', 'see', 'lang'],
+    ['d', 'hw', 'sep', 'n', 'g', 'sense', 't', 'ex', 'st', 'src', 'see', 'lang'],
     ['br'],
     ['p', 'i', 'b'],
 ]
+
+SELF_CLOSING_TAGS = ('br', 'sep')
 
 
 class EditorPane(QWidget):
@@ -61,8 +64,8 @@ class EditorPane(QWidget):
         self._author_edit.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
         self._author_edit.setStyle(NoBlueFocusFrameStyle(self._author_edit.style()))
 
-        self._tabs.addTab(self._text_edit, strings.tabs.xml)
-        self._tabs.addTab(self._author_edit, strings.tabs.ui)
+        self._tabs.addTab(self._text_edit, strings.tabs.xml.title)
+        self._tabs.addTab(self._author_edit, strings.tabs.ui.title)
 
         self.checked_toggle = QPushButton(CHECK_BLANK)
         self.checked_toggle.setFixedSize(BUTTON_SIZE)
@@ -115,6 +118,7 @@ class EditorPane(QWidget):
         self._baseline = self.get_xml()
         self._text_edit.reset_state()
         self._text_edit.setExtraSelections([])
+        self._refresh_digraph_spans()
         self._render_author()
 
     def mark_sub_hw(self, headword, occurrence_index=0, keep_acc=0, separate_occurrences=False):
@@ -160,8 +164,9 @@ class EditorPane(QWidget):
         self._text_edit._last_deleted_close = None
         self._text_edit._last_deleted_forward = None
 
-    def set_link_marks(self, offsets, tooltips=None, reset_undo=False):
-        self._text_edit.set_link_marks(offsets, tooltips, reset_undo)
+    def set_link_marks(self, offsets, tooltips=None, highlights=None,
+                       reset_undo=False):
+        self._text_edit.set_link_marks(offsets, tooltips, highlights, reset_undo)
 
     def _render_author(self):
         xml = self.get_xml()
@@ -191,15 +196,24 @@ class EditorPane(QWidget):
         self._overlay_layout.setColumnMinimumWidth(1, inset)
 
     def _on_text_changed(self):
-        self._is_modified = self.get_xml() != self._baseline
+        xml = self.get_xml()
+        self._is_modified = xml != self._baseline
+        self._refresh_digraph_spans(xml)
         self.content_changed.emit()
+
+    def _refresh_digraph_spans(self, xml=None):
+        spans = find_digraph_spans(self.get_xml() if xml is None else xml)
+        if spans == self._text_edit._digraph_spans:
+            return
+        self._text_edit._digraph_spans = spans
+        self._text_edit._refresh_selections()
 
     def insert_tag(self, tag_name):
         cursor = self._text_edit.textCursor()
         cursor.beginEditBlock()
         try:
-            if tag_name == 'br':
-                cursor.insertText('<br />')
+            if tag_name in SELF_CLOSING_TAGS:
+                cursor.insertText(f'<{tag_name} />')
                 self._text_edit.setTextCursor(cursor)
                 return
 

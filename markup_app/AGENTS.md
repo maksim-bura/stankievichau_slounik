@@ -21,7 +21,7 @@ stankievichau_slounik/
 └── markup_app/                # DELETE this whole folder to remove the markup app
     ├── main_window.py         # window: search, list, toolbars/menus, save flow, filters
     ├── panels/                # MarkupEditor/EditorPane, XmlTextEdit, popup, delegates, models, tag buttons
-    ├── services/              # broken links, link marks, completion context, duplicates, checked state, tag parsing
+    ├── services/              # broken links, link marks, completion context, duplicates, checked state, tag parsing, digraph hints
     │   └── build/             # runtime state (gitignored)
     ├── localization/          # load_strings.py + manually maintained strings.json
     ├── theme/                 # layout_constants.py, styles.py
@@ -48,9 +48,9 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 - Fixed `QHBoxLayout` (no splitter): entry list at stretch 0 + editor at
   stretch 1. Default `WINDOW_DEFAULT_WIDTH` × `WINDOW_DEFAULT_HEIGHT`.
 - Top row (`top_layout`, spacing `TOP_LAYOUT_SPACING`): `SearchBox` (stretch 1) +
-  ґ-insert button + duplicates toggle + broken-links toggle + rebuild button (all
-  `BUTTON_SIZE`). The checked toggle and Save button are NOT here — they live in
-  the entry-window overlay (see Toolbar Buttons).
+  ґ-insert button + duplicates toggle + broken-links toggle + alphabet button +
+  rebuild button (all `BUTTON_SIZE`). The checked toggle and Save button are NOT
+  here — they live in the entry-window overlay (see Toolbar Buttons).
 - Entry list: `QListView` + `ResultsListModel` (virtualized), `NoFocus`, fixed
   `RESULTS_MIN_WIDTH`, horizontal scrollbar off.
 - Editor container min width `ENTRY_MIN_WIDTH`.
@@ -100,14 +100,29 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   clears (`_apply_broken_mode(None)`). The label has NO count suffix. Opening the
   menu sets the button's `pressed` property to `menu` (rendered as the clicked
   rim/background by `MENU_BUTTON_STYLE`).
+- **Alphabet dropdown** (`_alphabet_button`): non-checkable `QPushButton`
+  showing `ALPHABET_MARKER` (🔠), `BUTTON_SIZE`, `class="menu-button"`,
+  `MENU_BUTTON_EMOJI_STYLE`, tooltip `app_buttons.alphabet_order.tooltip`;
+  sits between the broken-links toggle and the rebuild button. Left-click opens
+  `_alphabet_menu` — two `RadioOption` rows labelled
+  `app_buttons.alphabet_order.dropdown.standard` / `.dictionary`. Selecting one
+  clears the other (`_on_sort_option_toggled`), keeps the menu open (same
+  release-accepting option widgets as the settings menu), and immediately
+  re-runs `search_engine.search(self._current_query,
+  sort_order=self._sort_order())` + `_display_results` — never an in-memory
+  re-sort. `_sort_order()` returns `SORT_ORDER_DICTIONARY` when the dictionary
+  radio is checked, else `SORT_ORDER_STANDARD` (see `dictionary_app/AGENTS.md` →
+  Collation Rules). The menu shares the context-menu pattern below: opening sets
+  `pressed='menu'`, `aboutToHide` arms `_alphabet_menu_consume`, and the
+  `eventFilter` branch swallows the dismissing press.
 - **Rebuild button**: `RELOAD_MARKER` (🔄), tooltip
   `app_buttons.rebuild_database.tooltip`, `_on_rebuild` (confirms leaving a dirty
   entry, closes the engine, `build_database()` full rebuild, clears
   caches/resolver, restores the previous search and entry).
 - **Emoji font (startup, preserve):** every emoji-only button pins
   `EMOJI_FONT_STACK` in its per-widget stylesheet — `_duplicates_toggle` /
-  `_broken_links_toggle` → `MENU_BUTTON_EMOJI_STYLE`, `_rebuild_button` →
-  `REBUILD_BUTTON_STYLE`, checked toggle / Save button →
+  `_broken_links_toggle` / `_alphabet_button` → `MENU_BUTTON_EMOJI_STYLE`,
+  `_rebuild_button` → `REBUILD_BUTTON_STYLE`, checked toggle / Save button →
   `ENTRY_CHECKED_TOGGLE_STYLE`. Mixed glyph+text labels use
   `set_emoji_prefixed_text` (rich text). Rationale: see
   `dictionary_app/AGENTS.md` → Startup Latency.
@@ -147,12 +162,18 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   swallows the NEXT `MouseButtonPress` while the consume flag is set, so the
   dismissing click does not toggle the button. `MenuCommandOption.mousePressEvent`
   accepts the event (menu stays open) and calls its callback (`None` = no-op).
+  `MenuCommandOption` and `BrokenCheckOption` also accept the mouse **release**
+  (`mouseReleaseEvent`), so an ignored release cannot reach `QMenu`, activate the
+  `QWidgetAction`, and hide the menu; option clicks stay live while the menu
+  remains open until the button, Esc, an outside click, or an explicit
+  `menu.close()` in a command callback.
 
 ### Entry List
 
 - Headword-only search (`search_in_headwords=True` →
-  `search_engine.search(text)`), sorted by the DB `collation_key` (see
-  `dictionary_app/AGENTS.md` → Collation Rules).
+  `search_engine.search(text, sort_order=self._sort_order())`), sorted by the DB
+  column matching the active alphabet (`collation_key`, or
+  `collation_key_dictionary` — see `dictionary_app/AGENTS.md` → Collation Rules).
 - Fixed `RESULTS_MIN_WIDTH`, horizontal scrollbar off, `setUniformItemSizes(True)`,
   mouse tracking on.
 - `ResultsListModel` rows are `(display, result)` pairs exposing `DisplayRole`,
@@ -245,8 +266,10 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   QColor(70, 130, 180)`, emoji font Segoe UI Emoji.
 - **Real marker characters, scan-based:** markers are REAL `LINK_MARKER`
   characters (never letter-spacing tricks) in a parallel "scan" coordinate space.
-  `set_link_marks(offsets, tooltips, reset_undo)` maps clean-text offsets to scan
-  positions via `LINK_PLACEHOLDER` (`'\uE000\uE001'`) deltas (`_clean_to_qt`).
+  `set_link_marks(offsets, tooltips, highlights, reset_undo)` maps clean-text
+  offsets to scan positions via `LINK_PLACEHOLDER` (`'\uE000\uE001'`) deltas
+  (`_clean_to_qt`); `tooltips` and `highlights` are keyed by the same clean
+  offsets.
   Every offset-based logic (tag parsing via `parse_xml_tags`, completion, save
   stripping) runs on the stripped clean text or counts/skips marker/placeholder
   chars. `_link_mark_texts` records each marker's host-text neighborhood; on
@@ -272,20 +295,27 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   `setFontFamily()` hard-crash (0xC0000005) in this PySide6 build — use
   `.font().family()` / `setFonts`.
 - **Target set** (`link_marks_builder.build_link_marks(broken_links, text,
-  entry_id)` → `(offsets, tooltips)`): marks `<entry>` when a resolved `<see>`
-  row's `row[0]` (integer DB id) equals the current entry id; marks `<hw>` when
-  its `id` (row[3]) or normalized headword (row[1]) matches, or a local
-  `<g hw=…>` targets it. **Freshness gate:** for each resolved occ with
+  entry_id)` → `(offsets, tooltips, highlights)`): marks `<entry>` when a resolved
+  `<see>` row's `row[0]` (integer DB id) equals the current entry id; marks `<hw>`
+  when its `id` (row[3]) or normalized headword (row[1]) matches, or a local
+  `<g hw=…>` targets it. `highlights` maps each `<hw>` marker offset to the spans
+  of ALL `<g hw=…>` elements that resolve to that headword (attribute text match
+  or `hw` id match); entry markers have no highlight spans. **Freshness gate:** for
+  each resolved occ with
   `row[0] == entry_id`, `still_targets(occ)` verifies it would still resolve
   against the CURRENT text — `entry_attr` must match the current `<entry id=…>`
   or a current `<hw>` text; `hw_attr` (without `entry_attr`) must match a current
   hw id/text; a text-based see must have its sense-stripped normalized word in the
   current hw norms. Failing occs are skipped, so editing an entry's `id` and saving
   removes the emoji even though the DB still has the old row.
-- **Tooltip (rich text, `LINK_TOOLTIP_DELAY_MS` hover):** `XmlTextEdit` sets
-  `setMouseTracking(True)`; `_link_symbol_box(start)` is shared by `paintEvent`
-  and `_link_mark_at(point)`; `mouseMoveEvent`/`leaveEvent` arm/clear a single-shot
-  `_link_tooltip_timer` → `_show_pending_link_tooltip` → `QToolTip.showText`.
+- **Tooltip (rich text, `QEvent.ToolTip`):** `XmlTextEdit` sets
+  `setMouseTracking(True)`; `viewportEvent` handles `QEvent.ToolTip` →
+  `_link_mark_start` (bisect over the doc-position `_link_marks`, no text copy) →
+  `_show_link_tooltip`, which shows the widened HTML with
+  `QToolTip.showText(globalPos, html, viewport(), _link_marker_rect(start))`.
+  The emoji-rect binding hides the tip as soon as the cursor leaves the `🔗`; the
+  wake-up delay is the app-wide `TOOLTIP_WAKE_UP_DELAY` (see
+  `dictionary_app/AGENTS.md` → Tooltip Timing). No timer is involved.
   - Line 1 (localized via `link_marks_builder.format_link_tooltip`):
     `strings.editor.link_dependencies.entry.tooltip` for `<entry>` markers,
     `...headword.tooltip` for `<hw>` markers.
@@ -296,11 +326,42 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
     `<hw>` texts excluding `excl` (regex fallback if the block won't parse),
     displayed RAW (accents/ё preserved) joined with `', '`.
   - **Width:** `_widen_tooltip_html(text)` wraps lines in
-    `<table width="{TOOLTIP_WIDTH_FACTOR×widest_line + TOOLTIP_WIDTH_PAD}">`
-    (widest measured with `QFontMetricsF(self.font())`) — 50% wider than the
-    longest line.
-- Markers+tooltips are reset in `EditorPane.set_entry` (`reset_state`); a
-  `<hw>`/`<entry>` targeted only by `<g hw=…>` still gets 🔗 but no tooltip.
+    `<table width="{ceil(widest_line) + TOOLTIP_WIDTH_PAD}">`
+    (widest measured with `QFontMetricsF(self.font())`), capped at
+    `TOOLTIP_MAX_WIDTH`; text wider than the cap wraps inside the cell.
+- **Hover `<g>` highlight:** the highlight is COUPLED to the tooltip, never to a
+  timer. A marker with BOTH a tooltip and highlight spans applies
+  `_hovered_link_g_spans` from `_show_link_tooltip`, i.e. exactly when the tip is
+  shown; `mouseMoveEvent` only drives `<g>`-only markers (no tooltip). Moving off
+  the emoji or leaving the editor clears the spans via `_clear_link_hover`. The
+  hover spans are composed with `COLOR_HIGHLIGHT_BG` in
+  `_build_composed_selections` AFTER the grammar-mark selections, so they override
+  `COLOR_AMBIGUOUS_G_BG` in the broken-link modes and peach returns on leave.
+  `_link_mark_highlights` is filtered with the tooltip map when markers are
+  enforced after an edit.
+- Markers+tooltips+highlights are reset in `EditorPane.set_entry`
+  (`reset_state`); a `<hw>`/`<entry>` targeted only by `<g hw=…>` still gets 🔗
+  and its `<g>` hover highlight, but no tooltip.
+
+### Digraph Hints (`дз` / `дж`)
+
+- `services/find_digraph_spans.py` (`find_digraph_spans`) scans only inside
+  `<hw>…</hw>` content (`_HW_RE`), case-insensitively, and returns every
+  two-character `дз`/`дж` span in CLEAN text coordinates. It is a hint, not a
+  validator: it never inspects `<sep />` and never edits anything.
+- `EditorPane` recomputes the spans on `set_entry` and on every `textChanged`
+  (`_refresh_digraph_spans`), stores them on `XmlTextEdit._digraph_spans`, and
+  skips the repaint when the span list is unchanged; `XmlTextEdit` maps them to
+  document positions via `_clean_to_qt`.
+- Highlight: the spans are painted with `COLOR_HIGHLIGHT_BG` in
+  `_build_composed_selections` BEFORE the broken-link and grammar selections, so
+  a seen-link/grammar colour wins when they overlap.
+- Tooltip: `viewportEvent` checks the digraph hint BEFORE link markers —
+  `_digraph_span_at(pos)` → `QToolTip.showText(globalPos,
+  _widen_tooltip_html(escape(strings.editor.digraph_separator.tooltip)),
+  viewport(), _span_rect(start, end))`. The span rect binds the tip to the two
+  letters, so it hides as soon as the cursor leaves them; text and width follow
+  the shared tooltip rules above.
 
 ### Attribute Completion (Content-Completion Assistant)
 
@@ -350,7 +411,7 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 ### Tag Buttons
 
 - Three groups (`TAG_BUTTON_GROUPS` in `markup_editor.py`):
-  [`d, hw, n, g, sense, t, ex, st, src, see, lang`] + [`br`] + [`p, i, b`].
+  [`d, hw, sep, n, g, sense, t, ex, st, src, see, lang`] + [`br`] + [`p, i, b`].
 - One `QHBoxLayout`: `EDITOR_TOOLBAR_SPACING` between buttons,
   `EDITOR_TOOLBAR_GAP` between groups, trailing `addStretch()`.
 - **Gap ceiling (preserve):** `EDITOR_TOOLBAR_GAP` (15px) is the MAXIMUM gap that
@@ -359,9 +420,12 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   stretch, never the gap.
 - Auto-sized to fit content.
 - Wrapping: wrap selected text in `<tag>…</tag>`, else insert empty
-  `<tag></tag>` with the cursor between. `insert_tag` special-cases `br` →
-  `<br />`, `sense` → `<sense n="">`, `lang` → `<lang code="">` (no selection:
-  caret between the quotes; selection: wrapped).
+  `<tag></tag>` with the cursor between. `insert_tag` special-cases
+  `SELF_CLOSING_TAGS` (`br`, `sep`) → `<tag />` with no selection handling
+  (ignoring any selection), `sense` → `<sense n="">`, `lang` → `<lang code="">`
+  (no selection: caret between the quotes; selection: wrapped).
+- `sep` is the sort separator (`<sep />`) documented in `dictionary_app/AGENTS.md`
+  → Collation Rules; it renders as an empty span and only affects collation.
 - Style: `TAG_BUTTON_STYLE` (transparent, no border, padding 2px 6px, hover
   recolors the label); tabs live in a `UniformTabBar` (`tabSizeHint` = uniform
   width), tab position South, styled by `_MARKUP_TAB_STYLE` in
@@ -492,13 +556,18 @@ tag on every keystroke.
      `editor.pane.mark_saved()` (clears modified flag + undo stack), hide the save
      button.
   6. Update **all** in-memory rows sharing the same `entry_id` via
-     `_apply_saved_result` — both `current_results` and the model rows — with the
-     saved entry's new `headword` / `entry_link` / `keep_acc`, keeping each row's
-     own `source_file`; then refresh link markers. This matches on `entry_id`
-     alone, so sub-headword rows of that entry also take the main headword.
-     Rows are compared before replacement, and `dataChanged` is emitted only for
-     the contiguous runs that actually changed (no full-model repaint).
-     `_by_id_headword` is rebuilt and `_sub_headword_cache` cleared afterwards.
+     `_apply_saved_result` — both `current_results` and the model rows — by ROLE,
+     keeping each row's own `source_file` and `sort_headword`. The entry's MAIN
+     row (the row whose headword equals the entry's `dictionary.headword`
+     captured before `reindex_entry`) takes the saved `headword` / `entry_link` /
+     `keep_acc`. Sub-headword rows keep their own `headword` and `keep_acc` and
+     take only the saved owning `entry_link`, so a save through a sub-headword
+     row never renames it to the main headword. `current_result` follows the same
+     rule (it keeps its own headword/`keep_acc` when it is a sub-headword row).
+     Then refresh link markers. Rows are compared before replacement, and
+     `dataChanged` is emitted only for the contiguous runs that actually changed
+     (no full-model repaint). `_by_id_headword` is rebuilt and
+     `_sub_headword_cache` cleared afterwards.
 - `_read_entry_from_source(entry_id, source_file, headword=None, entry_link=None,
   keep_acc=0)`: matches a raw `<entry>` block by **entry XML ID** (`entry_link`,
   normalized accent- and ё-insensitively, via the `by_link` index) and/or by
@@ -551,8 +620,11 @@ tag on every keystroke.
 
 - The list shows `search_engine` order (empty query = full dictionary `UNION ALL`
   sub_headwords — duplicates by design, see `dictionary_app/AGENTS.md` → Search
-  Modes) sorted by the precomputed DB `collation_key` (see
-  `dictionary_app/AGENTS.md` → Collation Rules).
+  Modes) sorted by the precomputed DB column for the active alphabet
+  (`collation_key` / `collation_key_dictionary` — see
+  `dictionary_app/AGENTS.md` → Collation Rules). Changing the alphabet in the 🔠
+  dropdown re-runs the current query (`_on_sort_option_toggled`) rather than
+  re-sorting in memory, so the list is always a fresh `search_engine` result.
 - Normal mode collapses same-entry duplicates after filtering (see Toolbar
   Buttons); filter modes show raw rows.
 
@@ -643,7 +715,8 @@ tag on every keystroke.
 
 ## Writing Conventions
 
-- No comments in code unless essential; private methods use `_` prefix.
+- No comments in code (hard rule; see `tools/DEVELOPMENT_PRACTICES.md`); private
+  methods use `_` prefix.
 - `markup_app/localization/strings.json` is manually maintained — never
   rewrite/reformat it; targeted key edits only (see `dictionary_app/AGENTS.md` →
   Writing Conventions).
@@ -656,11 +729,11 @@ tag on every keystroke.
   imported from `dictionary_app/theme/styles.py`; markup-only palette
   (`COLOR_CHECKED_*`, `COLOR_D_SPAN_UNDERLINE`, `COLOR_AMBIGUOUS_*`,
   `COLOR_TRANSPARENT`, `COLOR_TEXT`) in `markup_app/theme/styles.py`.
-- Glyphs `CHECK_MARK`/`CHECK_BLANK` from `dictionary_app/utils/constants.py`;
-  markup-only glyphs (`FLOPPY_MARKER`, `RELOAD_MARKER`, `DUPLICATES_MARKER`,
-  `BROKEN_LINKS_MARKER`, `LINK_MARKER`, `LINK_PLACEHOLDER`) from
-  `markup_app/utils/constants.py`.
+- Glyphs `CHECK_MARK`/`CHECK_BLANK` from `dictionary_app/utils/constants.py`
+  (so are the shared button glyphs `ALPHABET_MARKER`); markup-only glyphs
+  (`FLOPPY_MARKER`, `RELOAD_MARKER`, `DUPLICATES_MARKER`, `BROKEN_LINKS_MARKER`,
+  `LINK_MARKER`, `LINK_PLACEHOLDER`) from `markup_app/utils/constants.py`.
 - Layout constants from `dictionary_app/theme/layout_constants.py`; markup-only
-  metrics (`EDITOR_TOOLBAR_*`, `LIST_ITEM_BORDER_WIDTH`, `LINK_TOOLTIP_DELAY_MS`,
-  `TOOLTIP_WIDTH_FACTOR`, `TOOLTIP_WIDTH_PAD`, `COMPLETION_*`) from
+  metrics (`EDITOR_TOOLBAR_*`, `LIST_ITEM_BORDER_WIDTH`,
+  `TOOLTIP_WIDTH_PAD`, `COMPLETION_*`) from
   `markup_app/theme/layout_constants.py`.

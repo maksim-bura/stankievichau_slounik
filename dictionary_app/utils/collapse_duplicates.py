@@ -15,7 +15,3 @@ def collapse_with_identities(results):
         collapsed.append(result)
         identities.append(identity)
     return collapsed, identities
-
-
-def collapse_same_entry_duplicates(results):
-    return collapse_with_identities(results)[0]

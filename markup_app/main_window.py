@@ -35,8 +35,10 @@ from dictionary_app.theme.layout_constants import (
     LAYOUT_MARGINS, LAYOUT_SPACING, TOP_LAYOUT_SPACING, BUTTON_SIZE
 )
 from dictionary_app.theme.styles import MENU_BUTTON_EMOJI_STYLE
-from dictionary_app.utils.constants import CHECK_MARK, CHECK_BLANK
+from dictionary_app.utils.constants import CHECK_MARK, CHECK_BLANK, ALPHABET_MARKER
+from dictionary_app.utils.sort_keys import SORT_ORDER_DICTIONARY, SORT_ORDER_STANDARD
 from dictionary_app.utils.item_roles import ( ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_ENTRY_ID, )
+from dictionary_app.widgets.menu_options import RadioOption
 from markup_app.utils.constants import ( RELOAD_MARKER, DUPLICATES_MARKER, BROKEN_LINKS_MARKER, )
 
 _ENTRY_BLOCK_RE = re.compile(r'<entry\b.*?</entry>', re.DOTALL)
@@ -73,6 +75,7 @@ class MarkupMainWindow(QMainWindow):
         self._sub_headword_cache = {}
         self._duplicate_resolver = DuplicateResolver(self.search_engine)
         self._broken_mode = None
+        self._current_query = ''
         self._broken_links = BrokenLinkAnalyzer(
             self.search_engine._get_connection,
             self._iter_source_blocks,
@@ -117,6 +120,27 @@ class MarkupMainWindow(QMainWindow):
 
         self._insert_letter_g_button = InsertLetterGButton()
         self._insert_letter_g_button.clicked.connect(self._insert_letter_g)
+
+        self._alphabet_button = QPushButton(ALPHABET_MARKER)
+        self._alphabet_button.setFixedSize(BUTTON_SIZE)
+        self._alphabet_button.setCursor(Qt.PointingHandCursor)
+        self._alphabet_button.setProperty("class", "menu-button")
+        self._alphabet_button.setStyleSheet(MENU_BUTTON_EMOJI_STYLE)
+        self._alphabet_button.setToolTip(strings.app_buttons.alphabet_order.tooltip)
+        self._alphabet_button.clicked.connect(self._on_alphabet_menu_requested)
+        self._alphabet_button.installEventFilter(self)
+
+        self._alphabet_menu = QMenu(self)
+        alphabet_data = strings.app_buttons.alphabet_order.dropdown
+        self._standard_sort_option = RadioOption(alphabet_data.standard, checked=True)
+        self._dictionary_sort_option = RadioOption(alphabet_data.dictionary)
+        for option in (self._standard_sort_option, self._dictionary_sort_option):
+            option.toggled.connect(self._on_sort_option_toggled)
+            option_action = QWidgetAction(self._alphabet_menu)
+            option_action.setDefaultWidget(option)
+            self._alphabet_menu.addAction(option_action)
+        self._alphabet_menu.aboutToHide.connect(self._on_alphabet_menu_closed)
+        self._alphabet_menu_consume = False
 
         self._duplicates_toggle = QPushButton(DUPLICATES_MARKER)
         self._duplicates_toggle.setCheckable(True)
@@ -179,6 +203,7 @@ class MarkupMainWindow(QMainWindow):
         top_layout.addWidget(self._insert_letter_g_button)
         top_layout.addWidget(self._duplicates_toggle)
         top_layout.addWidget(self._broken_links_toggle)
+        top_layout.addWidget(self._alphabet_button)
         top_layout.addWidget(self._rebuild_button)
 
         self.results_box = QListView()
@@ -236,6 +261,11 @@ class MarkupMainWindow(QMainWindow):
                     and self._broken_menu_consume):
                 self._broken_menu_consume = False
                 return True
+        if obj == self._alphabet_button:
+            if (event.type() == QEvent.MouseButtonPress
+                    and self._alphabet_menu_consume):
+                self._alphabet_menu_consume = False
+                return True
         if (getattr(self, 'results_box', None) is not None
                 and obj == self.results_box.viewport()):
             if event.type() == event.Type.MouseMove:
@@ -251,12 +281,28 @@ class MarkupMainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(MARKUP_GLOBAL_STYLE)
 
     def show_all_entries(self):
-        results = self.search_engine.search('')
+        self._current_query = ''
+        results = self.search_engine.search('', sort_order=self._sort_order())
         self._display_results(results)
 
     def on_search(self, text):
-        results = self.search_engine.search(text.strip())
+        self._current_query = text.strip()
+        results = self.search_engine.search(
+            self._current_query, sort_order=self._sort_order())
         self._display_results(results)
+
+    def _sort_order(self):
+        if self._dictionary_sort_option.is_checked():
+            return SORT_ORDER_DICTIONARY
+        return SORT_ORDER_STANDARD
+
+    def _on_sort_option_toggled(self, option):
+        if option is self._standard_sort_option:
+            self._dictionary_sort_option.set_checked(False)
+        else:
+            self._standard_sort_option.set_checked(False)
+        self._display_results(self.search_engine.search(
+            self._current_query, sort_order=self._sort_order()))
 
     def _display_results(self, results):
         self.current_results = results
@@ -314,10 +360,10 @@ class MarkupMainWindow(QMainWindow):
     def _refresh_link_marks(self, reset_undo=False):
         if not self.current_result:
             return
-        offsets, tooltips = build_link_marks(
+        offsets, tooltips, highlights = build_link_marks(
             self._broken_links, self.editor.pane.get_xml(), self.current_result[0]
         )
-        self.editor.pane.set_link_marks(offsets, tooltips, reset_undo)
+        self.editor.pane.set_link_marks(offsets, tooltips, highlights, reset_undo)
 
     def _iter_source_blocks(self):
         cursor = self.search_engine._get_connection().cursor()
@@ -390,6 +436,14 @@ class MarkupMainWindow(QMainWindow):
     def _on_broken_menu_closed(self):
         self._broken_menu_consume = self._button_menu_consumed(self._broken_links_toggle)
         apply_pressed(self._broken_links_toggle)
+
+    def _on_alphabet_menu_requested(self, *_args):
+        self._alphabet_menu_consume = False
+        self._open_button_menu(self._alphabet_button, self._alphabet_menu)
+
+    def _on_alphabet_menu_closed(self):
+        self._alphabet_menu_consume = self._button_menu_consumed(self._alphabet_button)
+        apply_pressed(self._alphabet_button)
 
     def _update_checked_pressed(self):
         apply_pressed(self._checked_toggle)
@@ -501,14 +555,18 @@ class MarkupMainWindow(QMainWindow):
 
         self._load_result(result, occurrence, self._separate_occurrences_mode())
 
+    def _main_headword(self, entry_id):
+        cursor = self.search_engine._get_connection().cursor()
+        cursor.execute("SELECT headword FROM dictionary WHERE id=?", (entry_id,))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
     def _is_sub_headword(self, result):
         key = (result[0], result[1])
         cached = self._sub_headword_cache.get(key)
         if cached is None:
-            cursor = self.search_engine._get_connection().cursor()
-            cursor.execute("SELECT headword FROM dictionary WHERE id=?", (result[0],))
-            row = cursor.fetchone()
-            cached = bool(row) and row[0] != result[1]
+            main_headword = self._main_headword(result[0])
+            cached = main_headword is not None and main_headword != result[1]
             self._sub_headword_cache[key] = cached
         return cached
 
@@ -763,6 +821,7 @@ class MarkupMainWindow(QMainWindow):
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
+        old_main_headword = self._main_headword(entry_id)
         reindexed = reindex_entry(entry_id, new_entry_string)
         if reindexed is not None:
             new_headword, new_entry_link, new_keep_acc = reindexed
@@ -781,30 +840,46 @@ class MarkupMainWindow(QMainWindow):
 
         self._apply_saved_result(
             entry_id, new_headword, new_entry_link, new_entry_string,
-            source_file, new_keep_acc)
+            source_file, new_keep_acc, old_main_headword)
         self._refresh_link_marks(reset_undo=True)
         return True
 
     def _apply_saved_result(self, entry_id, headword, entry_link, xml_text,
-                            source_file, keep_acc):
+                            source_file, keep_acc, old_main_headword):
+        current = self.current_result
+        current_is_sub = (
+            current is not None
+            and old_main_headword is not None
+            and current[1] != old_main_headword
+        )
+
+        def _updated_row(r):
+            if r[1] == old_main_headword:
+                return (
+                    r[0], headword, r[2], entry_link, r[4], r[5], keep_acc
+                )
+            return (
+                r[0], r[1], r[2], entry_link, r[4], r[5], r[6]
+            )
+
         self.current_result = (
-            entry_id, headword, xml_text, entry_link, source_file, keep_acc
+            entry_id,
+            current[1] if current_is_sub else headword,
+            xml_text,
+            entry_link,
+            source_file,
+            current[5] if current_is_sub else keep_acc,
         )
         for i, r in enumerate(self.current_results):
             if r[0] == entry_id:
-                self.current_results[i] = (
-                    r[0], headword, r[2], entry_link, r[4], r[5], keep_acc
-                )
+                self.current_results[i] = _updated_row(r)
         rows = self.results_model.rows
         changed = []
         for i, (display, result) in enumerate(rows):
             if result[0] != entry_id:
                 continue
-            new_result = (
-                result[0], headword, result[2], entry_link, result[4],
-                result[5], keep_acc,
-            )
-            new_display = resolve_headword(headword, keep_acc)
+            new_result = _updated_row(result)
+            new_display = resolve_headword(new_result[1], new_result[6])
             if display == new_display and result == new_result:
                 continue
             rows[i] = (new_display, new_result)
@@ -843,6 +918,8 @@ class MarkupMainWindow(QMainWindow):
             self._save_button.show()
         else:
             self._save_button.hide()
+        if self._broken_mode is not None:
+            self._refresh_broken_highlight()
 
     def closeEvent(self, event):
         if not self._confirm_leave():
