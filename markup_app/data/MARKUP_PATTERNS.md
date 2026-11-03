@@ -242,12 +242,16 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
   strips the `<n>` content (see `dictionary_app/AGENTS.md` → Collation Rules), and
   distinct entries keep stable file order.
 - **Distinct lexemes that share the same plain headword** (homographs) get a
-  unique `id` on the `<entry>`: `абора` → `<entry id="абора_бечевка">` and
-  `<entry id="абора_хлев">`. Sub-headword anchors carry `<hw id="…">`;
-  cross-references use `<see entry="ID">TEXT</see>` or, to pin a sub-headword,
-  `<see entry="ID" hw="H">TEXT</see>` (see `dictionary_A.xml`). There is NO `link`
-  attribute and NO `#`-fragment scheme — both are removed; do not reintroduce
-  them (see `dictionary_app/AGENTS.md` → Word-URL forms).
+  unique `id` on the `<entry>`, named after the printed page and the element's
+  order on it: `<entry id="абора_p5_1">`, `<entry id="абора_p5_2">` (page 5,
+  first and second colliding entry; see `dictionary_A.xml`). Sub-headword
+  anchors carry `<hw id="…">`; cross-references use
+  `<see entry="ID">TEXT</see>` or, to pin a sub-headword,
+  `<see entry="ID" hw="H">TEXT</see>`. There is NO `link` attribute and NO
+  `#`-fragment scheme — both are removed; do not reintroduce them (see
+  `dictionary_app/AGENTS.md` → Word-URL forms). The older
+  `абора_бечевка` / `абора_хлев` names were an early experiment, not the
+  convention: they appear nowhere in the corpus and must not be used.
 - Plain headwords that collide within one file get a unique `id` on each
   colliding `<entry>` (`абора` ×2 in `dictionary_A.xml`). Distinct lexemes that
   share a spelling and a file but lack a unique id would collide on lookup —

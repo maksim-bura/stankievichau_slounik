@@ -35,7 +35,7 @@ _SQLITE_CACHE_SIZE_KIB = "PRAGMA cache_size = -20000"
 _SQLITE_CACHE_SIZE_VALUE = -20000
 
 _SCHEMA_VERSION_KEY = 'schema_version'
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 _SOURCES_XML = 'sources.xml'
 
@@ -268,6 +268,14 @@ def build_database(file_names=None):
         cursor.execute("CREATE INDEX idx_dictionary_plain ON dictionary(normalized_plain_headword)")
         cursor.execute("CREATE INDEX idx_sub_normalized ON sub_headwords(normalized_headword)")
         cursor.execute("CREATE INDEX idx_sub_plain ON sub_headwords(normalized_plain_headword)")
+        cursor.execute("CREATE INDEX idx_dictionary_source ON dictionary(source_file)")
+        cursor.execute("CREATE INDEX idx_dictionary_headword ON dictionary(headword)")
+        cursor.execute("CREATE INDEX idx_dictionary_entry_link ON dictionary(entry_link)")
+        cursor.execute("CREATE INDEX idx_dictionary_hw_xml_id ON dictionary(hw_xml_id)")
+        cursor.execute("CREATE INDEX idx_sub_main_entry ON sub_headwords(main_entry_id)")
+        cursor.execute("CREATE INDEX idx_sub_headword ON sub_headwords(headword)")
+        cursor.execute("CREATE INDEX idx_sub_link ON sub_headwords(link)")
+        cursor.execute("CREATE INDEX idx_sub_hw_xml_id ON sub_headwords(hw_xml_id)")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS schema_meta (

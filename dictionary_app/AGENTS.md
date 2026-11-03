@@ -899,7 +899,7 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
   `hw_xml_id` is the sub-`<hw id>`; `keep_acc` is the sub-headword's own flag.
 - `content_index`: `(id, entry_id, tag_type, searchable_text)`.
 - `schema_meta`: `(key, value)` — holds `schema_version` (`_SCHEMA_VERSION`,
-  currently 6; a version bump forces a full rebuild).
+  currently 7; a version bump forces a full rebuild).
 - FTS5 trigram tables: `headword_fts(word)` (rowid = `dictionary.id`),
   `sub_headword_fts(word)` (rowid = `sub_headwords.id`) — populated from
   `normalized_headword`; `content_fts_t`/`content_fts_ex` (rowid =
@@ -908,10 +908,15 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
 - **Indexed:** `content_index(tag_type, searchable_text)`,
   `content_index(entry_id)`, `dictionary(normalized_headword)`,
   `dictionary(normalized_plain_headword)`, `sub_headwords(normalized_headword)`,
-  `sub_headwords(normalized_plain_headword)`. `dictionary.entry_link` is NOT
-  indexed, so `entry_link` lookups scan (fine at current corpus). `get_entry_by_link`
-  checks `dictionary.entry_link` first, then `sub_headwords.link` (returning the
-  sub-headword's display headword with the parent's XML).
+  `sub_headwords(normalized_plain_headword)`, plus one index per column used by
+  link resolution and incremental deletes: `dictionary(source_file)`,
+  `dictionary(headword)`, `dictionary(entry_link)`, `dictionary(hw_xml_id)`,
+  `sub_headwords(main_entry_id)`, `sub_headwords(headword)`,
+  `sub_headwords(link)`, `sub_headwords(hw_xml_id)`. Every build and click query
+  is a B-tree SEARCH, never a table scan (see Performance / Scale Notes).
+  `get_entry_by_link` checks `dictionary.entry_link` first, then
+  `sub_headwords.link` (returning the sub-headword's display headword with the
+  parent's XML).
 
 ## Build / Rebuild
 
@@ -1019,14 +1024,22 @@ Measured with `py -3` (Python 3.14): both launchers reach first paint in
   and content (`content_fts_t`/`content_fts_ex`), precomputed `collation_key` /
   `collation_key_dictionary` (switching alphabet order never re-sorts in Python),
   list rows carrying `NULL` instead of entry XML, indexes on the normalized
-  headword columns, LRU `_parsed_cache` (≤ `_PARSED_CACHE_MAX_SIZE`) and
+  headword columns plus every link/identity column (`entry_link`, `link`,
+  `hw_xml_id`, `headword`) and the incremental-delete columns (`source_file`,
+  `main_entry_id`), LRU `_parsed_cache` (≤ `_PARSED_CACHE_MAX_SIZE`) and
   `_preview_cache` (≤ `_PREVIEW_CACHE_MAX_SIZE`), LRU `_format_cache` in
   `format_entry`, virtualized `QListView` + `ResultsListModel`, and per-file
   FTS-scoped incremental rebuild.
 - Projected at ~300k headwords: headword/content searches use trigram FTS when
   the longest alphanumeric span is ≥3 chars, degrading to `LIKE '%…%'` only for
   1–2-char spans; empty/all-results list rows are lightweight; per-click headword
-  lookup is an indexed hit while `entry_link` still scans.
+  and XML-ID lookups are indexed hits.
+  - Measured at the current corpus (295 entries / 467 rows): a full rebuild is
+    ~0.08 s warm (~0.5 s cold in a fresh process, including module imports) and
+    an incremental one-file rebuild ~0.015 s. The extra indexes do not move
+    those numbers measurably; they matter only as the corpus grows. No other
+    build-time technique from `tools/SOFTWARE_OPTIMIZATION_TECHNIQUES.md` pays
+    for itself at this size.
 - Remaining 300k-scale work: build previews lazily (on click / visible rows) —
   `_preview_cache` only serves identical repeat queries; make short (1–2 char)
   spans fast — a B-tree cannot serve `LIKE '%…%'`; the first-run full build is

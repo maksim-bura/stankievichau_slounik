@@ -496,18 +496,21 @@ composing those primitives** — not by extending or aliasing a lower-level
   loops.
 - Watch memory retention: do not hold large XML strings or parsed roots longer
   than necessary.
-- **Known pain points (candidates to measure, in rough order):** launch time —
-  including database build time (the main one); search/lookup latency at
-  200,000 headwords; markup-app document load and render; link resolution
-  (`<see>`) over the entry index; memory retention of the loaded index and
-  parsed roots; and full vs. incremental DB rebuild. Treat each as a candidate,
-  not a mandate: measurement above decides whether it is worth changing.
+- **Measured pain points (2026-11-03; 295 entries / 467 rows, Python 3.14,
+  offscreen):** launch ~0.2 s (imports 0.11 s, `QApplication` 0.04 s, window
+  0.02 s, first events 0.03 s); full DB rebuild 0.08 s warm / 0.5 s cold in a
+  fresh process; incremental one-file rebuild 0.015 s; sources panel first open
+  0.04 s and later opens 0.011 s (one rendered sources document 0.012 s); entry
+  render with a target sub-headword 0.5 ms. Nothing here is worth changing at
+  this size — the cheap wins (indexes, lazy loading, precomputed keys, per-file
+  FTS, deferred initial load) are already in. Re-measure at the real corpus
+  size; the next genuine candidates are search/lookup latency at 200,000
+  headwords, markup-app document load, and the first-run full build.
 - **Reference catalog:** `tools/SOFTWARE_OPTIMIZATION_TECHNIQUES.md` is a
   menu of optimization techniques by level (architecture, algorithms, data
   structures, memory, I/O, databases, concurrency, deployment). Use it during
-  refactors, with special attention to **app launch time — including database
-  build time**, the main pain point. It is guidance, not a mandate: measurement
-  and the footprint rules above decide whether a technique is used.
+  refactors. It is guidance, not a mandate: measurement and the footprint rules
+  above decide whether a technique is used.
 
 ### 8.7 Constants and styling
 
