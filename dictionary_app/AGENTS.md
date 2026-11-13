@@ -138,7 +138,7 @@ stankievichau_slounik/
 |---|---|
 | Translation (`<t>`) search indexing | `<src>`, `<st>`, `<g>`, `<see>`, `<i lang="vl">`, `<i excl="true">`, `<lang code="vl">`, `<lang code="la">`, `<lang excl="true">` |
 | Translation preview highlight | Same as indexing — excluded children rendered but not highlightable |
-| Example (`<ex>`) search indexing | `<src>`, `<st>`, `<i lang="ru">`, `<lang code="ru">` |
+| Example (`<ex>`) search indexing | `<src>`, `<st>`, `<i lang="ru">`, `<lang code="ru">`, `<p lang="ru">` (any child carrying `lang="ru"` is excluded) |
 | Example preview highlight | Same as indexing |
 | Headword (`<hw>`) row indexing | `<hw excl="true">` |
 
@@ -221,6 +221,18 @@ and the search engine.
   (same `content_text` + `normalize_jo_to_je` as the index); otherwise the whole
   chain is dropped rather than showing unhighlighted gloss context. Leading
   context is NOT gated: an unmatched preceding `<t>` still renders.
+- **Embedded-`<t>`-in-`<ex>` previews (translation only):** a matched `<t>`
+  whose parent is an `<ex>` is never previewed as a bare fragment. Grouping
+  (`_group_embedded_t_matches`): by enclosing `<sense>` when one exists — ONE
+  combined preview of sense number + the sense's main `<t>` + every matching
+  `<ex>` in that sense; by the enclosing `<ex>` when the example sits outside
+  any sense — the preview is the WHOLE `<ex>` (no sense number, no outer `.t`
+  wrapper, just the `<span class="g">` example). In both cases the matched
+  nested `<t>` children are passed to `_element_preview_content` as
+  `include_children` (child ids), so they are rendered as normal content and the
+  query is highlighted inside them, while the rest of the example keeps the
+  usual ex exclusions (`<src>`/`<st>` excluded but shown). The headword comes
+  from `_preview_hw_fields` of the `<ex>`/matched element.
 - Example previews: trailing `—<t>` appended as `<span class="t">` when the
   pattern is detected.
 - Multiple matching elements with the same headword in one entry are **grouped**
@@ -367,20 +379,45 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
 - Each child's CSS class is applied by the **parent iteration** (not
   self-formatting) — no double-wrapping.
 - `<src>` links get `font-style: normal`; `<st>` links inherit italic.
+- **`<src>`-embedded-`<i>` rule:** `<src>` itself always uses the single
+  `src` wrapper (normal style); an `<i>` child is rendered as its own
+  `<span class="i">` (italic) and its nested children — including `<see>` —
+  render normally, so a link inside `<i>` stays visible and clickable. Text
+  outside the `<i>` keeps normal source formatting.
+- **`excl` inside `<src>`:** the text of any `<src>` descendant carrying
+  `excl` stays visible but is replaced by placeholder characters when source
+  abbreviations are matched (`_source_match_text`), so it can never become a
+  source link. Placeholders keep the same length, so abbreviation positions
+  still map onto the rendered HTML.
 - `LinkHandler.create_link` resolves source abbreviations via `SourceMapper`.
 - `format_entry(xml_string, is_sources=False)` caches HTML in an LRU
   (`_format_cache`, `_FORMAT_CACHE_MAX_SIZE = 512`, keyed by the XML string).
   `FormatContext` is **cleared after every render** — write-only for the caller.
-- **Comma-splitting quirks (preserve):**
-  - If a `<hw>` tail starts with `,`, `:` or `;`, the symbol is split off and
-    placed **inside** the `<span id="anchor">…,` so it stays clickable/linkable
-    (bold). Two duplicate commas `,,` are both absorbed into the anchor.
-  - If a `<g>` tail starts with `,`, the comma gets its own `<span class="g">`
-    wrapper and the rest is plain text.
+- **`<d>`-after-`<br>` indent:** a `<d>` whose previous sibling is `<br>` with
+  only whitespace in its tail is prefixed with `_SUBENTRY_INDENT` — a
+  `<span class="subentry-indent">` containing the same `ENTRY_BULLET` (`•`) that
+  starts entries, with `color: transparent` in `ENTRY_STYLESHEET`. A transparent
+  bullet gives the indent exactly the width of the entry bullet without painting
+  a second glyph. Applies wherever `format_entry` paints: the dictionary
+  entry view and the markup app's Author/UI tab. A `<d>` not preceded by
+  `<br>`, or one preceded by visible text, is not indented.
+- **`<hw>` separator absorption (preserve):** a `<hw>` tail starting with `,`,
+  `:` or `;` moves that one separator **inside** the headword span (bold and
+  clickable), or two when they are duplicated (e.g. `,,`). Only the first
+  character of the tail is checked; the anchor ID was computed before absorption,
+  so it stays based on the word alone.
+- **`<hw>` trailing dash (preserve):** a leading `—`/`–` in a `<hw>` tail
+  stays outside the bold headword span, so it renders at normal weight by CSS
+  inheritance; no wrapper span is emitted. Punctuation after the dash (e.g.
+  `—, text`) is left untouched. A `<hw>` placed inside a bold container would
+  make the tail inherit bold; no such case exists in the corpus, so this is not
+  handled speculatively.
 - **Paren rule (symmetric, same `process_element` logic):** any literal `(` / `)`
-  inside an italicized tag (`g`, `ex`, `i`, `st`, `see`) is auto-wrapped in
-  `<span class="p">`, so parens stay non-italic even without `<p>` markup. `<p>`
-  in data still works and is redundant. `<src>` (already normal) is exempt.
+  inside `g`, `ex`, `i`, `st`, `see`, `hw` or `lang` is auto-wrapped in
+  `<span class="p">`, so parens stay non-italic even without `<p>` markup. `<hw>`
+  is already non-italic by CSS; `lang` has no class of its own and inherits the
+  surrounding style, so the wrap matters when it sits inside an italic parent.
+  `<p>` in data still works and is redundant. `<src>` (already normal) is exempt.
 - **Embedded-`<p>`-in-`<st>` rule:** a `<p>` child inside `<st>`/`<src>`/`<see>`
   is preserved as `<span class="p">…</span>` in the inner-content loop (NOT
   flattened), so `<st><p>презр.</p></st>` renders plain inside the italic `<st>`.
@@ -584,8 +621,10 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
   disables the only-checked one (`CheckOption.set_active` applies
   `COLOR_DISABLED_FG`).
 - **Alphabet section:** heading built with `_add_heading(ALPHABET_MARKER,
-  strings.app_buttons.settings.dropdown.alphabet_order.title)`; two radios
-  labelled `alphabet_order.standard` / `alphabet_order.dictionary`.
+  strings.app_buttons.settings.menu.alphabet_order.title)`; two radios
+  labelled `menu.alphabet_order.standard` / `menu.alphabet_order.dictionary`.
+  Search modes live under `settings.menu.search` (`belarusian.label` /
+  `belarusian.headwords` / `belarusian.examples`, `russian.label`).
   `get_sort_order()` returns the matching `SORT_ORDER_STANDARD` /
   `SORT_ORDER_DICTIONARY`; `_on_alphabet_toggled` clears the other radio and
   emits `sort_order_changed`, which `MainWindow._on_sort_order_changed` turns
@@ -624,8 +663,10 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
   `format/render_sources.build_filtered_html`.
 - **Lazy load (preserve):** `sources.xml` is parsed only on first use via
   `_ensure_loaded()` (called from `_rebuild_content`, `scroll_to_source`,
-  `_on_search`, `toggle`), so window startup never pays for it. `content` /
-  `original_content` are `None` until then.
+  `_on_search`, `toggle`), so window startup never pays for it. It ONLY parses;
+  `_build_content()` renders on demand, so the first open pays one
+  `build_filtered_html`, not two. `content` / `original_content` are `None` until
+  a build happens.
 - Search filters sections by text; no match renders
   `strings.sources_panel.no_results.message`.
 - **Parse-once rendering:** in search mode `build_filtered_html` parses each
@@ -652,14 +693,16 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
 - **Repeat-anchor fast path (preserve):** when the panel is already visible and
   neither search nor section expansion changed the HTML, `scroll_to_source` does
   NOT rebuild: `_move_marker` removes the old `👉` and inserts it at the target
-  anchor with `QTextCursor`, `self.content` is refreshed with
-  `build_filtered_html` for later renders, and the view scrolls. It rebuilds
-  (one `setHtml`, wrapped in `setUpdatesEnabled(False/True)`) only when the panel
-  was hidden, search was open, a collapsed section expanded, or the marker/anchor
-  lookup fails. The fast path must stay identical to a fresh render in plain
-  text, marker format, and anchor scroll. It must NOT call
-  `QApplication.processEvents()`: the scroll has to be applied before the next
-  paint, otherwise the old anchor paints first (the blink).
+  anchor with `QTextCursor` (one edit block), then the view scrolls. Re-clicking
+  the SAME anchor skips the document edit entirely. `content` is marked stale
+  instead of being rebuilt eagerly; `toggle` and the search-clearing path rebuild
+  it once on the next render. It rebuilds (one `setHtml`, wrapped in
+  `setUpdatesEnabled(False/True)`) only when the panel was hidden, search was
+  open, a collapsed section expanded, or the marker/anchor lookup fails. The fast
+  path must stay identical to a fresh render in plain text, marker format, and
+  anchor scroll. It must NOT call `QApplication.processEvents()`: the scroll has
+  to be applied before the next paint, otherwise the old anchor paints first
+  (the blink).
 - **Qt anchor quirk (preserve):** `scrollToAnchor` only resolves a fragment whose
   `QTextCharFormat` has BOTH `isAnchor()` and matching `anchorNames()`; names
   alone scroll to 0. Marker insertion therefore clones the target anchor's first
@@ -860,6 +903,25 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
 - Ctrl+C copies the selection from any QTextEdit via `install_global_copy`
   (`dictionary_app/utils/install_global_copy.py`), installed by both windows.
 
+### Localization Strings
+
+- Each app exposes `strings` by calling
+  `load_strings(base_dir, filename, shared=None)`
+  (`dictionary_app/localization/load_strings.py`); nested groups are attribute
+  access, a missing key renders `[key]` instead of raising.
+- **Cross-app reuse is explicit:** any value may be a ref object,
+  `{"$ref": "<source>:<dotted.key>"}` — both a whole group and a single leaf
+  string work. Markup passes
+  `shared={'dictionary_app': dictionary_app.localization.strings}`, so
+  `{"$ref": "dictionary_app:app_buttons.settings.menu.alphabet_order.standard"}`
+  resolves to that one label without copying strings. A ref **without** a
+  `<source>:` prefix (e.g. `{"$ref": "dialog.unsaved_changes.buttons.cancel"}`)
+  resolves against the CURRENT file, so within-file reuse needs no app prefix.
+  Refs resolve against the SOURCE loader (shared groups keep using it), an
+  unknown source/key renders `[ref]`, and the dictionary app passes no `shared`
+  map — nothing in `dictionary_app/` can depend on `markup_app/` (see
+  `markup_app/AGENTS.md` → Project Layout).
+
 ## Writing Conventions
 
 - No comments in code (hard rule; see `tools/DEVELOPMENT_PRACTICES.md`).
@@ -945,6 +1007,9 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
 - `reindex_entry(entry_id, xml_text)` replaces ONE entry in place (delete by id →
   re-insert → repopulate its FTS rows), returning `(headword, entry_link,
   keep_acc)`; the markup app calls it after a save.
+- `delete_entry(entry_id)` removes ONE entry through the same `_delete_rows`
+  path (dictionary row + `entry_body` + `sub_headwords` + `content_index` + all
+  FTS rows); the markup app calls it after deleting the block from the source.
 - `get_source_path(source_file)` maps a `source_file` (`'sources.xml'` or a split
   file name) to its absolute path; both apps use it. `get_source_names()` /
   `stale_source_files()` / `get_paths()` provide the file set and DB location.
@@ -1017,6 +1082,12 @@ Measured with `py -3` (Python 3.14): both launchers reach first paint in
 - **Row tooltips touch no model state:** `ElidingDelegate.helpEvent` shows the
   hovered row's text through the shared rect-bound `QToolTip.showText` (see
   Tooltip Timing); no `ToolTipRole` request or per-row widget is created.
+- **Headword lookups memoize repeats:** `get_entry_by_headword` caches its answer
+  under `(headword, exact_headword)` in `_headword_cache` (bounded to
+  `_HEADWORD_CACHE_MAX_SIZE = 256`, LRU order) — a MISS is cached too
+  (`_EMPTY_ENTRY_ROW`), so repeated dead-link clicks stop querying. It is
+  cleared by `close()` and wholesale by `invalidate_entry(entry_id)`, so a
+  save/delete cannot resurrect a stale target.
 
 ### Scale
 
@@ -1037,9 +1108,11 @@ Measured with `py -3` (Python 3.14): both launchers reach first paint in
   - Measured at the current corpus (295 entries / 467 rows): a full rebuild is
     ~0.08 s warm (~0.5 s cold in a fresh process, including module imports) and
     an incremental one-file rebuild ~0.015 s. The extra indexes do not move
-    those numbers measurably; they matter only as the corpus grows. No other
-    build-time technique from `tools/SOFTWARE_OPTIMIZATION_TECHNIQUES.md` pays
-    for itself at this size.
+    those numbers measurably; they matter only as the corpus grows. These are
+    baselines, not a verdict that current behavior needs no optimization: a
+    measured change that reduces resource usage or execution time is still
+    worth making at this size. No other build-time technique currently shows a
+    measured win; re-measure before adding one.
 - Remaining 300k-scale work: build previews lazily (on click / visible rows) —
   `_preview_cache` only serves identical repeat queries; make short (1–2 char)
   spans fast — a B-tree cannot serve `LIKE '%…%'`; the first-run full build is

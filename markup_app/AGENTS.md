@@ -177,10 +177,15 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 - Fixed `RESULTS_MIN_WIDTH`, horizontal scrollbar off, `setUniformItemSizes(True)`,
   mouse tracking on.
 - `ResultsListModel` rows are `(display, result)` pairs exposing `DisplayRole`,
-  `ROLE_ENTRY_LINK`, `ROLE_HEADWORD`, `ROLE_ENTRY_ID`, `ROLE_SOURCE_FILE`.
+  `ROLE_ENTRY_LINK`, `ROLE_HEADWORD`, `ROLE_ENTRY_ID`, `ROLE_SOURCE_FILE`, and
+  `ROLE_OCCURRENCE` (index among rows sharing the same
+  `(entry_id, headword, entry_link)`, precomputed in `set_rows` and refreshed
+  after a save mutates rows).
 - `BorderDelegate` (`panels/border_delegate.py`) subclasses `ElidingDelegate` and
   owns visual state: background + left-border color per state, driven by
-  `CheckedState.is_checked(...)` + hover + selection. Hover tracking via
+  `CheckedState.is_checked(source_file, entry_id, entry_link, headword,
+  occurrence)` (entry id + occurrence come from `ROLE_ENTRY_ID` /
+  `ROLE_OCCURRENCE`) + hover + selection. Hover tracking via
   `eventFilter` on the viewport (MouseMove + Leave); `set_hovered_row` drives the
   hover paint. It inherits the shared elided-row tooltip behavior (row-limited
   show/hide, see `dictionary_app/AGENTS.md` → Results List).
@@ -190,19 +195,28 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 
 ### Checked State
 
-- Per-item key = `"{source_file}:{entry_link}:{headword}"` — keyed on source file
-  + entry XML ID (not just entry_id) so collided/deduped headwords and
-  sub-headwords stay independent.
+- Per-item key =
+  `"{source_file}:{entry_id}:{entry_link}:{headword}:{occurrence}"` — the same
+  identity the entry loader uses (`on_result_clicked` reads
+  `ROLE_OCCURRENCE`, the index among rows sharing `(entry_id, headword,
+  entry_link)`), so unresolved duplicate blocks and repeated same-entry rows
+  stay independent while `entry_link` still separates collided/deduped
+  sub-headwords.
 - Persisted to `markup_app/services/build/markup_checked.json` via `CheckedState`.
 - `CheckedState.save()` runs on every toggle; writes UTF-8 with
   `ensure_ascii=False` and `indent=2`, creating the folder via
   `os.makedirs(exist_ok=True)`.
 - `_load()` is resilient: empty file → `{}`; corrupt JSON → backed up to
   `{path}.bak` and state resets to `{}`.
-- API: `is_checked(source_file, entry_link, headword)`, `toggle(...)` (returns the
-  new state and persists), `uncheck_all()`, `save()`, `migrate(conn)`.
+- API: `is_checked(source_file, entry_id, entry_link, headword, occurrence)`,
+  `toggle(...)` (returns the new state and persists), `uncheck_all()`, `save()`,
+  `remove_entry(source_file, entry_id)`, `migrate(conn)`.
 - `migrate(conn)` runs at startup and rewrites legacy keys (e.g.
-  `{entry_id}:{headword}`) to the current schema. It no-ops when the state is
+  `{entry_id}:{headword}`, `{source_file}:{headword}`, the older
+  `{source_file}:{entry_link}:{headword}`, and the interim
+  `{source_file}:{entry_id}:{entry_link}:{headword}`) to the current schema,
+  resolving `entry_id` from the `dictionary`/`sub_headwords` rows. Legacy keys
+  carry no occurrence, so they map to occurrence `0`. It no-ops when the state is
   empty, so a fresh install pays no DB work.
 - Visual states via `BorderDelegate.paint()` using the shared palette
   (`COLOR_NORMAL_BG`/`COLOR_HOVER_BG`/`COLOR_SELECTED_BG`/
@@ -254,9 +268,10 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   clear `_target_hw`. Both share `_target_hw`; `mark_sub_hw` clears
   `_non_d_underline` and vice versa, and `_compute_d_span_sels` is suppressed
   while `_non_d_underline` is non-empty. Same-entry duplicate rows differ by
-  `occurrence`: `on_result_clicked` counts the clicked row's index among rows with
-  the same `(entry_id, headword, entry_link)` triple and passes it to
-  `_load_result`; the "already current" guard compares `current_occurrence` too.
+  `occurrence`: `ResultsListModel` precomputes each row's index among rows with
+  the same `(entry_id, headword, entry_link)` triple (`ROLE_OCCURRENCE`) and
+  `on_result_clicked` passes it to `_load_result`; the "already current" guard
+  compares `current_occurrence` too.
 
 ### Link markers & dependency tooltip
 
@@ -320,7 +335,11 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
     `strings.editor.link_dependencies.entry.tooltip` for `<entry>` markers,
     `...headword.tooltip` for `<hw>` markers.
   - Each dependency line = `&bull; ` + `<b>owning-hw(s)</b>` + `": "` + the raw
-    `<see …>…</see>` span, all `html.escape()`d.
+    `<see …>…</see>` spans, all `html.escape()`d. Sees sharing the SAME owning-hw
+    label are merged into ONE line and joined with `, ` (no `<br>` between them),
+    so `<hw>чарэнь</hw>` targeted by two sees shows
+    `чарэн: <see syn="true">чарэнь</see>, <see>чарэнь</see>`; different owning-hw
+    labels keep separate lines, each in first-appearance order.
   - **Owning hws:** `BrokenLinkAnalyzer.owning_hw_texts(block, see_start)` buckets
     elements by nearest `<d>` (via `_collect_regions`) and returns the bucket's
     `<hw>` texts excluding `excl` (regex fallback if the block won't parse),
@@ -353,9 +372,10 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   (`_refresh_digraph_spans`), stores them on `XmlTextEdit._digraph_spans`, and
   skips the repaint when the span list is unchanged; `XmlTextEdit` maps them to
   document positions via `_clean_to_qt`.
-- Highlight: the spans are painted with `COLOR_HIGHLIGHT_BG` in
-  `_build_composed_selections` BEFORE the broken-link and grammar selections, so
-  a seen-link/grammar colour wins when they overlap.
+- Highlight: the spans are painted with `COLOR_DIGRAPH_BG` (soft red, distinct
+  from the shared yellow `COLOR_HIGHLIGHT_BG`) in `_build_composed_selections`
+  AFTER the broken-link, grammar, and hover selections, so the digraph colour
+  wins inside a highlighted word (the rest of the word keeps its highlight).
 - Tooltip: `viewportEvent` checks the digraph hint BEFORE link markers —
   `_digraph_span_at(pos)` → `QToolTip.showText(globalPos,
   _widen_tooltip_html(escape(strings.editor.digraph_separator.tooltip)),
@@ -374,7 +394,7 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   build/search, broken-links, markup source cache). `ATTRIBUTES` (tag → ordered
   `(name, kind)`), `ATTR_*` constants, helpers `attribute_names` / `is_boolean` /
   `unknown_attributes`. Currently `entry:id`, `hw:id,excl,keep-acc`, `g:hw`,
-  `see:entry,hw,syn`, `sense:n`, `i:lang,excl`, `lang:code`. Add an attribute HERE
+  `see:entry,hw,syn`, `sense:n`, `ex:lang`, `i:lang,excl`, `p:lang`, `lang:code`. Add an attribute HERE
   (and to `markup_app/data/MARKUP_PATTERNS.md`) and it appears everywhere.
   `<sense>` has NO `hw` attr. `sources.xml` (`section/@id`) is intentionally not
   in the registry.
@@ -410,15 +430,33 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 
 ### Tag Buttons
 
-- Three groups (`TAG_BUTTON_GROUPS` in `markup_editor.py`):
-  [`d, hw, sep, n, g, sense, t, ex, st, src, see, lang`] + [`br`] + [`p, i, b`].
+- Four groups (`TAG_BUTTON_GROUPS` in `markup_editor.py`):
+  [`d, hw, sep, n, g, sense, t, ex, st, src, see, lang`] + [`br`] + [`p, i, b`],
+  then the combining-accent block (`COMBINING_ACCENTS`: acute U+0301, grave
+  U+0300) on its right.
 - One `QHBoxLayout`: `EDITOR_TOOLBAR_SPACING` between buttons,
   `EDITOR_TOOLBAR_GAP` between groups, trailing `addStretch()`.
-- **Gap ceiling (preserve):** `EDITOR_TOOLBAR_GAP` (15px) is the MAXIMUM gap that
-  fits the default window (editor content ≈615px). Raising it overflows/clips the
-  row at the default width; wider windows give the extra space to the trailing
-  stretch, never the gap.
+- **Gap ceiling (preserve):** `EDITOR_TOOLBAR_GAP` (15px) is the largest gap
+  each group boundary can afford; raising it overflows/clips the row. The accent
+  block adds ≈65px to the toolbar's minimum width, so the default window is
+  wider than the plain tag row; wider windows give the extra space to the
+  trailing stretch, never the gap.
+- **Combining accents** (`insert_combining_accent`): the buttons are labelled
+  `DOTTED_CIRCLE` + mark and insert the mark AFTER the letter before the caret,
+  or onto a selection consisting of one letter (plus any combining accent). Any
+  acute/grave already attached to that base letter is replaced, so switching
+  between the two never stacks marks. With no letter before the caret (or a
+  multi-character selection) the click is a no-op. Like tag insertion, the
+  scrollbar value is restored around the edit.
+- **Accent scan uses document positions (preserve):** the base letter and its
+  existing marks are read with `QTextCursor` positions +
+  `QTextDocument.characterAt`, never with Python indices into `toPlainText()` —
+  Qt positions are UTF-16 offsets and diverge from code-point indices once a
+  non-BMP 🔗 marker precedes the caret.
 - Auto-sized to fit content.
+- Scroll position is preserved around the insertion (cached/restored scrollbar
+  value), so a tag button never scrolls the Text pane to the top (see Key Edit
+  Flow).
 - Wrapping: wrap selected text in `<tag>…</tag>`, else insert empty
   `<tag></tag>` with the cursor between. `insert_tag` special-cases
   `SELF_CLOSING_TAGS` (`br`, `sep`) → `<tag />` with no selection handling
@@ -446,8 +484,8 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
      tag (before `</t>`).
    - Cursor inside pair content (`<t>сорт{cursor}</t>` + Backspace) → **normal
      deletion** of the word char, never the tags.
-3. **Selection matching `<tag>…</tag>`** (`_PAIR_SELECT_RE`, Backspace only):
-   removes both tags, keeps content, cursor after the last word.
+3. **Any selection**: normal Qt deletion removes the selected tags AND their
+   content. There is no special selection branch that preserves the content.
 4. **Any other Backspace/Delete**: normal deletion; clears pending state and
    extra selections (any non-Backspace/Delete key does too).
 - `parse_xml_tags.is_inside_tag()` checks if pos is between `<` and `>` of any tag.
@@ -487,6 +525,21 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   guard still applies. Snapshot is cleared once matched, reset in `set_entry()`,
   overwritten by each new pair-deletion; typing between delete and undo does NOT
   trigger it.
+
+### Key Edit Flow (`XmlTextEdit.keyPressEvent`)
+
+- Completion keys are consumed first by `_handle_completion_key` (early return).
+- Every other key runs `_handle_key` + `_on_scan_changed` inside ONE
+  `beginEditBlock()`/`endEditBlock()`, then calls `self.ensureCursorVisible()`
+  and `_refresh_completion()`.
+- **Enter keeps the viewport (`preserve`):** Qt can reset the viewport to the
+  top while the newline is inserted. `keyPressEvent` records
+  `verticalScrollBar().value()` before the edit and, for
+  `Return`/`Enter` only, restores it when the value moved UP; downward movement
+  (the new line below the viewport) is left to `ensureCursorVisible`.
+- **Tag buttons keep the viewport (`preserve`):** `EditorPane.insert_tag` caches
+  the vertical scrollbar value before the insertion and restores it after
+  `endEditBlock()`, so clicking a tag button never jumps the editor to the top.
 
 ### Tag Name Renaming (`XmlTextEdit` open↔close mirroring)
 
@@ -531,20 +584,36 @@ tag on every keystroke.
 
 ### Save Flow
 
-- Save button hidden when unchanged; shown on `content_changed`.
+- Save button hidden when unchanged; shown on `content_changed` or while the
+  whole entry is selected (`selection_changed`).
 - `_save_current()`:
-  1. Guard: return `True` immediately if no `current_result` or
-     `editor.pane.is_modified()` is false.
+  1. Guard/delete: return `True` immediately if there is no `current_result`.
+     If the Text-pane selection covers the WHOLE entry
+     (`EditorPane.selects_whole_entry()` → `XmlTextEdit.selects_whole_entry()` compares the
+     marker-stripped selection with the full text) or the pane is empty
+     (`EditorPane.is_empty()` — the user selected all and pressed Backspace,
+     which collapses the selection), show
+     `dialog.delete_entry` — title/body from that group, destructive
+     `buttons.delete`, cancel from `buttons.cancel` (itself a within-file `$ref`
+     to `dialog.unsaved_changes.buttons.cancel`) —
+     and run `_delete_current_entry()` only on confirmation. A cancel returns
+     `False` without saving. Otherwise return `True` when the pane is unchanged.
+     `selection_changed` also shows the Save button while the whole entry is
+     selected, so the button path works without modifying the text.
   2. Parse new XML with `ElementTree.fromstring`; on `ParseError` show
      `strings.dialog.invalid_xml` and abort (`False`, no write). The written text
      is `ElementTree.tostring(root, encoding='unicode')` — re-serialized, so the
      saved block is normalized XML (comments/attribute order not preserved).
-  3. Require `source_file` and an existing source path; re-read the file via
-     `_load_source_content` and locate the ORIGINAL block by exact comparison with
-     the raw text captured at load time (`self._loaded_raw[entry_id]`, from
-     `_load_result` / `_read_entry_from_source`). The block must match **exactly
-     once**; if missing or ambiguous (duplicate blocks) warn and abort WITHOUT
-     writing. Prevents replacing a wrong entry (no first-entry fallback).
+  3. Require `source_file` and an existing source path; drop that file from
+     `_source_cache` and re-read it via `_load_source_content`, then locate the
+     ORIGINAL block by exact comparison with the raw text captured at load time
+     (`self._loaded_raw[entry_id]`, from `_load_result` /
+     `_read_entry_from_source`). The fresh read means another tool's changes
+     elsewhere in the file are preserved; if the original block no longer
+     matches, the save aborts instead of writing a stale cached whole file. The
+     block must match **exactly once**; if missing or ambiguous (duplicate
+     blocks) warn and abort WITHOUT writing. Prevents replacing a wrong entry
+     (no first-entry fallback).
   4. `content.replace(block, new_entry_string, 1)` replaces that unique block in
      place; everything else (blank lines, other entries' markup such as
      `<br></br>`) is preserved.
@@ -568,6 +637,20 @@ tag on every keystroke.
      `dataChanged` is emitted only for the contiguous runs that actually changed
      (no full-model repaint). `_by_id_headword` is rebuilt and
      `_sub_headword_cache` cleared afterwards.
+- **Whole-entry deletion (`_delete_current_entry`):** drop the file from
+  `_source_cache`, re-read it, and resolve the exact raw block the same way as
+  save (unique `_loaded_raw`/`_read_entry_from_source` match; abort without
+  writing when missing or ambiguous), then remove that block plus ONE blank line
+  so neighbours stay separated by a single empty line (`remove_entry_block`).
+  Write the file, call
+  `build_database.delete_entry(entry_id)` (reuses `_delete_rows`, so entry_body,
+  sub_headwords, content_index and all FTS rows go with the dictionary row),
+  drop the source/entry caches, `search_engine.invalidate_entry`, invalidate
+  broken links + duplicates, and `CheckedState.remove_entry(source_file,
+  entry_id)` so the entry's persisted checked keys disappear. Remove every
+  same-`entry_id` row from `current_results`, re-run `_display_results`, then load
+  the first remaining row; with no rows left, hide the checked toggle and clear
+  the editor.
 - `_read_entry_from_source(entry_id, source_file, headword=None, entry_link=None,
   keep_acc=0)`: matches a raw `<entry>` block by **entry XML ID** (`entry_link`,
   normalized accent- and ё-insensitively, via the `by_link` index) and/or by
@@ -598,9 +681,10 @@ tag on every keystroke.
 ### Entry Loading
 
 - `on_result_clicked(index)` reads `ROLE_ENTRY_ID`/`ROLE_HEADWORD`/
-  `ROLE_ENTRY_LINK`, computes the row's `occurrence` among identical
-  `(entry_id, headword, entry_link)` rows, resolves the full result from
+  `ROLE_ENTRY_LINK`/`ROLE_OCCURRENCE`, resolves the full result from
   `_by_id_headword`, and skips when already current (same triple + occurrence).
+  The same occurrence identity keys `CheckedState`, so duplicate rows never
+  check each other.
 - Matches on **both `entry_id` AND `headword`** — sub-headwords share the parent's
   `entry_id`, so entry_id alone would load the main headword.
 - When switching from a dirty entry it confirms/saves first; `_load_result` then
@@ -719,7 +803,13 @@ tag on every keystroke.
   methods use `_` prefix.
 - `markup_app/localization/strings.json` is manually maintained — never
   rewrite/reformat it; targeted key edits only (see `dictionary_app/AGENTS.md` →
-  Writing Conventions).
+  Writing Conventions). Shared dictionary text is reused through
+  `{"$ref": "dictionary_app:<dotted.key>"}` — both whole groups and single leaf
+  keys, e.g. `app_buttons.settings.menu.alphabet_order.standard` (see
+  `dictionary_app/AGENTS.md` → Localization Strings), never copied or imported at
+  the call site. A prefix-free ref (e.g.
+  `{"$ref": "dialog.unsaved_changes.buttons.cancel"}`) resolves within
+  `markup_app/localization/strings.json` itself.
 - Markup-specific styles in `markup_app/theme/styles.py`.
 - Button styles that render an emoji must use `EMOJI_FONT_STACK`; mixed
   glyph+text labels go through `set_emoji_prefixed_text` (see Toolbar Buttons →
@@ -732,7 +822,9 @@ tag on every keystroke.
 - Glyphs `CHECK_MARK`/`CHECK_BLANK` from `dictionary_app/utils/constants.py`
   (so are the shared button glyphs `ALPHABET_MARKER`); markup-only glyphs
   (`FLOPPY_MARKER`, `RELOAD_MARKER`, `DUPLICATES_MARKER`, `BROKEN_LINKS_MARKER`,
-  `LINK_MARKER`, `LINK_PLACEHOLDER`) from `markup_app/utils/constants.py`.
+  `LINK_MARKER`, `LINK_PLACEHOLDER`, `COMBINING_ACUTE`, `COMBINING_GRAVE`,
+  `COMBINING_ACCENTS`, `DOTTED_CIRCLE`) from
+  `markup_app/utils/constants.py`.
 - Layout constants from `dictionary_app/theme/layout_constants.py`; markup-only
   metrics (`EDITOR_TOOLBAR_*`, `LIST_ITEM_BORDER_WIDTH`,
   `TOOLTIP_WIDTH_PAD`, `COMPLETION_*`) from

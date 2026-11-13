@@ -14,7 +14,8 @@ from markup_app.theme.layout_constants import (
     TOOLTIP_WIDTH_PAD
 )
 from markup_app.theme.styles import (
-    COLOR_AMBIGUOUS_G_BG, COLOR_AMBIGUOUS_HW_BG, COLOR_D_SPAN_UNDERLINE
+    COLOR_AMBIGUOUS_G_BG, COLOR_AMBIGUOUS_HW_BG, COLOR_DIGRAPH_BG,
+    COLOR_D_SPAN_UNDERLINE
 )
 from dictionary_app.theme.styles import COLOR_HIGHLIGHT_BG, FONT_STACK
 from dictionary_app.utils.xml_schema import BOOL as _ATTR_BOOL
@@ -28,11 +29,6 @@ from markup_app.services.parse_xml_tags import (
     innermost_d_span, is_inside_tag, is_name_char, non_d_region_hw_count, non_d_regions,
     pair_at_deletion_boundary, partner_tag, placeholder_clean_starts, placeholder_positions,
     scan_tags
-)
-
-
-_PAIR_SELECT_RE = re.compile(
-    r'^(<' + LINK_MARKER + r'?\w+[^>]*>)(.*)(</\w+>)$'
 )
 
 
@@ -235,10 +231,6 @@ class XmlTextEdit(QTextEdit):
             COLOR_HIGHLIGHT_BG,
         ))
         sels.extend(background_selections(
-            self, self._clean_spans(self._digraph_spans),
-            COLOR_HIGHLIGHT_BG,
-        ))
-        sels.extend(background_selections(
             self, self._clean_spans(self._broken_link_spans),
             COLOR_HIGHLIGHT_BG,
         ))
@@ -254,6 +246,10 @@ class XmlTextEdit(QTextEdit):
             self, self._clean_spans(self._hovered_link_g_spans),
             COLOR_HIGHLIGHT_BG,
         ))
+        sels.extend(background_selections(
+            self, self._clean_spans(self._digraph_spans),
+            COLOR_DIGRAPH_BG,
+        ))
         sels.extend(underline_selections(
             self, self._non_d_underline, COLOR_D_SPAN_UNDERLINE,
         ))
@@ -265,6 +261,18 @@ class XmlTextEdit(QTextEdit):
 
     def _scan_text(self):
         return self.toPlainText().replace(LINK_MARKER, LINK_PLACEHOLDER)
+
+    def selects_whole_entry(self):
+        cursor = self.textCursor()
+        if not cursor.hasSelection():
+            return False
+        selected = strip_link_markers(
+            cursor.selection().toPlainText()).strip()
+        full = strip_link_markers(self.toPlainText()).strip()
+        return bool(selected) and selected == full
+
+    def is_empty(self):
+        return not strip_link_markers(self.toPlainText()).strip()
 
     def _clean_to_qt(self, clean_pos):
         return clean_pos + 2 * bisect_left(self._emoji_clean_starts, clean_pos)
@@ -801,12 +809,19 @@ class XmlTextEdit(QTextEdit):
         if self._handle_completion_key(event):
             return
         cursor = self.textCursor()
+        scroll = self.verticalScrollBar().value()
         cursor.beginEditBlock()
         try:
             self._handle_key(event)
             self._on_scan_changed()
         finally:
             cursor.endEditBlock()
+        self.ensureCursorVisible()
+        if (
+            event.key() in (Qt.Key_Return, Qt.Key_Enter)
+            and self.verticalScrollBar().value() < scroll
+        ):
+            self.verticalScrollBar().setValue(scroll)
         self._refresh_completion()
 
     def mousePressEvent(self, event):
@@ -887,18 +902,6 @@ class XmlTextEdit(QTextEdit):
             self.setExtraSelections([])
 
             if cursor.hasSelection():
-                if not deleting_forward:
-                    selected = cursor.selectedText()
-                    m = _PAIR_SELECT_RE.match(selected)
-                    if m:
-                        self.blockSignals(True)
-                        content = m.group(2)
-                        cursor.removeSelectedText()
-                        cursor.insertText(content)
-                        self.setTextCursor(cursor)
-                        self.blockSignals(False)
-                        self.textChanged.emit()
-                        return
                 super().keyPressEvent(event)
                 return
 

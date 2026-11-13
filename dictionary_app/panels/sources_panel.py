@@ -30,6 +30,7 @@ class SourcesPanel:
         self.current_anchor = None
         self._all_children = None
         self._anchor_texts = {}
+        self._content_stale = False
 
         self.container = QWidget()
         self.container_layout = QVBoxLayout()
@@ -96,14 +97,14 @@ class SourcesPanel:
         self._pre_search_collapsed = None
 
     def _ensure_loaded(self):
-        if self._all_children is not None:
-            return
-        self.load_content()
+        if self._all_children is None:
+            self.load_content()
+
+    def _build_content(self, **kwargs):
         if self._all_children:
-            self.content = build_filtered_html(self._all_children, self._collapsed_sections)
-        else:
-            self.content = '<body></body>'
-        self.original_content = self.content
+            return build_filtered_html(
+                self._all_children, self._collapsed_sections, **kwargs)
+        return '<body></body>'
 
     def load_content(self):
         sources_path = os.path.join(
@@ -137,7 +138,12 @@ class SourcesPanel:
 
     def _rebuild_content(self, **kwargs):
         self._ensure_loaded()
-        self.content = build_filtered_html(self._all_children, self._collapsed_sections, **kwargs)
+        self.content = self._build_content(**kwargs)
+        if (self.original_content is None
+                and not kwargs.get('search_text')
+                and not kwargs.get('marker_anchor')):
+            self.original_content = self.content
+        self._content_stale = False
         self.viewer.setHtml(self.content)
 
     def _show_panel(self):
@@ -161,12 +167,16 @@ class SourcesPanel:
         return -1
 
     def _restore_anchor(self, anchor, position):
-        if not anchor or self._anchor_position(anchor) >= 0:
+        if not anchor:
             return
         cursor = QTextCursor(self.viewer.document())
         cursor.setPosition(position)
         cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 1)
         anchor_format = cursor.charFormat()
+        if anchor in anchor_format.anchorNames():
+            return
+        if self._anchor_position(anchor) >= 0:
+            return
         anchor_format.setAnchor(True)
         anchor_format.setAnchorNames([anchor])
         cursor.mergeCharFormat(anchor_format)
@@ -176,29 +186,34 @@ class SourcesPanel:
         if not text:
             return False
         document = self.viewer.document()
-        old_marker = document.find(ARROW_MARKER)
-        if not old_marker.isNull():
-            old_position = old_marker.selectionStart()
-            old_marker.removeSelectedText()
-            self._restore_anchor(previous_anchor, old_position)
-        position = self._anchor_position(anchor)
-        if position < 0:
-            return False
-        selection = QTextCursor(document)
-        selection.setPosition(position)
-        selection.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, len(text))
-        if selection.selectedText() != text:
-            return False
-        anchor_format = QTextCursor(document)
-        anchor_format.setPosition(position)
-        anchor_format.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 1)
-        marker_format = anchor_format.charFormat()
-        marker_format.setAnchor(True)
-        marker_format.setAnchorNames([anchor])
-        marker = QTextCursor(document)
-        marker.setPosition(position)
-        marker.insertText(ARROW_MARKER, marker_format)
-        return True
+        edit = QTextCursor(document)
+        edit.beginEditBlock()
+        try:
+            old_marker = document.find(ARROW_MARKER)
+            if not old_marker.isNull():
+                old_position = old_marker.selectionStart()
+                old_marker.removeSelectedText()
+                self._restore_anchor(previous_anchor, old_position)
+            position = self._anchor_position(anchor)
+            if position < 0:
+                return False
+            selection = QTextCursor(document)
+            selection.setPosition(position)
+            selection.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, len(text))
+            if selection.selectedText() != text:
+                return False
+            anchor_format = QTextCursor(document)
+            anchor_format.setPosition(position)
+            anchor_format.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 1)
+            marker_format = anchor_format.charFormat()
+            marker_format.setAnchor(True)
+            marker_format.setAnchorNames([anchor])
+            marker = QTextCursor(document)
+            marker.setPosition(position)
+            marker.insertText(ARROW_MARKER, marker_format)
+            return True
+        finally:
+            edit.endEditBlock()
 
     def _capture_view_state(self):
         return (self.main_window.entry_viewer.get_viewer().hasFocus(),
@@ -249,9 +264,6 @@ class SourcesPanel:
         else:
             self.search_line.clear()
 
-        if not self.original_content:
-            return
-
         anchor = source_abbreviation.rstrip(':').rstrip('.')
 
         expanded = self._expand_matching_sections(
@@ -265,11 +277,15 @@ class SourcesPanel:
         if was_visible:
             old_focus, current_scroll = self._capture_view_state()
 
-        if was_visible and not was_search and not expanded and self._move_marker(anchor, previous_anchor):
-            self.content = build_filtered_html(
-                self._all_children, self._collapsed_sections, marker_anchor=anchor)
-            self.scroll_manager.scroll_to_anchor(anchor)
-            return
+        if was_visible and not was_search and not expanded:
+            if (anchor == previous_anchor
+                    and not self.viewer.document().find(ARROW_MARKER).isNull()):
+                self.scroll_manager.scroll_to_anchor(anchor)
+                return
+            if self._move_marker(anchor, previous_anchor):
+                self._content_stale = True
+                self.scroll_manager.scroll_to_anchor(anchor)
+                return
 
         updates_enabled = self.viewer.updatesEnabled()
         self.viewer.setUpdatesEnabled(False)
@@ -291,10 +307,14 @@ class SourcesPanel:
         self._ensure_loaded()
         if not text:
             restored = self._pre_search_content or self.original_content
-            self.content = restored
             if self._pre_search_collapsed is not None:
                 self._collapsed_sections = self._pre_search_collapsed
-            self.viewer.setHtml(self.content)
+            if self._content_stale or not restored:
+                self._rebuild_content(marker_anchor=self.current_anchor)
+            else:
+                self.content = restored
+                self._content_stale = False
+                self.viewer.setHtml(self.content)
             self._pre_search_content = None
             self._pre_search_collapsed = None
             if self.current_anchor:
@@ -315,15 +335,18 @@ class SourcesPanel:
         self._ensure_loaded()
         self.sources_visible = not self.sources_visible
         if self.sources_visible:
-            if self.content:
+            if self._content_stale or self.content is None:
+                self._rebuild_content(marker_anchor=self.current_anchor)
+            else:
                 self.viewer.setHtml(self.content)
-                QApplication.processEvents()
-                if self.current_anchor:
-                    self.scroll_manager.scroll_to_anchor(self.current_anchor)
+            QApplication.processEvents()
+            if self.current_anchor:
+                self.scroll_manager.scroll_to_anchor(self.current_anchor)
             self._show_panel()
         else:
             self.container.hide()
             self.content = self.original_content
+            self._content_stale = False
             self._collapsed_sections.clear()
             self.current_anchor = None
             self.scroll_manager.last_anchor = None

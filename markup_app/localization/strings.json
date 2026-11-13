@@ -23,10 +23,16 @@
             "tooltip": "Паднавіць базу даных"
         },
         "alphabet_order": {
-            "tooltip": "Парадак літараў абэцады",
+            "tooltip": {
+                "$ref": "dictionary_app:app_buttons.settings.menu.alphabet_order.title"
+            },
             "dropdown": {
-                "standard": "Звычайны (а, б, в…)",
-                "dictionary": "Як у слоўніку (о, а, э…)"
+                "standard": {
+                    "$ref": "dictionary_app:app_buttons.settings.menu.alphabet_order.standard"
+                },
+                "dictionary": {
+                    "$ref": "dictionary_app:app_buttons.settings.menu.alphabet_order.dictionary"
+                }
             }
         }
     },
@@ -73,6 +79,16 @@
                 "save": "Захаваць",
                 "discard": "Скасаваць",
                 "cancel": "Назад"
+            }
+        },
+        "delete_entry": {
+            "title": "Здаліць артыкул?",
+            "body": "Артыкул будзе неўзваротна здалены із слоўніка.",
+            "buttons": {
+                "delete": "Здаліць",
+                "cancel": {
+                    "$ref": "dialog.unsaved_changes.buttons.cancel"
+                }
             }
         },
         "invalid_xml": {

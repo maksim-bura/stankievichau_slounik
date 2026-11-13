@@ -471,6 +471,11 @@ composing those primitives** — not by extending or aliasing a lower-level
 
 ### 8.6 Performance and memory (200,000 headwords)
 
+- **Optimize current behavior, not only future scale.** The 200,000-headword
+  target is a ceiling, not the only reason to optimize: reducing resource usage
+  and execution time of existing functionality is a valid goal at the current
+  corpus size. Measure the real entry point; if a change demonstrably improves
+  it, it is justified even when the corpus is small.
 - **Optimize from measurement, not intuition.** Measure the real entry point
   before changing it and re-measure after; a change that cannot be shown to
   move the number is churn.
@@ -501,11 +506,13 @@ composing those primitives** — not by extending or aliasing a lower-level
   0.02 s, first events 0.03 s); full DB rebuild 0.08 s warm / 0.5 s cold in a
   fresh process; incremental one-file rebuild 0.015 s; sources panel first open
   0.04 s and later opens 0.011 s (one rendered sources document 0.012 s); entry
-  render with a target sub-headword 0.5 ms. Nothing here is worth changing at
-  this size — the cheap wins (indexes, lazy loading, precomputed keys, per-file
-  FTS, deferred initial load) are already in. Re-measure at the real corpus
-  size; the next genuine candidates are search/lookup latency at 200,000
-  headwords, markup-app document load, and the first-run full build.
+  render with a target sub-headword 0.5 ms. These are baselines, not a verdict
+  that current behavior needs no optimization: a measured change that reduces
+  resource usage or execution time is still worth making at this size. The cheap
+  wins (indexes, lazy loading, precomputed keys, per-file FTS, deferred initial
+  load) are already in. Re-measure at the real corpus size; the next
+  scale-specific candidates are search/lookup latency at 200,000 headwords,
+  markup-app document load, and the first-run full build.
 - **Reference catalog:** `tools/SOFTWARE_OPTIMIZATION_TECHNIQUES.md` is a
   menu of optimization techniques by level (architecture, algorithms, data
   structures, memory, I/O, databases, concurrency, deployment). Use it during
@@ -669,6 +676,9 @@ applications and is not gitignored. Nothing in `dictionary_app/` or
 | `export_hw_digraphs.py` | every `<hw>` containing `дз`/`дж` → xlsx | `py -3 tools/export_hw_digraphs.py` |
 | `export_hw_separated_digraphs.py` | every `<hw>` whose digraph is split by `<sep />` → xlsx | `py -3 tools/export_hw_separated_digraphs.py` |
 | `export_see_hw.py` | every `<see hw="…">` with its entry's main headword → xlsx | `py -3 tools/export_see_hw.py` |
+| `search_xml.py` | grep-like recursive text search across the marked-up XML corpus (see below) | `py -3 tools/search_xml.py "слова"` |
+| `search_xml_app.pyw` | double-clickable window around `search_xml.py`: type a query, press Enter, see headwords and snippets (see below) | double-click `tools/search_xml_app.pyw` |
+| `fix_tag_punctuation.py` | move punctuation that follows a closing tag inside that tag, one reviewed candidate at a time (see below) | `py -3 tools/fix_tag_punctuation.py` (Enter = skip, `y` = accept, other text = replacement; `--apply` accepts all) |
 
 ### 9.1 `read_codebase.py` — map a repo quickly
 
@@ -940,18 +950,150 @@ opened, and nothing is written except the workbook.
   new `export_*.py` for a different corpus question), reuse `write_workbook`
   instead of duplicating styling, and keep the script read-only.
 
+### 9.11 `fix_tag_punctuation.py` — trailing punctuation inside tags
+
+A candidate is an opening tag, its content, its closing tag, and the run of
+Unicode punctuation characters (category `P*`) that immediately follows the
+closing tag. The run ends at the first non-punctuation character. These
+candidates are skipped because moving the punctuation would change the rendered
+form: any `</g>—` (an em dash after `</g>`), every `</hw>` whose run starts with
+a character in the editable `SKIP_PUNCTUATION_BY_TAG['hw']` tuple (by default
+`. , — ( ) : ; - [`), `</t>.`, every `</see>` and `</n>`, and any `<src>` whose
+content contains `<b>` (e.g. `<src><b>С.</b></src>)`). Add new punctuation to
+that tuple rather than to `_should_skip`.
+
+When two or more adjacent `<src>` elements are separated by `;` or `,` and
+optional spaces, the candidate covers the whole run (including optional
+surrounding `(` / `)`), whether or not the last source is followed by
+punctuation, and the prepared text merges them into one source span. The
+separator may follow other punctuation, as in `</src>.; <src>`:
+
+```text
+  before: <src>Янк. І</src>; <src>Ар.</src>
+  after:  <src>Янк. І; Ар.</src>
+```
+
+```text
+  before: (<src>Ар.</src>; <src>Міх.</src>).
+  after:  <src>(Ар.; Міх.).</src>
+```
+
+A single `<src>` wrapped in parentheses is treated as a one-member group, so
+the parentheses move inside the source and any trailing punctuation follows
+them:
+
+```text
+  before: (<src>Ар.</src>).
+  after:  <src>(Ар.).</src>
+```
+
+For `<g>` and `<src>`, a trailing em dash stays outside the tag; only the
+punctuation before it is absorbed. This turns `</g>,—` into `,</g>—` and
+`</src>.—` into `.</src>—`:
+
+```text
+  before: <src>Нсл. 346</src>.—
+  after:  <src>Нсл. 346.</src>—
+```
+
+Otherwise each candidate is shown as the pair before and after moving that run
+inside the closing tag:
+
+```text
+  before: <g>муж.</g>,
+  after:  <g>муж.,</g>
+```
+
+Each candidate also prints the headword(s) of its parent `<d>` span, or of the
+entry span outside any `<d>`, so the reviewed context is identifiable.
+
+The prompt offers three actions: Enter skips the candidate, `y` writes the
+prepared `after` text, and any other input replaces the whole candidate span
+(opening tag through trailing punctuation) with the typed text. Moving
+punctuation inside `<hw>` changes the headword, so the `<hw>` cases above are
+skipped; `<see>` and `<n>` are always skipped. An accepted change is written
+immediately and the file's existing line endings are preserved. Before each
+write the script re-reads the file and compares it with the text it last saw; if
+another program (for example the markup app) saved the file in the meantime, the
+script stops instead of overwriting that save. Rerun it to continue from the
+current file. Later candidates are re-mapped after every write, so nested pairs
+and following tags stay valid. `--apply` writes the prepared `after` text for
+every candidate without asking (for scripts/automation); a non-interactive run
+without `--apply` only previews. Arguments are XML files or directories; the
+default target is `dictionary_app/data` (recursive `*.xml`). Examples:
+
+```powershell
+py -3 tools/fix_tag_punctuation.py
+py -3 tools/fix_tag_punctuation.py --apply
+py -3 tools/fix_tag_punctuation.py dictionary_app/data/dictionary/dictionary_D.xml --apply
+```
+
+### 9.12 `search_xml.py` — search every XML file at once
+
+For non-developers, double-click `tools/search_xml_app.pyw`. A window opens
+with a query field focused: type a query and press Enter (or click **Search**).
+Results appear in a table with **Headword**, **File**, **Line** and **Snippet**
+columns; **Regex** and **Ignore case** checkboxes are optional, and the status
+line reports matches and files. The query is used exactly as typed: leading and
+trailing spaces are significant (a single space searches for spaces), so no
+whitespace is trimmed. The window calls the same functions as the CLI, so
+headword rules and snippets are identical. Double-clicking the `.pyw` uses
+`pythonw`, so no console window appears.
+
+The CLI is the scriptable form. Windows Explorer cannot search inside several
+files at once; this is the grep-like replacement for the marked-up corpus. It
+walks the target directories recursively (default `dictionary_app/data`, glob
+`*.xml`) and prints `path:line:column` for every matching line, with a clipped
+snippet around its first match. Literal matching is the default; `--regex`
+switches to Python regular expressions.
+
+| flag | purpose |
+|---|---|
+| `--glob PATTERNS` | comma-separated file patterns (default `*.xml`) |
+| `--exclude parts` | extra path parts to skip |
+| `--ignore-case` | case-insensitive matching |
+| `--regex` | treat the query as a regular expression |
+| `--context N` | lines of context around each match (default `0`) |
+| `--snippet N` | printed characters per line, `0` = full line (default `160`) |
+| `--limit N` | matching lines to print per file, `0` = all (default `200`) |
+| `--count` | per-file match counts and a total |
+| `--files-with-matches` | print only paths that contain a match |
+
+Match lines use `path:line:column: snippet`; context lines use
+`path-line- snippet`, with `--` between non-adjacent groups. Each matching line
+that belongs to a dictionary entry also prints
+`path:line:column  headword(s): …` followed by an indented snippet. The
+headwords come from the innermost enclosing `<d>` (its own `<hw>` children,
+nested `<d>` spans excluded) or, outside any `<d>`, from the entry's own
+`<hw>`s. Lines without a headword (e.g. `sources.xml`) keep the one-line form.
+The summary reports matches and files. With no query the script prints its help
+and exits `2` instead of raising an argparse error. Exit codes follow grep: `0`
+match, `1` no match, `2` error.
+
+```powershell
+$env:PYTHONUTF8="1"
+py -3 tools/search_xml.py "слова"
+py -3 tools/search_xml.py "<src>" --context 1
+py -3 tools/search_xml.py "\bча́паць\b" --regex --ignore-case
+py -3 tools/search_xml.py "грыжа" --count
+py -3 tools/search_xml.py "Ар." --glob "*.xml" --limit 0
+```
+
 ## 10. Exit codes
 
-Scripts exit `0` on success and `1` on findings/failures.
+Scripts exit `0` on success and `1` on findings/failures. `search_xml.py`
+follows grep instead: `0` match, `1` no match, `2` error.
 
 ## 11. Reuse
 
 Copy the scripts in `tools/` into another repo; `read_codebase.py`,
 `plan_cleanup.py`, `strip_comments.py`, `find_unused_definitions.py`,
-`check_doc_references.py`, and `inspect_data.py` are project-agnostic. The data
-inspector learns the record tag at runtime and takes `--glob`/`--tag`/`--record`,
-so it works on any XML-like dataset without edits. `rewrite_imports.py` only
-touches imports. `digraph_export.py` and the `export_*.py` scripts (§9.10) are
+`check_doc_references.py`, `inspect_data.py`, and `search_xml.py` are
+project-agnostic. The data inspector learns the record tag at runtime and takes
+`--glob`/`--tag`/`--record`, so it works on any XML-like dataset without edits;
+the search script is a generic recursive grep with a data-folder default.
+`rewrite_imports.py` only touches imports. `digraph_export.py` and the
+`export_*.py` scripts (§9.10) are
 the exception: they import `dictionary_app` and encode this corpus's `<hw>` /
 `<sep />` / `<see hw>` shapes, so copy them only when the target repo has the
 same schema (the `write_workbook` writer itself is generic). For per-repo policy,

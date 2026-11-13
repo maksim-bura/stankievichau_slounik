@@ -24,12 +24,12 @@ class SettingsButton(MenuButton):
         self._consume_next_press = False
 
         self.settings_menu = QMenu(self)
-        self._add_heading(
-            MAGNIFIER_MARKER, strings.app_buttons.settings.dropdown.title)
+        menu_data = strings.app_buttons.settings.menu
+        self._add_heading(MAGNIFIER_MARKER, menu_data.search.title)
         self.settings_menu.addSeparator()
 
-        belarusian_data = strings.app_buttons.settings.dropdown.search_in_belarusian
-        russian_label = strings.app_buttons.settings.dropdown.search_in_russian.label
+        belarusian_data = menu_data.search.belarusian
+        russian_label = menu_data.search.russian.label
 
         self._belarusian_radio = RadioOption(belarusian_data.label, checked=True)
         self._belarusian_radio.toggled.connect(self._on_radio_toggled)
@@ -47,7 +47,7 @@ class SettingsButton(MenuButton):
 
         self.settings_menu.addSeparator()
 
-        alphabet_data = strings.app_buttons.settings.dropdown.alphabet_order
+        alphabet_data = menu_data.alphabet_order
         self._add_heading(ALPHABET_MARKER, alphabet_data.title)
         self.settings_menu.addSeparator()
         self._standard_radio = RadioOption(alphabet_data.standard, checked=True)

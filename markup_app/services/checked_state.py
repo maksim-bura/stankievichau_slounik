@@ -33,14 +33,21 @@ class CheckedState:
         with open(self._path, 'w', encoding='utf-8') as f:
             json.dump(self._states, f, ensure_ascii=False, indent=2)
 
-    def _key(self, source_file, entry_link, headword):
-        return f'{source_file}:{entry_link}:{headword}'
+    def _key(self, source_file, entry_id, entry_link, headword, occurrence):
+        return (
+            f'{source_file}:{entry_id}:{entry_link}:{headword}:{occurrence}'
+        )
 
-    def is_checked(self, source_file, entry_link, headword):
-        return self._states.get(self._key(source_file, entry_link, headword), False)
+    def is_checked(self, source_file, entry_id, entry_link, headword, occurrence):
+        return self._states.get(
+            self._key(
+                source_file, entry_id, entry_link, headword, occurrence),
+            False,
+        )
 
-    def toggle(self, source_file, entry_link, headword):
-        key = self._key(source_file, entry_link, headword)
+    def toggle(self, source_file, entry_id, entry_link, headword, occurrence):
+        key = self._key(
+            source_file, entry_id, entry_link, headword, occurrence)
         self._states[key] = not self._states.get(key, False)
         self.save()
         return self._states[key]
@@ -49,39 +56,98 @@ class CheckedState:
         self._states.clear()
         self.save()
 
+    def remove_entry(self, source_file, entry_id):
+        prefix = f'{source_file}:{entry_id}:'
+        removed = [
+            key for key in self._states if key.startswith(prefix)
+        ]
+        if not removed:
+            return
+        for key in removed:
+            del self._states[key]
+        self.save()
+
     def migrate(self, conn):
         if not self._states:
             return
         try:
-            rows = conn.execute(
+            dict_rows = conn.execute(
                 "SELECT id, headword, entry_link, source_file FROM dictionary"
+            ).fetchall()
+            sub_rows = conn.execute(
+                "SELECT main_entry_id, sub_headwords.headword, "
+                "dictionary.entry_link, dictionary.source_file "
+                "FROM sub_headwords "
+                "JOIN dictionary ON sub_headwords.main_entry_id = dictionary.id"
             ).fetchall()
         except Exception:
             return
-        by_id = {row[0]: (row[1], row[2], row[3]) for row in rows}
+
+        rows = list(dict_rows) + list(sub_rows)
+        by_id = {
+            row[0]: row[1:] for row in dict_rows
+        }
+        by_parts = {}
         by_src_hw = {}
-        for rowid, headword, entry_link, source_file in rows:
-            by_src_hw.setdefault((source_file, headword), set()).add(entry_link)
+        for row in rows:
+            entry_id, headword, entry_link, source_file = row
+            by_parts.setdefault(
+                (source_file, entry_link, headword), []
+            ).append(row)
+            by_src_hw.setdefault(
+                (source_file, headword), []
+            ).append(row)
+
+        def current(row):
+            entry_id, headword, entry_link, source_file = row
+            return self._key(source_file, entry_id, entry_link, headword, 0)
 
         def rewrite(key):
-            if ':' not in key:
-                if key.isdigit() and int(key) in by_id:
-                    hw, link, src = by_id[int(key)]
-                    return [self._key(src, link, hw)]
+            parts = key.split(':')
+            if (
+                len(parts) >= 5
+                and parts[1].isdigit()
+                and parts[-1].isdigit()
+            ):
+                return [key]
+            if len(parts) >= 4 and parts[1].isdigit():
+                entry_id = int(parts[1])
+                tail = key.split(':', 3)[3]
+                for row in rows:
+                    if row[0] != entry_id:
+                        continue
+                    if tail == f'{row[2]}:{row[1]}':
+                        return [current(row)]
                 return None
-            first, _, rest = key.partition(':')
-            if first.isdigit():
-                if int(first) not in by_id:
+            if parts[0].isdigit():
+                entry_id = int(parts[0])
+                if entry_id not in by_id:
                     return None
-                hw, link, src = by_id[int(first)]
-                if remove_accents(rest) == remove_accents(hw):
-                    return [self._key(src, link, hw)]
+                headword, entry_link, source_file = by_id[entry_id]
+                rest = key.partition(':')[2]
+                if rest and remove_accents(rest) != remove_accents(headword):
+                    return None
+                return [current((entry_id, headword, entry_link, source_file))]
+            if ':' not in key:
                 return None
-            source_file = first
+            source_file, _, rest = key.partition(':')
             if (source_file, rest) in by_src_hw:
-                links = by_src_hw[(source_file, rest)]
-                return [self._key(source_file, link, rest) for link in links]
-            return None
+                return [current(row) for row in by_src_hw[(source_file, rest)]]
+            entry_link, sep, headword = rest.rpartition(':')
+            if not sep:
+                return None
+            link = None if entry_link == 'None' else entry_link
+            matches = by_parts.get((source_file, link, headword))
+            if not matches:
+                matches = [
+                    row for row in rows
+                    if row[3] == source_file
+                    and row[2] == link
+                    and remove_accents(row[1]) == remove_accents(headword)
+                ]
+            if not matches:
+                return None
+            return [current(row) for row in matches]
 
         migrated = {}
         changed = False

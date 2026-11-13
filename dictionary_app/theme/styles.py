@@ -163,6 +163,7 @@ ENTRY_STYLESHEET = f"""
     .abbr {{ font-weight: bold; }}
     .see {{ font-style: italic; }}
     .p {{ font-style: normal; font-weight: normal; }}
+    .subentry-indent {{ color: transparent; }}
     .h1 {{ font-weight: bold; font-size: {FONT_SIZE_HEADING_LARGE}; }}
     .h2 {{ font-weight: bold; font-size: {FONT_SIZE_HEADING_MEDIUM}; }}
 
@@ -177,8 +178,8 @@ ENTRY_STYLESHEET = f"""
         text-decoration: none; color: inherit;
     }}
     .link:hover, .word-link:hover {{ text-decoration: underline; }}
-    .src, .source-link {{ font-style: normal; }}
-    .source-link {{ font-style: normal; color: inherit; text-decoration: none; cursor: pointer; }}
+    .src {{ font-style: normal; }}
+    .source-link {{ font-style: inherit; color: inherit; text-decoration: none; cursor: pointer; }}
     .st-link {{ font-style: italic; }}
     .source-link:hover {{ text-decoration: underline; }}
     .search-highlight {{ background-color: {COLOR_HIGHLIGHT_BG}; }}

@@ -164,8 +164,8 @@ class HighlightFormatter:
             matched_ids = {id(el) for el in matched}
 
             embedded_groups, embedded_by_sense = self._group_embedded_t_matches(matched, parent_map)
-            if embedded_by_sense:
-                consumed_senses = set()
+            if embedded_groups:
+                consumed_groups = set()
                 skipped_main_t = set()
                 for group in embedded_by_sense.values():
                     main_t = group['sense'].find('t')
@@ -176,10 +176,15 @@ class HighlightFormatter:
                 for element in matched:
                     group = embedded_groups.get(id(element))
                     if group is not None:
-                        if id(group['sense']) in consumed_senses:
+                        group_key = (
+                            id(group['sense']) if group['sense'] is not None
+                            else id(group['ex'])
+                        )
+                        if group_key in consumed_groups:
                             continue
-                        consumed_senses.add(id(group['sense']))
-                        emitted_sense_ids.add(id(group['sense']))
+                        consumed_groups.add(group_key)
+                        if group['sense'] is not None:
+                            emitted_sense_ids.add(id(group['sense']))
                         paragraph_break = self._has_br_between(prev_element, element, order, order_pos)
                         preview = self._build_embedded_t_preview(group, pattern, parent_map, root, headword, keep_acc)
                         preview['paragraph_break'] = paragraph_break
@@ -245,35 +250,43 @@ class HighlightFormatter:
     def _group_embedded_t_matches(self, matched, parent_map):
         by_element = {}
         by_sense = {}
+        by_ex = {}
         for element in matched:
             parent = parent_map.get(element)
-            if parent is not None and parent.tag == 'ex':
-                current = parent
-                sense = None
-                while current is not None:
-                    if current.tag == 'sense':
-                        sense = current
-                        break
-                    current = parent_map.get(current)
-                if sense is not None:
-                    sid = id(sense)
-                    group = by_sense.get(sid)
-                    if group is None:
-                        group = {'sense': sense, 'elements': []}
-                        by_sense[sid] = group
-                    group['elements'].append(element)
-                    by_element[id(element)] = group
+            if parent is None or parent.tag != 'ex':
+                continue
+            current = parent
+            sense = None
+            while current is not None:
+                if current.tag == 'sense':
+                    sense = current
+                    break
+                current = parent_map.get(current)
+            if sense is not None:
+                group = by_sense.get(id(sense))
+                if group is None:
+                    group = {'sense': sense, 'ex': None, 'elements': []}
+                    by_sense[id(sense)] = group
+            else:
+                group = by_ex.get(id(parent))
+                if group is None:
+                    group = {'sense': None, 'ex': parent, 'elements': []}
+                    by_ex[id(parent)] = group
+            group['elements'].append(element)
+            by_element[id(element)] = group
         return by_element, by_sense
 
     def _build_embedded_t_preview(self, group, pattern, parent_map, root, headword, keep_acc=0):
         sense = group['sense']
         elements = group['elements']
 
-        parts = [self._sense_number_html(sense)]
-        main_t = sense.find('t')
-        if main_t is not None:
-            parts.append(f'<span class="t">{self._element_preview_content(main_t, "t", pattern)}</span>')
-            parts.append(main_t.tail or ' ')
+        parts = []
+        if sense is not None:
+            parts.append(self._sense_number_html(sense))
+            main_t = sense.find('t')
+            if main_t is not None:
+                parts.append(f'<span class="t">{self._element_preview_content(main_t, "t", pattern)}</span>')
+                parts.append(main_t.tail or ' ')
 
         seen_ex = set()
         sep = ''
@@ -282,7 +295,8 @@ class HighlightFormatter:
             if ex_el is None or id(ex_el) in seen_ex:
                 continue
             seen_ex.add(id(ex_el))
-            ex_content = self._element_preview_content(ex_el, 'ex', pattern)
+            include = {id(el) for el in elements if parent_map.get(el) is ex_el}
+            ex_content = self._element_preview_content(ex_el, 'ex', pattern, include)
             parts.append(sep)
             parts.append(f'<span class="g">{ex_content}</span>')
             sep = ex_el.tail or ' '
@@ -290,11 +304,13 @@ class HighlightFormatter:
         preview_html = ''.join(parts)
         first = elements[0]
         preview_hw, preview_sort, preview_hw_id = self._preview_hw_fields(first, parent_map, root, headword, keep_acc)
+        if sense is not None:
+            preview_html = f'<span class="t">{preview_html}</span>'
         return {
             'headword': preview_hw,
             'sort_headword': preview_sort,
             'sort_hw_id': preview_hw_id,
-            'preview_html': f'<span class="t">{preview_html}</span>',
+            'preview_html': preview_html,
         }
 
     def _format_child_for_preview(self, child):
@@ -321,15 +337,15 @@ class HighlightFormatter:
                 break
         return sense_num, sense_id
 
-    def _build_preview_html(self, element, tag, pattern, parent_map, add_sense_num=True, matched_ids=None):
-        highlighted = self._element_preview_content(element, tag, pattern)
+    def _build_preview_html(self, element, tag, pattern, parent_map, add_sense_num=True, matched_ids=None, include_children=None):
+        highlighted = self._element_preview_content(element, tag, pattern, include_children)
         if tag in ('t', 'ex'):
             highlighted = self._add_sibling_context(highlighted, element, pattern, parent_map, tag, add_sense_num, matched_ids)
 
         tag_class = 't' if tag == 't' else 'g'
         return f'<span class="{tag_class}">{highlighted}</span>'
 
-    def _element_preview_content(self, element, tag, pattern):
+    def _element_preview_content(self, element, tag, pattern, include_children=None):
         segments = []
         excluded_fragments = []
         layout = []
@@ -338,7 +354,8 @@ class HighlightFormatter:
             layout.append(('seg', len(segments) - 1))
         for child in element:
             child_html = self._format_child_for_preview(child)
-            if is_excluded_child(child, tag):
+            if is_excluded_child(child, tag) and not (
+                    include_children and id(child) in include_children):
                 excluded_fragments.append(child_html)
                 layout.append(('excl', len(excluded_fragments) - 1))
             else:

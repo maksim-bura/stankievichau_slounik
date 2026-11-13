@@ -17,7 +17,9 @@ ATTRIBUTES = {
     'g':     [(ATTR_HW, TEXT)],
     'see':   [(ATTR_ENTRY, TEXT), (ATTR_HW, TEXT), (ATTR_SYN, BOOL)],
     'sense': [(ATTR_N, TEXT)],
+    'ex':    [(ATTR_LANG, TEXT)],
     'i':     [(ATTR_LANG, TEXT), (ATTR_EXCL, BOOL)],
+    'p':     [(ATTR_LANG, TEXT)],
     'lang':  [(ATTR_CODE, TEXT)],
 }
 

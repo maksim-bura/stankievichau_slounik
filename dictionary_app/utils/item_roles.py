@@ -6,3 +6,4 @@ ROLE_HEADWORD = Qt.UserRole + 1
 ROLE_ENTRY_ID = Qt.UserRole + 2
 ROLE_SOURCE_FILE = Qt.UserRole + 3
 ROLE_IDENTITY = Qt.UserRole + 4
+ROLE_OCCURRENCE = Qt.UserRole + 5

@@ -5,6 +5,11 @@ from dictionary_app.utils.constants import SCHEME_WORD, SCHEME_SOURCE, SCHEME_PR
 
 
 class NoBlueFocusFrameStyle(QProxyStyle):
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.StyleHint.SH_TextControl_FocusIndicatorTextCharFormat:
+            return 0
+        return super().styleHint(hint, option, widget, returnData)
+
     def drawPrimitive(self, element, option, painter, widget=None):
         if element == QStyle.PrimitiveElement.PE_Frame and isinstance(widget, QTextEdit):
             opt = QStyleOptionFrame(option)

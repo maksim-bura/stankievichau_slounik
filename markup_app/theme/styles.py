@@ -7,6 +7,7 @@ from dictionary_app.theme.styles import (
 COLOR_D_SPAN_UNDERLINE = '#c2571a'
 COLOR_AMBIGUOUS_G_BG = '#ffdab3'
 COLOR_AMBIGUOUS_HW_BG = '#d8d0f2'
+COLOR_DIGRAPH_BG = '#f6c7c2'
 COLOR_CHECKED_BG = '#c8f7c5'
 COLOR_CHECKED_HOVER_BG = '#b8f0b5'
 COLOR_CHECKED_SELECTED_BG = '#7cbf7a'

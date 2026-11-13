@@ -14,7 +14,9 @@ from markup_app.theme.layout_constants import (
     EDITOR_TOOLBAR_MARGINS, EDITOR_TOOLBAR_SPACING, EDITOR_TOOLBAR_GAP
 )
 from markup_app.theme.styles import ENTRY_CHECKED_TOGGLE_STYLE
-from markup_app.utils.constants import FLOPPY_MARKER
+from markup_app.utils.constants import (
+    COMBINING_ACCENTS, DOTTED_CIRCLE, FLOPPY_MARKER
+)
 from markup_app.localization import strings
 from markup_app.panels.tag_button import TagButton, UniformTabBar
 from markup_app.panels.xml_text_edit import XmlTextEdit, strip_link_markers
@@ -36,6 +38,7 @@ SELF_CLOSING_TAGS = ('br', 'sep')
 class EditorPane(QWidget):
     content_changed = Signal()
     link_marks_stale = Signal()
+    selection_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -58,6 +61,7 @@ class EditorPane(QWidget):
         self._text_edit.setReadOnly(False)
         self._text_edit.textChanged.connect(self._on_text_changed)
         self._text_edit.link_marks_stale.connect(self.link_marks_stale)
+        self._text_edit.selectionChanged.connect(self.selection_changed)
 
         self._author_edit = QTextEdit()
         self._author_edit.setReadOnly(True)
@@ -155,6 +159,12 @@ class EditorPane(QWidget):
     def is_modified(self):
         return self._is_modified
 
+    def selects_whole_entry(self):
+        return self._text_edit.selects_whole_entry()
+
+    def is_empty(self):
+        return self._text_edit.is_empty()
+
     def mark_saved(self):
         self._is_modified = False
         self._baseline = self.get_xml()
@@ -208,8 +218,43 @@ class EditorPane(QWidget):
         self._text_edit._digraph_spans = spans
         self._text_edit._refresh_selections()
 
+    def insert_combining_accent(self, accent):
+        cursor = self._text_edit.textCursor()
+        document = cursor.document()
+        scroll = self._text_edit.verticalScrollBar().value()
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+
+        if start != end:
+            selected = cursor.selectedText().rstrip(COMBINING_ACCENTS)
+            if len(selected) != 1 or not selected.isalpha():
+                return
+            base = start
+        else:
+            base = start - 1
+            while base >= 0 and document.characterAt(base) in COMBINING_ACCENTS:
+                base -= 1
+            if base < 0 or not document.characterAt(base).isalpha():
+                return
+
+        mark_end = base + 1
+        while (mark_end < document.characterCount()
+               and document.characterAt(mark_end) in COMBINING_ACCENTS):
+            mark_end += 1
+
+        cursor.beginEditBlock()
+        try:
+            cursor.setPosition(base + 1)
+            cursor.setPosition(mark_end, QTextCursor.MoveMode.KeepAnchor)
+            cursor.insertText(accent)
+            self._text_edit.setTextCursor(cursor)
+        finally:
+            cursor.endEditBlock()
+            self._text_edit.verticalScrollBar().setValue(scroll)
+
     def insert_tag(self, tag_name):
         cursor = self._text_edit.textCursor()
+        scroll = self._text_edit.verticalScrollBar().value()
         cursor.beginEditBlock()
         try:
             if tag_name in SELF_CLOSING_TAGS:
@@ -255,6 +300,7 @@ class EditorPane(QWidget):
             self._text_edit.setTextCursor(cursor)
         finally:
             cursor.endEditBlock()
+            self._text_edit.verticalScrollBar().setValue(scroll)
 
 
 class MarkupEditor(QWidget):
@@ -277,6 +323,12 @@ class MarkupEditor(QWidget):
                 btn.clicked_with_tag.connect(self._on_tag_clicked)
                 toolbar.addWidget(btn)
 
+        toolbar.addSpacing(EDITOR_TOOLBAR_GAP)
+        for accent in COMBINING_ACCENTS:
+            btn = TagButton(f'{DOTTED_CIRCLE}{accent}', accent)
+            btn.clicked_with_tag.connect(self._on_tag_clicked)
+            toolbar.addWidget(btn)
+
         toolbar.addStretch()
 
         layout.addLayout(toolbar)
@@ -289,4 +341,7 @@ class MarkupEditor(QWidget):
         self.setLayout(layout)
 
     def _on_tag_clicked(self, tag_name):
-        self.pane.insert_tag(tag_name)
+        if tag_name in COMBINING_ACCENTS:
+            self.pane.insert_combining_accent(tag_name)
+        else:
+            self.pane.insert_tag(tag_name)

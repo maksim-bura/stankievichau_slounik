@@ -10,7 +10,9 @@ from PySide6.QtGui import QCursor
 from dictionary_app.utils.collapse_duplicates import collapse_with_identities
 from dictionary_app.utils.normalize_headword import has_keep_acc, resolve_headword
 from dictionary_app.utils.xml_schema import ATTR_ID
-from dictionary_app.db.build_database import build_database, get_source_path, reindex_entry
+from dictionary_app.db.build_database import (
+    build_database, delete_entry, get_source_path, reindex_entry
+)
 from markup_app.services.broken_link_analyzer import (
     BrokenLinkAnalyzer, MODE_AMBIGUOUS_G, MODE_MISSING, MODE_UNION, MODE_UNRESOLVED,
     normalize_headword, row_norm
@@ -37,7 +39,9 @@ from dictionary_app.theme.layout_constants import (
 from dictionary_app.theme.styles import MENU_BUTTON_EMOJI_STYLE
 from dictionary_app.utils.constants import CHECK_MARK, CHECK_BLANK, ALPHABET_MARKER
 from dictionary_app.utils.sort_keys import SORT_ORDER_DICTIONARY, SORT_ORDER_STANDARD
-from dictionary_app.utils.item_roles import ( ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_ENTRY_ID, )
+from dictionary_app.utils.item_roles import (
+    ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_ENTRY_ID, ROLE_OCCURRENCE,
+)
 from dictionary_app.widgets.menu_options import RadioOption
 from markup_app.utils.constants import ( RELOAD_MARKER, DUPLICATES_MARKER, BROKEN_LINKS_MARKER, )
 
@@ -56,6 +60,22 @@ def expand_broken_mode(mode):
             return set(_ALL_BROKEN_MODES)
         return {mode}
     return set(mode)
+
+
+def remove_entry_block(content, block):
+    index = content.find(block)
+    if index < 0:
+        return None
+    end = index + len(block)
+    if content.startswith('\n\n', end):
+        end += 2
+    elif content.startswith('\r\n\r\n', end):
+        end += 4
+    elif index >= 2 and content[index - 2:index] == '\n\n':
+        index -= 2
+    elif index >= 4 and content[index - 4:index] == '\r\n\r\n':
+        index -= 4
+    return content[:index] + content[end:]
 
 
 class MarkupMainWindow(QMainWindow):
@@ -223,6 +243,7 @@ class MarkupMainWindow(QMainWindow):
         self.editor = MarkupEditor()
         self.editor.pane.setMinimumWidth(ENTRY_MIN_WIDTH)
         self.editor.pane.content_changed.connect(self._on_content_changed)
+        self.editor.pane.selection_changed.connect(self._on_selection_changed)
         self.editor.pane.link_marks_stale.connect(self._refresh_link_marks)
         self._checked_toggle = self.editor.checked_toggle
         self._checked_toggle.clicked.connect(self._on_checked_toggle)
@@ -531,14 +552,9 @@ class MarkupMainWindow(QMainWindow):
         if not headword:
             return
 
-        occurrence = 0
-        occurrence_idx = 0
-        for i, (_display, r) in enumerate(self.results_model.rows):
-            if (r[0], r[1], r[3]) == (entry_id, headword, entry_link):
-                if i == index.row():
-                    occurrence = occurrence_idx
-                    break
-                occurrence_idx += 1
+        occurrence = index.data(ROLE_OCCURRENCE)
+        if occurrence is None:
+            occurrence = 0
 
         result = self._by_id_headword.get((entry_id, headword, entry_link))
         if not result:
@@ -590,7 +606,8 @@ class MarkupMainWindow(QMainWindow):
         self.editor.pane.set_entry(xml_text)
         self._has_unsaved = False
 
-        is_checked = self.checked_state.is_checked(source_file, result[3], result[1])
+        is_checked = self.checked_state.is_checked(
+            source_file, result[0], result[3], result[1], occurrence)
         self._apply_checked_visual(is_checked)
         self._save_button.hide()
         self._checked_toggle.show()
@@ -699,7 +716,9 @@ class MarkupMainWindow(QMainWindow):
         headword = self.current_result[1]
         source_file = self.current_result[4]
         entry_link = self.current_result[3]
-        new_state = self.checked_state.toggle(source_file, entry_link, headword)
+        new_state = self.checked_state.toggle(
+            source_file, entry_id, entry_link, headword,
+            self.current_occurrence or 0)
         self._apply_checked_visual(new_state)
         self.results_box.viewport().update()
 
@@ -767,8 +786,96 @@ class MarkupMainWindow(QMainWindow):
                 return r
         return None
 
+    def _confirm_delete_current(self):
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle(strings.dialog.delete_entry.title)
+        box.setText(strings.dialog.delete_entry.body)
+        delete_btn = box.addButton(
+            strings.dialog.delete_entry.buttons.delete,
+            QMessageBox.DestructiveRole,
+        )
+        cancel_btn = box.addButton(
+            strings.dialog.delete_entry.buttons.cancel,
+            QMessageBox.RejectRole,
+        )
+        box.setDefaultButton(cancel_btn)
+        box.exec()
+        if box.clickedButton() is delete_btn:
+            return self._delete_current_entry()
+        return False
+
+    def _delete_current_entry(self):
+        entry_id = self.current_result[0]
+        headword = self.current_result[1]
+        entry_link = self.current_result[3]
+        source_file = self.current_result[4]
+
+        if not source_file:
+            QMessageBox.warning(self, 'Delete Error', 'No source file found for this entry.')
+            return False
+
+        file_path = get_source_path(source_file)
+        if not os.path.exists(file_path):
+            QMessageBox.warning(self, 'Delete Error', f'Source file not found: {source_file}')
+            return False
+
+        self._source_cache.pop(source_file, None)
+        loaded = self._load_source_content(source_file)
+        content = loaded['content'] if loaded else None
+        blocks = loaded['blocks'] if loaded else []
+        if not blocks:
+            QMessageBox.warning(self, 'Delete Error',
+                'Could not locate the original entry in the source file.')
+            return False
+
+        old_raw = self._loaded_raw.get(entry_id)
+        if old_raw is None:
+            old_raw = self._read_entry_from_source(
+                entry_id, source_file, headword, entry_link)
+        indices = [i for i, b in enumerate(blocks) if b == old_raw] if old_raw else []
+        if not indices:
+            QMessageBox.warning(self, 'Delete Error',
+                'Could not locate the original entry in the source file.')
+            return False
+        if len(indices) != 1:
+            QMessageBox.warning(self, 'Delete Error',
+                'The original entry could not be matched uniquely; nothing was deleted.')
+            return False
+
+        new_content = remove_entry_block(content, blocks[indices[0]])
+        with open(file_path, 'w', encoding='utf-8') as file:
+            file.write(new_content)
+
+        delete_entry(entry_id)
+        self._source_cache.pop(source_file, None)
+        self._loaded_raw.pop(entry_id, None)
+        self.search_engine.invalidate_entry(entry_id)
+        self._broken_links.invalidate()
+        self._duplicate_resolver.invalidate()
+        self.checked_state.remove_entry(source_file, entry_id)
+
+        remaining = [r for r in self.current_results if r[0] != entry_id]
+        self.current_result = None
+        self.current_occurrence = None
+        self._has_unsaved = False
+        self._save_button.hide()
+        self._display_results(remaining)
+        if self.results_model.rows:
+            result = self.results_model.rows[0][1]
+            self._load_result(result, 0, self._separate_occurrences_mode())
+        else:
+            self._checked_toggle.hide()
+            self.editor.pane.set_entry('')
+            self.results_box.clearSelection()
+        return True
+
     def _save_current(self):
-        if not self.current_result or not self.editor.pane.is_modified():
+        if not self.current_result:
+            return True
+        if self.editor.pane.selects_whole_entry() or self.editor.pane.is_empty():
+            return self._confirm_delete_current()
+        if not self.editor.pane.is_modified():
             return True
 
         entry_id = self.current_result[0]
@@ -796,6 +903,7 @@ class MarkupMainWindow(QMainWindow):
         headword = self.current_result[1]
         entry_link = self.current_result[3]
 
+        self._source_cache.pop(source_file, None)
         loaded = self._load_source_content(source_file)
         content = loaded['content'] if loaded else None
         blocks = loaded['blocks'] if loaded else []
@@ -884,6 +992,7 @@ class MarkupMainWindow(QMainWindow):
                 continue
             rows[i] = (new_display, new_result)
             changed.append(i)
+        occurrences_changed = self.results_model.refresh_occurrences()
         run_start = None
         run_end = None
         for i in changed:
@@ -896,6 +1005,8 @@ class MarkupMainWindow(QMainWindow):
                 run_start = run_end = i
         if run_start is not None:
             self._emit_rows_changed(run_start, run_end)
+        if occurrences_changed and rows:
+            self._emit_rows_changed(0, len(rows) - 1)
         self._by_id_headword = {(r[0], r[1], r[3]): r for _display, r in rows}
         self._sub_headword_cache.clear()
 
@@ -911,6 +1022,12 @@ class MarkupMainWindow(QMainWindow):
             event.accept()
         else:
             super().keyPressEvent(event)
+
+    def _on_selection_changed(self):
+        if self.editor.pane.selects_whole_entry() or self._has_unsaved:
+            self._save_button.show()
+        else:
+            self._save_button.hide()
 
     def _on_content_changed(self):
         self._has_unsaved = self.editor.pane.is_modified()

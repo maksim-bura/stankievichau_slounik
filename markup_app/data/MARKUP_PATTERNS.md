@@ -14,11 +14,16 @@ this file covers only raw → XML markup.
 | | |
 |---|---|
 | **Input** | `markup_app/data/dictionary_raw/dictionary_<letter>_raw.txt` — one proofread OCR block per printed page/region; the authoritative text for that letter |
-| **Output** | `dictionary_app/data/dictionary/dictionary_<letter>.xml` — `<dictionary>` root, one `<entry>` per headword, at column 0, blank line between entries |
+| **Output** | `dictionary_app/data/dictionary/dictionary_<letter>.xml` — `<dictionary>` root; one `<entry>`…`</entry>` block per headword, at column 0, blank line between blocks |
 | **Order** | Output keeps the raw **print order**. Never alphabetize an XML file. **Never move, reorder, re-indent, or re-insert an `<entry>` block that is already in the file** — existing blocks stay exactly where they are; new work is only appended at the end. On-screen sorting is done by the database at query time (see `dictionary_app/AGENTS.md` → Collation Rules), so file order and list order intentionally differ. |
 
 Raw format facts that drive the splitting:
 
+- **Every headword is wrapped in `<entry>`…`</entry>`.** The tags of one headword
+  form the entry BODY; the body always sits inside the wrapper. In the XML file
+  the wrapper is at column 0 with a blank line between blocks; a processed
+  fragment file (`dictionary_<letter>_processed.txt`) holds the same `<entry>`
+  blocks in the same order, blank-line-separated, with no `<dictionary>` root.
 - Each printed headword starts with a `•` bullet: `•ся́драва, нареч.—холодновато.`
 - A raw line/block may contain **several** bullet-led headwords joined by `,`
   (`•ґазалі́на-…, •ґазамэтра-…`) — each `•` becomes its own `<entry>`.
@@ -44,8 +49,8 @@ never the whole file at once.
    the raw clearly proves; keep unknowable fragments verbatim.
 5. **Resolve identity**: homonyms get nested `<n>` numerals (§8), colliding
    lexemes get an `<entry id="…">` (§8); cross-references use `<see>` (§7).
-6. **Append** the entries to the XML inside `<dictionary>`, column 0, blank line
-   between entries, keeping print order. Append only — never move, reorder, or
+6. **Append** the `<entry>` blocks to the XML inside `<dictionary>`, column 0,
+   blank line between blocks, keeping print order. Append only — never move, reorder, or
    re-insert existing `<entry>` blocks.
 7. **Self-check the chunk** (§11) before moving on. Do not batch a whole file
    and check at the end.
@@ -57,7 +62,7 @@ never the whole file at once.
 | `<hw>` | headword (bold, clickable anchor) | one per spelling variant; multi-word headwords like `ґазавая ґрана́та`; homonym numerals nested: `<hw>гале́ра <n>ІІ</n></hw>`; disambiguation links see §8; `excl="true"` marks a display-only variant that is kept out of the entry list and all logic except display + the pointing-finger (`👉`), e.g. `•<hw excl="true">ёсьць</hw>, <hw>ёсьцяка</hw>` (see `dictionary_app/AGENTS.md` → `<hw excl="true">`); an inflected/cognate variant shown alongside the main form may be italicized INSIDE `<hw>`: `<hw>Юр'е</hw>, <hw><i>Юр'я</i></hw>` (Ju); `keep-acc="true"` marks a headword whose combining accents are load-bearing and must be PRESERVED (never stripped) for display, list identity, search, and `<see>` resolution — used on the Cz `ча́паць`/`чапа́ць` family |
 | `<g>` | grammar/declension, italic | declension starts with `-`: `-са, м.`; standalone markers: `нареч.`, `местоим.`, `союз`, `соверш.`, `несоверш.`, `безлич.`, `однкр.`, `средн.`, `прич.`, `отгл. имя сущ.`; may embed `<st>`, `<see>`, `<p>`, `<src>`, even `<hw>` (`один <hw>ґалёш</hw>`) |
 | `<t>` | Russian translation; also appears nested INSIDE an `<ex>` as a Russian gloss of a proverb/idiom | transcription, multiple `<t>` per sense allowed; sources and `—` separators inside (H `гарох`: `<ex>Хадзі̀ма ў гарох <t>(знач. щипать горох)</t>. <src>Ст.</src></ex>`) |
-| `<ex>` | Belarusian example, italic, srcless or `<src>`-tagged | may embed a Russian `<t>` gloss and/or `<st>Послов.</st>` (H `гарох`: `Ідзе гарох, там сем дарог. <st>Послов.</st>, <t>о частом щипании гороха</t>. <src>Дсл.</src>`) |
+| `<ex>` | Belarusian example, italic, srcless or `<src>`-tagged | may embed a Russian `<t>` gloss and/or `<st>Послов.</st>` (H `гарох`: `Ідзе гарох, там сем дарог. <st>Послов.</st>, <t>о частом щипании гороха</t>. <src>Дсл.</src>`); `lang="orv"` marks an Old Russian / Old Belarusian quoted passage (Cz `ча́ра`) |
 | `<src>` | source, becomes link | `Ар.`, `Гсл.`, `Нсл. 119.`, `Стаішча Чаш. (Ксл.)`, long bibliographic refs stay whole (`Азбукін: Ґеоґрафія Эўропы, 1924`); single-letter `С.` bolded as `<src><b>С.</b></src>`; a source printed inside parens keeps them IN the tag (`<src>(Ксл.)</src>`, `<src>(Ар.)</src>`, `<src>(НК)</src>` — Cz); song/popular-lore attributions stay whole `<src>` (`Из песни, Войш.`, `Из нар. песни.`, `З купальскае песьні.` — Cz) |
 | `<st>` | register/style marker, italic, linkable | `хим.`, `биол.`, `рел.`, `муз.`, `ист. мор.`, `област.`, `перен.`, `Послов.`; may attach case (`послов.`). Before a sense dash: `<n>1.</n> <st>презр.</st>—<t>кровь. …` (Ju юшка 1); at an `<ex>` tail, with a trailing comma when followed by a source: `<ex>Які добры пан! … <st>Насм. пословица,</st> <src>Нсл.</src></ex>` (Ju юшка 2), also `<st>Поговор.</st>`; a parenthetical usage note inside `<g>` may also be a `<st>` (see §6). An embedded `<p>` inside `<st>` stays plain (non-italic): `<st><p>презр.</p></st>` renders `<span class="st"><span class="p">презр.</span></span>` (Ju `юха́`) |
 | `<i>` | italic gloss container | `См. …`/`Ср. …` cross-reference tails, other gloss notes; `lang="vl"` marks a Belarusian-language quoted word/fragment inside a Russian `<t>` gloss (`<i lang="vl">"не"</i>` — N, Jo), `excl="true"` keeps a quoted fragment out of the translation/content index (`<i excl="true">"а (я)"</i>` — N); both render italic |
@@ -89,10 +94,19 @@ attribute-pinned sees are strict.
 
 ## 4. Entry shapes (canonical)
 
+Every shape below is the BODY of one `<entry>` block; wrap it in `<entry>` /
+`</entry>`. The shapes omit the wrapper only to keep them readable. The first
+shape shows the full block:
+
 Simple:
 ```xml
+<entry>
 •<hw>ґорс</hw><g>-са, м.</g>—<t>выемка … груди, <src>Нсл. 119.</src> декольте. <src>БНсл.</src></t>
+</entry>
 ```
+
+All other shapes show only the body (insert it between `<entry>` and
+`</entry>`):
 
 Variant headwords (each its own `<hw>`, per-variant sources before the shared `<g>`):
 ```xml
@@ -306,6 +320,15 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
   `<src>Нсл. 119.</src>`; the trailing `.` follows the raw. When a page ref closes
   a `<t>`, the sentence-final period may instead be placed after `</t>`
   (Y `ы́хаць`/`ыт` — see §9).
+- **Keep the printed punctuation before an embedded `<src>`.** A `.` in
+  `<t>черноглазый. <src>ЗСД 213</src></t>` stays a period — never rewrite it as
+  a `,` and never move it into/out of the source. `tools/fix_tag_punctuation.py`
+  lists every tag pair whose closing tag is immediately followed by punctuation,
+  shows the pair before and after moving that punctuation inside the closing tag,
+  and lets you skip, accept, or type a replacement. The list is exhaustive, so
+  skip an `<hw>`/`<see>` candidate whose punctuation must stay outside the
+  headword or link target. `tools/search_xml.py` searches every dictionary `*.xml`
+  recursively, since Explorer cannot search several files at once.
 - **Source abbreviations**: never "correct" `Гсл.`, `Ксл.` etc. into `Гел.`,
   `Кел.` etc.; the reverse normalization IS expected instead (`Гел.` → `Гсл.`,
   `Кел.` → `Ксл.`). Same for `Шел.`→`Шсл.` (Y `ых`) and `Бясл.`→`Бяльсл.`.
@@ -360,15 +383,16 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
    including `см. под` entries, unreadable dot runs, and uncertain fragments.
 5. **Tags balanced and nested correctly.** `<hw>` inside `<hw>` only when the raw
    really nests it; no crossed pairs; `<br />` self-closed.
-6. **Structural separators.** `<sense>`/`<d>` blocks separated by `<br />`, entry
-   blocks by a blank line.
+6. **Structural separators.** `<sense>`/`<d>` blocks separated by `<br />`; every
+   headword is one `<entry>`…`</entry>` block; entry blocks separated by a blank
+   line.
 7. **Identity.** Homonym numerals inside `<hw>`; every colliding plain headword
    has a unique `<entry id>`; `<see>` targets spell the real headword.
 8. **Spacing.** `•` abuts `<hw>`; `—` abuts the preceding tag; `,`/`:`/`;` follow
    `</hw>` directly; no stray space inside tags.
 9. **Attributes.** Only schema attributes (`entry:id`, `hw:id,excl,keep-acc`,
-   `g:hw`, `see:entry,hw,syn`, `sense:n`, `i:lang,excl`, `lang:code`) — no `tp`,
-   no `lvl`, no `link`, no `#` fragments.
+   `g:hw`, `see:entry,hw,syn`, `sense:n`, `ex:lang`, `i:lang,excl`, `p:lang`,
+   `lang:code`) — no `tp`, no `lvl`, no `link`, no `#` fragments.
 10. **Encoding.** UTF-8, Cyrillic intact, combining accents preserved.
 
 ## 12. Failure modes (what goes wrong and how to avoid it)

@@ -372,6 +372,26 @@ def reindex_entry(entry_id, xml_text):
         connection.close()
 
 
+def delete_entry(entry_id):
+    db_path = get_paths()['database']
+    if not os.path.exists(db_path):
+        return False
+    connection = sqlite3.connect(db_path)
+    try:
+        cursor = connection.cursor()
+        cursor.execute(_SQLITE_SYNCHRONOUS_OFF)
+        exists = cursor.execute(
+            "SELECT 1 FROM dictionary WHERE id = ?", (entry_id,)
+        ).fetchone()
+        if exists is None:
+            return False
+        _delete_rows(cursor, 'id', entry_id)
+        connection.commit()
+        return True
+    finally:
+        connection.close()
+
+
 def insert_entry(entry, source_file, main_entry_id):
     headword_elements = []
     t_elements = []

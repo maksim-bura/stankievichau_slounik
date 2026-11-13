@@ -6,7 +6,8 @@ from dictionary_app.theme.styles import (
     COLOR_NORMAL_BG, COLOR_SELECTED_BG,
 )
 from dictionary_app.utils.item_roles import (
-    ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_SOURCE_FILE,
+    ROLE_ENTRY_ID, ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_OCCURRENCE,
+    ROLE_SOURCE_FILE,
 )
 from dictionary_app.widgets.eliding_delegate import ElidingDelegate
 from markup_app.theme.layout_constants import LIST_ITEM_BORDER_WIDTH
@@ -48,8 +49,15 @@ class BorderDelegate(ElidingDelegate):
 
         source_file = index.data(ROLE_SOURCE_FILE)
         headword = index.data(ROLE_HEADWORD)
+        entry_id = index.data(ROLE_ENTRY_ID)
         entry_link = index.data(ROLE_ENTRY_LINK)
-        is_checked = source_file and headword and self._checked_state.is_checked(source_file, entry_link, headword)
+        occurrence = index.data(ROLE_OCCURRENCE)
+        is_checked = (
+            source_file and headword and entry_id is not None
+            and self._checked_state.is_checked(
+                source_file, entry_id, entry_link, headword,
+                occurrence if occurrence is not None else 0)
+        )
         is_selected = bool(option.state & QStyle.State_Selected)
         is_hovered = index.row() == self._hovered_row
 

@@ -9,10 +9,13 @@ from markup_app.services.broken_link_analyzer import OUTCOME_RESOLVED, attr_matc
 
 def format_link_tooltip(deps, title):
     lines = [html.escape(title)]
+    grouped = {}
     for dep in deps:
-        hw_label = ', '.join(dep['hws'])
+        label = ', '.join(dep['hws'])
+        grouped.setdefault(label, []).append(html.escape(dep['raw']))
+    for label, raws in grouped.items():
         lines.append(
-            f'&bull; <b>{html.escape(hw_label)}</b>: {html.escape(dep["raw"])}'
+            f'&bull; <b>{html.escape(label)}</b>: {", ".join(raws)}'
         )
     return '<br>'.join(lines)
 

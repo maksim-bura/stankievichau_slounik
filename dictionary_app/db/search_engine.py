@@ -13,6 +13,7 @@ from dictionary_app.format.highlight_formatter import HighlightFormatter
 
 _PARSED_CACHE_MAX_SIZE = 512
 _PREVIEW_CACHE_MAX_SIZE = 2048
+_HEADWORD_CACHE_MAX_SIZE = 256
 _TRIGRAM_MIN_SPAN = 3
 
 _EMPTY_ENTRY_ROW = (None, None, None, None, None, None, None)
@@ -72,6 +73,7 @@ class SearchEngine:
         self._connection = None
         self._parsed_cache = OrderedDict()
         self._preview_cache = OrderedDict()
+        self._headword_cache = OrderedDict()
         self._highlight_formatter = HighlightFormatter()
 
     def _get_connection(self):
@@ -85,10 +87,12 @@ class SearchEngine:
             self._connection = None
         self._parsed_cache.clear()
         self._preview_cache.clear()
+        self._headword_cache.clear()
 
     def invalidate_entry(self, entry_id):
         self._parsed_cache.pop(entry_id, None)
         self._preview_cache.clear()
+        self._headword_cache.clear()
 
     def get_parsed_entry(self, entry_id, xml_string=None):
         if entry_id in self._parsed_cache:
@@ -352,11 +356,23 @@ class SearchEngine:
             return rows[0]
         return None
 
+    def _remember_headword(self, key, result):
+        self._headword_cache[key] = result
+        self._headword_cache.move_to_end(key)
+        while len(self._headword_cache) > _HEADWORD_CACHE_MAX_SIZE:
+            self._headword_cache.popitem(last=False)
+        return result
+
     def get_entry_by_headword(self, headword, exact_headword=False):
+        cache_key = (headword, exact_headword)
+        cached = self._headword_cache.get(cache_key)
+        if cached is not None:
+            self._headword_cache.move_to_end(cache_key)
+            return cached
         if exact_headword:
             exact_row = self._get_exact_headword(headword)
             if exact_row is not None:
-                return exact_row
+                return self._remember_headword(cache_key, exact_row)
         exact = remove_accents(headword)
         search_lower = exact.lower()
         conn = self._get_connection()
@@ -392,8 +408,8 @@ class SearchEngine:
 
         filtered = [row for (_, matched), row in matches.items() if remove_accents(matched) == exact]
         if len(filtered) == 1:
-            return filtered[0]
-        return _EMPTY_ENTRY_ROW
+            return self._remember_headword(cache_key, filtered[0])
+        return self._remember_headword(cache_key, _EMPTY_ENTRY_ROW)
 
     def get_entry_by_link(self, entry_link):
         result = self._get_entry_row("dictionary.entry_link = ?", entry_link)

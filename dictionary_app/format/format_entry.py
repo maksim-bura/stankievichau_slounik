@@ -6,8 +6,10 @@ from .source_mapper import source_mapper
 from dictionary_app.utils.remove_accents import remove_accents
 from dictionary_app.utils.normalize_headword import strip_quotes
 from dictionary_app.utils.extract_content_text import d_hw_variants
-from dictionary_app.utils.constants import ARROW_MARKER, SENSE_ANCHOR_PREFIX
-from dictionary_app.utils.xml_schema import ATTR_ID, ATTR_HW, ATTR_ENTRY, ATTR_N, ATTR_KEEP_ACC
+from dictionary_app.utils.constants import (
+    ARROW_MARKER, ENTRY_BULLET, SENSE_ANCHOR_PREFIX,
+)
+from dictionary_app.utils.xml_schema import ATTR_ID, ATTR_HW, ATTR_ENTRY, ATTR_N, ATTR_KEEP_ACC, ATTR_EXCL
 
 _ITALIC_TEXT_TAGS = {'g', 'ex', 'i', 'st', 'see'}
 
@@ -16,6 +18,12 @@ _PLAIN_PAREN_TAGS = _ITALIC_TEXT_TAGS | {'hw', 'lang'}
 _PAREN_WRAP_RE = re.compile(r'[()]')
 
 _BOLD_BRACKET_TAGS = {'hw', 'src', 'st'}
+
+_EXCLUDED_CHAR = '\x00'
+
+_SUBENTRY_INDENT = (
+    f'<span class="subentry-indent">{ENTRY_BULLET}</span>'
+)
 
 _TAG_CLASSES = {
     'hw': 'hw',
@@ -33,6 +41,80 @@ _TAG_CLASSES = {
 
 def _get_class_for_tag(tag):
     return _TAG_CLASSES.get(tag, '')
+
+
+def _text_char_html_positions(inner_html):
+    positions = []
+    in_tag = False
+    for index, char in enumerate(inner_html):
+        if in_tag:
+            if char == '>':
+                in_tag = False
+        elif char == '<':
+            in_tag = True
+        else:
+            positions.append(index)
+    return positions
+
+
+def _mask_excluded_text(element):
+    parts = []
+    if element.text:
+        parts.append(_EXCLUDED_CHAR * len(element.text))
+    for child in element:
+        parts.append(_mask_excluded_text(child))
+        if child.tail:
+            parts.append(_EXCLUDED_CHAR * len(child.tail))
+    return ''.join(parts)
+
+
+def _source_match_text(element):
+    parts = []
+    if element.text:
+        parts.append(element.text)
+    for child in element:
+        if child.get(ATTR_EXCL) is not None:
+            parts.append(_mask_excluded_text(child))
+        else:
+            parts.append(_source_match_text(child))
+        if child.tail:
+            parts.append(child.tail)
+    return ''.join(parts)
+
+
+def _link_abbreviations(inner_html, source_text, abbreviations, tag):
+    if not abbreviations:
+        return inner_html
+    char_positions = _text_char_html_positions(inner_html)
+    if not char_positions:
+        return inner_html
+    matches = []
+    search_from = 0
+    for abbr, variant in abbreviations:
+        start = source_text.find(variant, search_from)
+        if start == -1:
+            continue
+        end = min(start + len(variant), len(char_positions))
+        if start >= end:
+            continue
+        matches.append((start, end, abbr))
+        search_from = start + len(variant)
+    if not matches:
+        return inner_html
+    result_parts = []
+    html_cursor = 0
+    for start, end, abbr in matches:
+        html_start = char_positions[start]
+        html_end = char_positions[end - 1] + 1
+        if html_start < html_cursor:
+            continue
+        result_parts.append(inner_html[html_cursor:html_start])
+        result_parts.append(LinkHandler.create_link(
+            tag, abbr, inner_html[html_start:html_end]
+        ))
+        html_cursor = html_end
+    result_parts.append(inner_html[html_cursor:])
+    return ''.join(result_parts)
 
 
 def _find_bracket_bold(element):
@@ -190,6 +272,15 @@ def _d_variants(element):
     return [remove_accents(text) for text in d_hw_variants(element)]
 
 
+def _follows_line_break(children, index):
+    if index == 0:
+        return False
+    previous = children[index - 1]
+    if previous.tag != 'br':
+        return False
+    return not (previous.tail or '').strip()
+
+
 def process_element(element, context, is_sources=False, current_variants=None):
     parts = []
     children = list(element)
@@ -204,7 +295,7 @@ def process_element(element, context, is_sources=False, current_variants=None):
     if element.text:
         parts.append(plain_parens(element.text) if element.tag in _PLAIN_PAREN_TAGS else element.text)
 
-    for child in children:
+    for index, child in enumerate(children):
         new_variants = current_variants
         if child.tag == 'd':
             d_variants = _d_variants(child)
@@ -237,95 +328,30 @@ def process_element(element, context, is_sources=False, current_variants=None):
 
         if LinkHandler.is_link_tag(child.tag):
             if child.tag in ('src', 'st'):
-                inner_html_parts = []
-                for inner_child in child:
-                    if inner_child.tag == 'b':
-                        inner_html_parts.append(f'<b>{inner_child.text}</b>')
-                    elif inner_child.tag == 'i':
-                        inner_html_parts.append(f'<i>{inner_child.text}</i>')
-                    elif inner_child.tag == 'p':
-                        inner_html_parts.append(f'<span class="p">{inner_child.text}</span>')
-                    else:
-                        if inner_child.text:
-                            inner_html_parts.append(inner_child.text)
-                    if inner_child.tail:
-                        inner_html_parts.append(inner_child.tail)
-                if child.text:
-                    inner_html_parts.insert(0, child.text)
-                source_text = ''.join(child.itertext()).strip()
-                inner_html = ''.join(inner_html_parts).strip()
+                source_text = _source_match_text(child)
+                inner_html = process_element(
+                    child, context, is_sources, new_variants
+                )
 
-                if source_text:
-                    abbreviations = source_mapper.extract_abbreviations(source_text)
+                if source_text.strip():
+                    abbreviations = source_mapper.extract_abbreviations(
+                        source_text
+                    )
 
                     def _wrap_src(content):
                         if child.tag == 'src':
                             return f'<span class="src">{content}</span>'
-                        if child.tag == 'st':
-                            return f'<span class="st">{plain_parens(content)}</span>'
-                        return content
+                        return (
+                            '<span class="st">'
+                            + plain_parens(content)
+                            + '</span>'
+                        )
 
-                    if not abbreviations:
-                        parts.append(_wrap_src(inner_html))
-                    elif len(abbreviations) > 1:
-                        abbrevs_with_positions = []
-                        for abbr, variant in abbreviations:
-                            pos = source_text.find(variant)
-                            if pos != -1:
-                                abbrevs_with_positions.append((pos, abbr, variant))
-                        abbrevs_with_positions.sort(key=lambda x: x[0])
-
-                        result_parts = []
-                        current_pos = 0
-                        for pos, abbr, variant in abbrevs_with_positions:
-                            if pos > current_pos:
-                                result_parts.append(inner_html[current_pos:pos])
-                            result_parts.append(LinkHandler.create_link(child.tag, abbr, inner_html[pos:pos + len(variant)]))
-                            current_pos = pos + len(variant)
-                        if current_pos < len(inner_html):
-                            result_parts.append(inner_html[current_pos:])
-                        parts.append(_wrap_src(''.join(result_parts)))
-                    else:
-                        abbr, variant = abbreviations[0]
-                        pos = source_text.find(variant)
-                        if pos != -1:
-                            html_pos = 0
-                            text_pos = 0
-                            i = 0
-                            in_tag = False
-                            while i < len(inner_html) and text_pos < pos:
-                                if inner_html[i] == '<':
-                                    in_tag = True
-                                elif inner_html[i] == '>':
-                                    in_tag = False
-                                elif not in_tag:
-                                    text_pos += 1
-                                i += 1
-                            html_pos = i
-
-                            variant_len = len(variant)
-                            i = html_pos
-                            text_pos = 0
-                            in_tag = False
-                            while i < len(inner_html) and text_pos < variant_len:
-                                if inner_html[i] == '<':
-                                    in_tag = True
-                                elif inner_html[i] == '>':
-                                    in_tag = False
-                                elif not in_tag:
-                                    text_pos += 1
-                                i += 1
-                            variant_html_end = i
-
-                            result_parts = []
-                            if html_pos > 0:
-                                result_parts.append(inner_html[:html_pos])
-                            result_parts.append(LinkHandler.create_link(child.tag, abbr, inner_html[html_pos:variant_html_end]))
-                            if variant_html_end < len(inner_html):
-                                result_parts.append(inner_html[variant_html_end:])
-                            parts.append(_wrap_src(''.join(result_parts)))
-                        else:
-                            parts.append(_wrap_src(inner_html))
+                    parts.append(_wrap_src(
+                        _link_abbreviations(
+                            inner_html, source_text, abbreviations, child.tag
+                        )
+                    ))
                 else:
                     parts.append('')
             else:
@@ -356,6 +382,9 @@ def process_element(element, context, is_sources=False, current_variants=None):
                     parts.append(f'<span class="see">{plain_parens(display_text)}</span>')
         else:
             inner_parts = []
+
+            if child.tag == 'd' and _follows_line_break(children, index):
+                inner_parts.append(_SUBENTRY_INDENT)
 
             if is_target_headword:
                 inner_parts.append(f'<span class="headword-arrow">{ARROW_MARKER}</span>')
@@ -396,13 +425,6 @@ def process_element(element, context, is_sources=False, current_variants=None):
                 parts.append(inner_html)
 
         if child.tail:
-            if child.tag == 'g' and child.tail.startswith(','):
-                comma = child.tail[0]
-                remaining = child.tail[1:]
-                if element.tag in _ITALIC_TEXT_TAGS:
-                    remaining = plain_parens(remaining)
-                parts.append(f'<span class="g">{comma}</span>{remaining}')
-            else:
-                parts.append(plain_parens(child.tail) if element.tag in _PLAIN_PAREN_TAGS else child.tail)
+            parts.append(plain_parens(child.tail) if element.tag in _PLAIN_PAREN_TAGS else child.tail)
 
     return ''.join(parts)
