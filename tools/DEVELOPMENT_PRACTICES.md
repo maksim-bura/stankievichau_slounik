@@ -679,6 +679,7 @@ applications and is not gitignored. Nothing in `dictionary_app/` or
 | `search_xml.py` | grep-like recursive text search across the marked-up XML corpus (see below) | `py -3 tools/search_xml.py "слова"` |
 | `search_xml_app.pyw` | double-clickable window around `search_xml.py`: type a query, press Enter, see headwords and snippets (see below) | double-click `tools/search_xml_app.pyw` |
 | `fix_tag_punctuation.py` | move punctuation that follows a closing tag inside that tag, one reviewed candidate at a time (see below) | `py -3 tools/fix_tag_punctuation.py` (Enter = skip, `y` = accept, other text = replacement; `--apply` accepts all) |
+| `compare_raw_markup.py` | raw-OCR vs marked-up XML: coverage per letter and convention census (see below) | `py -3 tools/compare_raw_markup.py --coverage` |
 
 ### 9.1 `read_codebase.py` — map a repo quickly
 
@@ -1079,6 +1080,46 @@ py -3 tools/search_xml.py "грыжа" --count
 py -3 tools/search_xml.py "Ар." --glob "*.xml" --limit 0
 ```
 
+### 9.13 `compare_raw_markup.py` — raw OCR vs marked-up XML
+
+Answers "how much of this letter is marked up, and which conventions does its
+XML use" without reading either file. Pairs
+`dictionary_app/data/dictionary/dictionary_<X>.xml` with
+`markup_app/data/dictionary_raw/dictionary_<X>_raw.txt` by the `<X>` suffix; a
+missing partner is reported and skipped.
+
+`--coverage` aligns XML entries to raw `•` blocks in print order (accent-free
+fuzzy text match, order-preserving) and prints per letter: raw blocks, XML
+entries, aligned pairs, consumed and skipped blocks, remaining blocks, and the
+last covered raw preview. It then lists the XML entries that match no block (an
+order deviation or a reworked entry) and the raw blocks skipped inside the
+covered range (a `см. под` entry the user deleted, or a block printed out of
+order).
+
+`--conventions` prints per file: `<hw>`/`<g>` acute/grave counts, split-source
+runs (`</src>; <src>`), the two `<br>` forms, `syn="true"` uses, `<see>`
+attribute combinations, `<lang code>` values, `<p>` count, and ASCII vs curly
+apostrophes.
+
+| flag | purpose |
+|---|---|
+| `--root DIR` | repo root |
+| `--letter X` | one letter only |
+| `--limit N` | printed finding rows per letter, `0` = all (default 10) |
+
+```powershell
+$env:PYTHONUTF8="1"
+py -3 tools/compare_raw_markup.py --coverage
+py -3 tools/compare_raw_markup.py --coverage --letter Cz --limit 0
+py -3 tools/compare_raw_markup.py --conventions --letter Cz
+```
+
+It is a locator, not a judge: a skipped block may be a deleted cross-reference
+or a real gap, and an unmatched entry may be a deliberate move. Read only the
+flagged blocks. The alignment assumes one bullet per printed headword and print
+order; a transposed pair shows up as two findings. Exit `0` when the report ran,
+`1` when a paired file is missing or unreadable.
+
 ## 10. Exit codes
 
 Scripts exit `0` on success and `1` on findings/failures. `search_xml.py`
@@ -1096,6 +1137,8 @@ the search script is a generic recursive grep with a data-folder default.
 `export_*.py` scripts (§9.10) are
 the exception: they import `dictionary_app` and encode this corpus's `<hw>` /
 `<sep />` / `<see hw>` shapes, so copy them only when the target repo has the
-same schema (the `write_workbook` writer itself is generic). For per-repo policy,
+same schema (the `write_workbook` writer itself is generic).
+`compare_raw_markup.py` (§9.13) hard-codes this repo's raw/XML folder layout and
+`dictionary_<X>` naming; the alignment logic is reusable, the paths are not. For per-repo policy,
 write a local config and a plan JSON (populate from the repo's actual module
 names).

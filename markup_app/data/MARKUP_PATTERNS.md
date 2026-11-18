@@ -21,12 +21,14 @@ Raw format facts that drive the splitting:
 
 - **Every headword is wrapped in `<entry>`…`</entry>`.** The tags of one headword
   form the entry BODY; the body always sits inside the wrapper. In the XML file
-  the wrapper is at column 0 with a blank line between blocks; a processed
-  fragment file (`dictionary_<letter>_processed.txt`) holds the same `<entry>`
-  blocks in the same order, blank-line-separated, with no `<dictionary>` root.
+  the wrapper is at column 0 with a blank line between blocks.
 - Each printed headword starts with a `•` bullet: `•ся́драва, нареч.—холодновато.`
 - A raw line/block may contain **several** bullet-led headwords joined by `,`
-  (`•ґазалі́на-…, •ґазамэтра-…`) — each `•` becomes its own `<entry>`.
+  (`•ґазалі́на-…, •ґазамэтра-…`) — each `•` becomes its own `<entry>`, in the
+  order the bullets appear, left to right. A merged line is layout, not a sort:
+  never re-order its bullets even when the pair looks alphabetically wrong (Cz
+  `•чарот…, •чапы́жнік…` keeps чарот first). The printed order is the only
+  authority.
 - A raw block may also hide a related sub-word inside the same paragraph
   (`•ґарсэт, … •ґарсэтніца, …`); split those too.
 - Blank lines separate printed blocks; they do **not** map 1:1 to entries.
@@ -41,8 +43,9 @@ never the whole file at once.
 1. **Read the raw chunk** from the `_raw.txt`, plus the tail of the target XML
    to know the last entry written. Do not re-read the whole XML file.
 2. **Split the chunk into entry units** at every `•`, including the merged and
-   comma-joined ones. Missing a `•` is the most expensive error: that headword
-   silently disappears from the dictionary.
+   comma-joined ones, keeping their left-to-right order (§1). Missing a `•` is
+   the most expensive error: that headword silently disappears from the
+   dictionary.
 3. **Transcribe one entry at a time** into the canonical shape (see §4), using
    the tag table in §3 and the conventions in §5–§8.
 4. **Apply OCR fixes** from §9, including the `г`/`ґ` family rule. Fix only what
@@ -61,17 +64,17 @@ never the whole file at once.
 |---|---|---|
 | `<hw>` | headword (bold, clickable anchor) | one per spelling variant; multi-word headwords like `ґазавая ґрана́та`; homonym numerals nested: `<hw>гале́ра <n>ІІ</n></hw>`; disambiguation links see §8; `excl="true"` marks a display-only variant that is kept out of the entry list and all logic except display + the pointing-finger (`👉`), e.g. `•<hw excl="true">ёсьць</hw>, <hw>ёсьцяка</hw>` (see `dictionary_app/AGENTS.md` → `<hw excl="true">`); an inflected/cognate variant shown alongside the main form may be italicized INSIDE `<hw>`: `<hw>Юр'е</hw>, <hw><i>Юр'я</i></hw>` (Ju); `keep-acc="true"` marks a headword whose combining accents are load-bearing and must be PRESERVED (never stripped) for display, list identity, search, and `<see>` resolution — used on the Cz `ча́паць`/`чапа́ць` family |
 | `<g>` | grammar/declension, italic | declension starts with `-`: `-са, м.`; standalone markers: `нареч.`, `местоим.`, `союз`, `соверш.`, `несоверш.`, `безлич.`, `однкр.`, `средн.`, `прич.`, `отгл. имя сущ.`; may embed `<st>`, `<see>`, `<p>`, `<src>`, even `<hw>` (`один <hw>ґалёш</hw>`) |
-| `<t>` | Russian translation; also appears nested INSIDE an `<ex>` as a Russian gloss of a proverb/idiom | transcription, multiple `<t>` per sense allowed; sources and `—` separators inside (H `гарох`: `<ex>Хадзі̀ма ў гарох <t>(знач. щипать горох)</t>. <src>Ст.</src></ex>`) |
+| `<t>` | Russian translation; also appears nested INSIDE an `<ex>` as a Russian gloss of a proverb/idiom | transcription, multiple `<t>` per sense allowed; sources and `—` separators inside (H `гарох`: `<ex>Хадзі̀ма ў гарох <t>(знач. щипать горох)</t>. <src>Ст.</src></ex>`); a parenthetical Russian note inside a Belarusian `<ex>` is its own `<t>` (`надзявай<t>(  зн. узкие)</t>` — Cz); an unreadable gloss stays a dot run `<t>.....</t>`, never empty |
 | `<ex>` | Belarusian example, italic, srcless or `<src>`-tagged | may embed a Russian `<t>` gloss and/or `<st>Послов.</st>` (H `гарох`: `Ідзе гарох, там сем дарог. <st>Послов.</st>, <t>о частом щипании гороха</t>. <src>Дсл.</src>`); `lang="orv"` marks an Old Russian / Old Belarusian quoted passage (Cz `ча́ра`) |
-| `<src>` | source, becomes link | `Ар.`, `Гсл.`, `Нсл. 119.`, `Стаішча Чаш. (Ксл.)`, long bibliographic refs stay whole (`Азбукін: Ґеоґрафія Эўропы, 1924`); single-letter `С.` bolded as `<src><b>С.</b></src>`; a source printed inside parens keeps them IN the tag (`<src>(Ксл.)</src>`, `<src>(Ар.)</src>`, `<src>(НК)</src>` — Cz); song/popular-lore attributions stay whole `<src>` (`Из песни, Войш.`, `Из нар. песни.`, `З купальскае песьні.` — Cz) |
+| `<src>` | source, becomes link | `Ар.`, `Гсл.`, `Нсл. 119.`, `Стаішча Чаш. (Ксл.)`, long bibliographic refs stay whole (`Азбукін: Ґеоґрафія Эўропы, 1924`); single-letter `С.` bolded as `<src><b>С.</b></src>`; a source printed inside parens keeps them IN the tag (`<src>(Ксл.)</src>`, `<src>(Ар.)</src>`, `<src>(НК)</src>` — Cz); song/popular-lore attributions stay whole `<src>` (`Из песни, Войш.`, `Из нар. песни.`, `З купальскае песьні.` — Cz); a printed source RUN is one tag with its own separators inside (`<src>Ар.; Ксл.; Шсл.</src>`, `<src>Барсл., Пол., Лепл. (Юхн.).</src>`) — never one `<src>` per abbreviation (Cz review removed 97 split tags); `<st>`/`<i>` may nest inside it (`<src>Ст. Слабада, …, <st>област.</st> Люц. пав.</src>`, `<src>Ст.( <i>под <see>адбівацца</see></i>).</src>` — Cz) |
 | `<st>` | register/style marker, italic, linkable | `хим.`, `биол.`, `рел.`, `муз.`, `ист. мор.`, `област.`, `перен.`, `Послов.`; may attach case (`послов.`). Before a sense dash: `<n>1.</n> <st>презр.</st>—<t>кровь. …` (Ju юшка 1); at an `<ex>` tail, with a trailing comma when followed by a source: `<ex>Які добры пан! … <st>Насм. пословица,</st> <src>Нсл.</src></ex>` (Ju юшка 2), also `<st>Поговор.</st>`; a parenthetical usage note inside `<g>` may also be a `<st>` (see §6). An embedded `<p>` inside `<st>` stays plain (non-italic): `<st><p>презр.</p></st>` renders `<span class="st"><span class="p">презр.</span></span>` (Ju `юха́`) |
 | `<i>` | italic gloss container | `См. …`/`Ср. …` cross-reference tails, other gloss notes; `lang="vl"` marks a Belarusian-language quoted word/fragment inside a Russian `<t>` gloss (`<i lang="vl">"не"</i>` — N, Jo), `excl="true"` keeps a quoted fragment out of the translation/content index (`<i excl="true">"а (я)"</i>` — N); both render italic |
-| `<lang code="…">` | quoted-language fragment, style-inheriting | same as `<i lang="…">` but without forcing italic: formatting (bold/italic/plain) inherits from the surrounding tag; exclusion rules identical to the `lang` attribute — `code="vl"` keeps a Belarusian fragment out of the `<t>` content index/highlight, `code="la"` keeps a Latin fragment out of the same, `code="ru"` out of the `<ex>` index/highlight, `excl="true"` (any value) out of the translation index (Ju `юха́`: `<t><i excl="true">ударение на <lang code="vl">ю</lang></i>—молодец. <src>Нсл. 725.</src></t>`) |
-| `<see>` | cross-reference, italic | inside `<i>`, `<g>`, or `<t>` glosses (see §7) |
+| `<lang code="…">` | quoted-language fragment, style-inheriting | same as `<i lang="…">` but without forcing italic: formatting (bold/italic/plain) inherits from the surrounding tag; exclusion rules identical to the `lang` attribute — `code="vl"` keeps a Belarusian fragment out of the `<t>` content index/highlight, `code="la"` keeps a Latin fragment out of the same, `code="ru"` out of the `<ex>` index/highlight, `excl="true"` (any value) out of the translation index (Ju `юха́`: `<t><i excl="true">ударение на <lang code="vl">ю</lang></i>—молодец. <src>Нсл. 725.</src></t>`); Latin taxonomic names use `code="la"` (`<lang code="la">Stellaria graminea L©</lang>` — Cz `чапняк`), not `<i>` |
+| `<see>` | cross-reference, italic | inside `<i>`, `<g>`, or `<t>` glosses; `syn="true"` marks a synonym pointer, which is NOT a translation and is never wrapped in `<t>`: `—<see syn="true">чалесьнік</see>. <src>Растсл.</src>` (see §7) |
 | `<sense n="…">` | numbered/lettered sense block | `<n>1.</n>` numeric or `<n>а)</n>` lettered; `<br />` between senses |
 | `<n>` | sense number AND homonym numeral | `<n>1.</n>`, `<n>2.</n>`, `<n>а)</n>`, homonym `<hw>… <n>ІІ</n></hw>` |
 | `<d>` | sub-dictionary block with own `<hw>` | phrasal sub-headwords and morphological family blocks; separated by `<br />`; may nest inside a `<sense>` OR contain its own lettered/numbered `<sense>` blocks (see §4, S `вы́смаргнуць`/`абсморганы`) |
-| `<p>` | literal parens inside declension/headword strings, or a plain-text child inside `<st>`/`<src>` | keeps `(`/`)` out of italic side effects: `<g>-чу<p>(</p>чаю<p>)</p>…` — **optional/redundant**: the renderer auto-keeps parens non-italic inside `<g>`/`<i>`/`<ex>`/`<st>`/`<see>` even without `<p>` (see `dictionary_app/AGENTS.md` → Entry Formatting: Paren rule). Take-over from raw print stays verbatim: bare parens in italic tags render plain automatically. Also used to mark a variant spelling's `г` as plain inside a bold `<hw>` (`<hw><p>гірса</p></hw>` — G `ґірса`, where `гирса` is the г-spelled variant; treats the letter as non-bold like parens). Inside `<st>`/`<src>`/`<see>`, an embedded `<p>` child stays plain |
+| `<p>` | literal parens inside declension/headword strings, or a plain-text child inside `<st>`/`<src>` | keeps `(`/`)` out of italic side effects: `<g>-чу<p>(</p>чаю<p>)</p>…` — **optional/redundant**: the renderer auto-keeps parens non-italic inside `<g>`/`<i>`/`<ex>`/`<st>`/`<see>` even without `<p>` (see `dictionary_app/AGENTS.md` → Entry Formatting: Paren rule). Take-over from raw print stays verbatim: bare parens in italic tags render plain automatically. Also used to mark a variant spelling's `г` as plain inside a bold `<hw>` (`<hw><p>гірса</p></hw>` — G `ґірса`, where `гирса` is the г-spelled variant; treats the letter as non-bold like parens). Inside `<st>`/`<src>`/`<see>`, an embedded `<p>` child stays plain; a non-paren `<p>` pair keeps whatever it wraps non-italic too — a whole marker word inside `<i>` (`<i><p>Гл.</p> <see>зашчапіць</see>.</i>` — Cz) and a bold declension cluster inside `<g>` (`<g><p><b>-поў-пом,</b></p></g>` — Cz `чапы́`) |
 | `<b>` | bold text | `<b>С.</b>` inside `<src>`; headword-zone separators like `<hw>акалотам</hw><b>:</b>`; punctuation separators between variant `<hw>`s with their sources: `(<src>Нсл.</src>; <src>Ар.</src>)<b>,</b> <hw>смарга́ць</hw>`, `<hw>ёмшы</hw> <b>?</b>`, `<b>?,</b>` (Jo/S) |
 | `<br />` | block separator inside an entry | between senses, between `<d>` blocks |
 
@@ -153,6 +156,11 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
 •<hw>абагульня́ць</hw><g>-я̀ю-я̀еш-я̀е, несоверш., перех.</g>—<t>обобщать</t>. <d><g>Соверш.</g> <hw>абагу́льніць</hw><g>-ню-ніш-не</g>—<t>обобщить. <src>МГсл.</src></t></d> <d><g>Прич.</g> <hw>абагу́льнены</hw>.</d> <d><g>Отгл. имя сущ.</g> <hw>абагу́льненьне</hw>.</d>
 ```
 
+Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t>`:
+```xml
+•<hw>чале́шык</hw><g>-ка, м.</g>—<see syn="true">чалесьнік</see>. <src>Растсл.</src>
+```
+
 ## 5. Spacing and punctuation
 
 - `•` no space before `<hw>` (or `•<d><hw>`).
@@ -188,7 +196,10 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
   `<src>Нсл. 75.</src>`.
 - `<br />` is the canonical block separator; the equivalent `<br></br>` form also
   occurs in the data (A, N) and ElementTree treats both identically — either is
-  acceptable on input.
+  acceptable on input. The separator PRECEDES the block it opens (one `<br />`
+  line between two blocks, none after the last block), and the first `<d>` may
+  stay on the translation's line separated by one space
+  (`…</t> <d><g>Уменьш.</g> …` — Cz `чорны`).
 
 ## 6. Grammar and declension
 
@@ -217,6 +228,15 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
   `<g>м., <st>област.</st></g>` (Cz `чобат`); the raw's
   `увел.`/`прилаг.`/`соверш.` relative labels stay literal words in `<g>`:
   `<g>-гі, увел. от <see>чорт</see></g>`.
+- **Register markers stay outside the source.** A `<st>` is never moved inside
+  the `<src>` that follows it, `перен.`/`ирон.` stand as their own `<st>` beside
+  the `<t>`, and a marker qualifying one noun stays inside `<g>`
+  (`<g>м., <st>област.</st></g>` — Cz `чобат`). Sense-dash and `<ex>`-tail
+  placement are in §3 (`<st>` row).
+- **The two combining accents are not interchangeable:** `<hw>` takes the acute
+  U+0301, `<g>` (and its declension tails) takes the grave U+0300 — the checked
+  data observes this split with no exception. Mixing them inside one tag is an
+  error even when both render as an accent.
 - **Parenthetical usage note with an embedded proverb** (Ju `юры́ць`): the
   declension's `<g>` may carry a long parenthetical wrapped in `<st>`, and a
   proverb quoted inside is tagged `<ex>` even nested in the `<g>`/`<st>`:
@@ -227,6 +247,16 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
 - `См.`/`Ср.` tails: `<i>См. <see>газоўка</see>, <see>газулька</see>.</i>`;
   sense-targeted: `<i>См. <see>зык 3</see>.</i>`, `<see>смаргаць 4</see>`, also
   with a comma before the number: `<i>Ср. <see>юшка, 3</see>.</i>` (Ju юха 2).
+- **`Гл.` marker (Cz):** `Гл.` ("look") is a cross-reference marker kept PLAIN
+  inside `<i>` via `<p>`: `<i><p>Гл.</p> <see>зашчапіць</see>.</i>` (Cz
+  `зашчапіць`); unlike `См.` it is not italicized in the checked data.
+- **Synonym pointer — `syn="true"`:** a `<see syn="true">` standing in the
+  translation slot is a synonym, not a translation, so it is NEVER wrapped in
+  `<t>`: `—<see syn="true">чалесьнік</see>. <src>Растсл.</src>` (Cz `чале́шык`).
+  It may follow a real `<t>` gloss after the dash (Cz `чарэн`:
+  `…</t> — <see syn="true">чарэнь</see>.`). When the target must stay
+  accent-distinct, pin it with `hw=`: `<see hw="часіна́" syn="true">часіна̀</see>`
+  (Cz `часіна`).
 - **`см. под` (preserve):** when the raw entry reads `см. под X`, KEEP the phrase
   verbatim in the resulting markup — `<i>см. под <see>X</see>.</i>` — do NOT
   rewrite it to `См.` or fold it into a plain `<see>`. Transcription must not drop
@@ -283,9 +313,13 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
   `лри вопросе`→`при вопросе`). **`Пе`/`Пя`→`Ня`** in Cz examples where the
   negation `ня` was misprinted with `п` (`Пе чакай`→`Ня чакай`, `Пя відна`→`Ня відна`,
   `Пя чадзь`→`Ня чадзь`) — unmistakable by meaning; flag it if the user might
-  disagree. Digit OCR: `Но. 20, б.`→`Но. 20, 6.` (the letter `б` standing for the
-  digit `6` in issue refs — Cz `чарцю́га` example). Do NOT "fix" words that could
-  be deliberate (e.g. `Ґімназы̀сцкая хорма.` keeps `хорма`).
+  disagree. The reverse misprint also occurs — a printed `Н` standing for `П`:
+  `Навесь`→`Павесь`, `Надружкі`→`Падружкі`, `Наеду`→`Паеду` (Cz example text).
+  Fix the letter only where the printed word is not a real form: never "improve"
+  a plainly printed word (`нчараваў` stays). Digit OCR: `Но. 20, б.`→`Но. 20, 6.`
+  (the letter `б` standing for the digit `6` in issue refs — Cz `чарцю́га`
+  example). Do NOT "fix" words that could be deliberate
+  (e.g. `Ґімназы̀сцкая хорма.` keeps `хорма`).
 - **Declension tail OCR fixes** (raw base+suffix tails mangled):
   `«-ншы-нце»`→`-нты-нце`, `ґазаме́р-ера`→`-ѐра, предл.-ѐру`,
   `ґенара́ліха-іхі-ісв`→`-іхі-ісе`, `ґраната-алны-ацв`→`-ты-це`,
@@ -293,7 +327,10 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
   `ґеоґра́фка-$кі-$цы`→`-фкі-фцы`, `-н/, ж.`→`-ні, ж.` (Ju `юра́нь`).
   Cz: `ча́хнуць-нг-нсш-не`→`-ну-неш-не`, `чака́ць-аю-аеін-ав`→`-аю-аеш-ае`,
   `чаборавы-вая-вав`→`-вая-вае`, `адча́хацца-аюся-авшся`→`-аюся-аешся`,
-  `чаўны-ноў-нолі`→`-ноў-ном`.
+  `чаўны-ноў-нолі`→`-ноў-ном`, `чарапе́нь-йня`→`-пня̀`, `чапуру́ха-ўхі`→`-у̀хі`,
+  `частава́ць-сую`→`-тую`, `чацьве́рты-днага`→`-тага`,
+  `чацьвярта́к-ака`→`-така̀`, `часаме́р-ду`→`-ру`,
+  `чаркава́цца-куюся`→`-ку̀ся`.
 - **Headword fixes**: `ґейззр`→`ґейзэр`, `ґа́мл`→`ґа́ма` (ґама has declension
   `-мы-ме`), `ґе́мзазы`→`ґе́мза`; OCR headword corruptions proven by the
   dictionary's own example sentences: `кітрань`→`ю́трань`, `кішна`→`ю́шна`
@@ -338,7 +375,8 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
 - **Reference markers `ем.`/`ер.` → `См.`/`Ср.`** and drop the raw's mangled
   cross-ref casing.
 - **Accent marks**: combining accents U+0300 (grave) / U+0301 (acute) are
-  preserved as in the raw (`ґа́ґаць`, `да̀ўна`, `ґе́мза`, `ґіля̀`). Restore the
+  preserved as in the raw (`ґа́ґаць`, `да̀ўна`, `ґе́мза`, `ґіля̀`); which tag takes
+  which mark is fixed in §6 (`<hw>` acute, `<g>` grave). Restore the
   word's known-stress accent on a headword or split declension base even when the
   raw collation print omitted it (Ju `ю́хта`, `ю́шка <n>ІІ</n>`, `ю́шна`,
   `ю́трань`, `ю́траня`; `ґазаме́р-ера`→`-ѐра`; Cz `чарцю́га`). Do not guess accents
@@ -351,6 +389,13 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
   fully, append it, self-check, continue. Do not hold a whole letter in context.
 - **Read only the raw chunk + the XML tail.** `rg` in the raw file for the last
   marked-up headword, then read forward. Re-reading finished XML is wasted work.
+  A block missed earlier is only recoverable by appending it at the END, never
+  by inserting it where it seems to belong.
+- **Locate with the comparison tool, read only what it flags.**
+  `py -3 tools/compare_raw_markup.py --coverage` gives the untranscribed raw
+  blocks, the blocks skipped inside the covered range, and any entry that broke
+  print order; `--conventions` gives the per-file tag/accent/attribute census.
+  Read the flagged entries, not the whole letter.
 - **Reuse the shapes.** Most entries are one of the §4 shapes; copy the closest
   shape and substitute the text instead of composing tags from scratch.
 - **Use the existing entries as the template library.** When a construction is
@@ -378,12 +423,16 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
    `<entry>` blocks; none missing, none duplicated.
 3. **Print order preserved.** Existing `<entry>` blocks are untouched — never
    moved, re-sorted, or re-inserted; new entries are appended at the end in raw
-   order; no alphabetical sorting.
+   order; no alphabetical sorting, including within one merged raw line (§1).
+   `py -3 tools/compare_raw_markup.py --coverage` flags a re-ordered pair as one
+   unmatched XML entry (with an `order-hint`) plus the skipped raw block.
 4. **No content dropped.** Every raw sentence appears somewhere in the entry —
    including `см. под` entries, unreadable dot runs, and uncertain fragments.
 5. **Tags balanced and nested correctly.** `<hw>` inside `<hw>` only when the raw
    really nests it; no crossed pairs; `<br />` self-closed.
-6. **Structural separators.** `<sense>`/`<d>` blocks separated by `<br />`; every
+6. **Structural separators.** `<sense>`/`<d>` blocks separated by `<br />` (the
+   separator precedes each block, none trails the last one, no block packed onto
+   one line); every
    headword is one `<entry>`…`</entry>` block; entry blocks separated by a blank
    line.
 7. **Identity.** Homonym numerals inside `<hw>`; every colliding plain headword
@@ -393,7 +442,12 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
 9. **Attributes.** Only schema attributes (`entry:id`, `hw:id,excl,keep-acc`,
    `g:hw`, `see:entry,hw,syn`, `sense:n`, `ex:lang`, `i:lang,excl`, `p:lang`,
    `lang:code`) — no `tp`, no `lvl`, no `link`, no `#` fragments.
-10. **Encoding.** UTF-8, Cyrillic intact, combining accents preserved.
+10. **Source runs merged.** A run printed together is ONE `<src>`
+    (`<src>Ар.; Ксл.; Шсл.</src>`), never one tag per abbreviation; a
+    parenthesized run keeps its parens inside the tag.
+11. **Accent mark matches the tag.** `<hw>` carries U+0301, `<g>` carries U+0300
+    (§6); no tag mixes both, no accent was silently dropped.
+12. **Encoding.** UTF-8, Cyrillic intact, combining accents preserved.
 
 ## 12. Failure modes (what goes wrong and how to avoid it)
 
@@ -402,12 +456,17 @@ Family/derived-form blocks: a `<d>` whose first word is a marker label
 | A headword silently vanishes | a `•` inside a merged raw line was treated as punctuation | split at every `•`; check the bullet count (§11, item 2) |
 | An entry exists twice | the same raw block was appended twice after a context reset | track the last written headword; read the XML tail before appending |
 | File ends up alphabetized or reordered | "tidying" the file, or inserting a new entry in the middle | never sort or move blocks; print order is the invariant; append at the end |
+| An entry sits next to the wrong neighbour | a two-bullet raw line was split alphabetically, or a missed block was inserted where it "belongs" | split left to right (§1); append missed blocks at the end; run the coverage check (§11, item 3) |
 | Cross-refs point nowhere | `<see>` uses the raw's OCR spelling | normalize to the real headword; check with the broken-links filter in the markup app |
 | Homonyms collapse into one row | numeral printed outside `<hw>`, or no `<entry id>` on a colliding pair | numeral inside `<hw>`; unique `id` per colliding lexeme |
 | Italic leaks into parens/markers | relying on `<p>` only, or adding bold by hand | let the renderer handle parens/brackets; do not hand-add `<span>`/styles |
 | Data lost behind "cleanup" | "fixing" a word that was deliberately printed that way | §9: fix only proven OCR; keep unknowable fragments verbatim |
 | XML fails to parse | unclosed/misnested tag, unescaped `&`/`<` in text | parse check after each chunk; escape literal `&`/`<` |
 | Extra history noise in git | rewriting already-checked entries | append new work only; do not reformat finished blocks |
+| A source run explodes into many `<src>` tags | each abbreviation was copied as its own tag | keep the printed run inside ONE `<src>`; check §11, item 10 |
+| A synonym renders as a translation | `<see syn="true">` was wrapped in `<t>` | a synonym pointer stands bare in the translation slot (§7) |
+| Two blocks render as one paragraph | `</t> <d>` or `</sense> <sense>` without the separator | `<br />` before each block, none after the last (§5) |
+| A Latin name renders italic | taxonomic name put in `<i>` | `<lang code="la">…</lang>` inherits the surrounding style (§3) |
 
 ## 13. Verification and commit
 
