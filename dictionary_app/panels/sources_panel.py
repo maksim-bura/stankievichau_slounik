@@ -11,6 +11,7 @@ from dictionary_app.theme.layout_constants import (
 )
 from dictionary_app.widgets import IconButton, SearchBox, DictTextBrowser
 from dictionary_app.utils.compile_search_regex import compile_search_regex
+from dictionary_app.theme.styles import EMOJI_FONT_FAMILY
 from dictionary_app.format.render_sources import (
     build_filtered_html, normalize_anchor, section_matches
 )
@@ -208,6 +209,7 @@ class SourcesPanel:
             marker_format = anchor_format.charFormat()
             marker_format.setAnchor(True)
             marker_format.setAnchorNames([anchor])
+            marker_format.setFontFamilies([EMOJI_FONT_FAMILY])
             marker = QTextCursor(document)
             marker.setPosition(position)
             marker.insertText(ARROW_MARKER, marker_format)

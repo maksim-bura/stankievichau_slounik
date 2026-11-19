@@ -67,7 +67,8 @@ def build_filtered_html(all_children, collapsed_sections, search_text=None, mark
 
     if marker_anchor:
         escaped = re.escape(marker_anchor)
-        result = re.sub(f'(<span id="{escaped}"[^>]*>)', f'\\1{ARROW_MARKER}', result, count=1)
+        marker = f'<span class="doc-arrow">{ARROW_MARKER}</span>'
+        result = re.sub(f'(<span id="{escaped}"[^>]*>)', f'\\1{marker}', result, count=1)
 
     return result
 

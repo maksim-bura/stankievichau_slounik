@@ -1,8 +1,3 @@
-"""Simple window for searching the marked-up XML files.
-
-Open: double-click tools/search_xml_app.pyw
-Type a query and press Enter.
-"""
 import re
 import sys
 import tkinter as tk

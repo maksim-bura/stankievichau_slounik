@@ -1,21 +1,3 @@
-"""Search every marked-up XML file at once.
-
-Run: py -3 tools/search_xml.py "слова"
-     py -3 tools/search_xml.py "<src>" --context 1
-     py -3 tools/search_xml.py "\\bча́паць\\b" --regex --ignore-case
-     py -3 tools/search_xml.py "грыжа" --count
-
-Literal matching is the default; --regex switches to a Python regular
-expression. Paths are searched recursively, and the default target is the
-dictionary data folder. Matching is line-based, like grep: a match is reported
-as path:line:column with a clipped snippet around its first occurrence. Each
-matching line also shows the headword(s) of its enclosing <d> span, or of the
-entry's non-<d> headwords.
-
-Exit codes: 0 when at least one match was found, 1 when none was found, 2 when
-no query was given or a pattern, path, glob or file could not be read. With no
-query the help text is printed.
-"""
 import argparse
 import fnmatch
 import re

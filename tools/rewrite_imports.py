@@ -1,18 +1,3 @@
-"""Apply module renames, file moves, and symbol splits, rewriting only import statements.
-
-Run: py -3 tools/rewrite_imports.py plan.json            (dry run)
-     py -3 tools/rewrite_imports.py plan.json --apply
-
-plan.json:
-{
-  "files":   {"old/path.py": "new/path.py"},
-  "modules": {"old.module": "new.module"},
-  "splits":  {"old.module": {"Symbol": "new.module"}}
-}
-
-Import blocks are re-wrapped at 96 columns. Every touched file is re-parsed with
-ast after rewriting; the script stops before writing if any file would not parse.
-"""
 import argparse
 import ast
 import io

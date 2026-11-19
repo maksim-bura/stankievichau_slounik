@@ -20,12 +20,12 @@ stankievichau_slounik/
 ├── dictionary_app/            # shared code lives here
 └── markup_app/                # DELETE this whole folder to remove the markup app
     ├── main_window.py         # window: search, list, toolbars/menus, save flow, filters
-    ├── panels/                # MarkupEditor/EditorPane, XmlTextEdit, popup, delegates, models, tag buttons
-    ├── services/              # broken links, link marks, completion context, duplicates, checked state, tag parsing, digraph hints
+    ├── panels/                # MarkupEditor/EditorPane, XmlTextEdit, completion controller, popup, delegates, models, tag buttons
+    ├── services/              # broken links (+link indexes/text helpers), entry + source blocks, link marks, completion context, duplicates, checked state, tag parsing, digraph hints
     │   └── build/             # runtime state (gitignored)
     ├── localization/          # load_strings.py + manually maintained strings.json
     ├── theme/                 # layout_constants.py, styles.py
-    ├── utils/                 # constants.py (markup-only glyphs)
+    ├── utils/                 # constants.py (markup-only glyphs), xml_patterns.py (shared markup regexes)
     ├── data/                  # dictionary_raw/*_raw.txt + MARKUP_PATTERNS.md
     └── run.py                 # launcher
 ```
@@ -239,8 +239,14 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 - `MarkupEditor` = tag-button toolbar + `EditorPane`; `EditorPane` is the
   `QTabWidget` with **Text** (editable `XmlTextEdit`) and **Author** (read-only
   `QTextEdit`) panes. `MarkupEditor.pane` is the `EditorPane`.
-- Author pane uses `ENTRY_STYLESHEET` via `document().setDefaultStyleSheet()` and
-  re-renders on tab switch.
+- Author pane uses `ENTRY_STYLESHEET` via `document().setDefaultStyleSheet()`.
+  It renders ON DEMAND: `set_entry` renders only when the Author tab is already
+  current (`_AUTHOR_TAB_INDEX`), and `_on_tab_changed` renders when the Author
+  tab becomes current, so opening entries on the Text tab never pays for an
+  Author render and a tab switch still always shows fresh HTML.
+- Both edits install `install_no_blue_focus_style` (see
+  `dictionary_app/AGENTS.md` → Entry Viewer) instead of constructing the proxy
+  with a base.
 - `EditorPane._is_modified` tracks changes against `_baseline`; `content_changed`
   fires on text change; `link_marks_stale` is re-emitted from the Text edit.
 - `set_entry()` blocks signals during `setPlainText()`, resets the char format,
@@ -308,7 +314,7 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   `setPlainText()` (under blockSignals), and `set_link_marks` resets it again after
   inserting/removing markers. Note: `QTextCharFormat.fontFamily()`/
   `setFontFamily()` hard-crash (0xC0000005) in this PySide6 build — use
-  `.font().family()` / `setFonts`.
+  `.font().family()` / `setFonts` / `setFontFamilies`.
 - **Target set** (`link_marks_builder.build_link_marks(broken_links, text,
   entry_id)` → `(offsets, tooltips, highlights)`): marks `<entry>` when a resolved
   `<see>` row's `row[0]` (integer DB id) equals the current entry id; marks `<hw>`
@@ -365,7 +371,8 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 ### Digraph Hints (`дз` / `дж`)
 
 - `services/find_digraph_spans.py` (`find_digraph_spans`) scans only inside
-  `<hw>…</hw>` content (`_HW_RE`), case-insensitively, and returns every
+  `<hw>…</hw>` content (the shared `HW_TEXT_RE` from `utils/xml_patterns.py`),
+  case-insensitively, and returns every
   two-character `дз`/`дж` span in CLEAN text coordinates. It is a hint, not a
   validator: it never inspects `<sep />` and never edits anything.
 - `EditorPane` recomputes the spans on `set_entry` and on every `textChanged`
@@ -392,8 +399,7 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   registry imported by BOTH the completion prompt (`services/completion_context.py`)
   and the app's attribute reads (formatters, `extract_content_text`, DB
   build/search, broken-links, markup source cache). `ATTRIBUTES` (tag → ordered
-  `(name, kind)`), `ATTR_*` constants, helpers `attribute_names` / `is_boolean` /
-  `unknown_attributes`. Currently `entry:id`, `hw:id,excl,keep-acc`, `g:hw`,
+  `(name, kind)`), `ATTR_*` constants. Currently `entry:id`, `hw:id,excl,keep-acc`, `g:hw`,
   `see:entry,hw,syn`, `sense:n`, `ex:lang`, `i:lang,excl`, `p:lang`, `lang:code`. Add an attribute HERE
   (and to `markup_app/data/MARKUP_PATTERNS.md`) and it appears everywhere.
   `<sense>` has NO `hw` attr. `sources.xml` (`section/@id`) is intentionally not
@@ -410,10 +416,11 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   a BOOL attr inserts `name="true"` at once (caret after). The typed `fragment` is
   replaced. Wrapped in `beginEditBlock`/`endEditBlock` so one undo removes it.
 - **Popup** (`AttributePopup(QListWidget)`, `panels/attribute_popup.py`, parented
-  to the edit): `Qt.Tool | FramelessWindowHint | WindowStaysOnTopHint |
+  to the edit; driven by `CompletionController`, `panels/completion_controller.py`):
+  `Qt.Tool | FramelessWindowHint | WindowStaysOnTopHint |
   WindowDoesNotAcceptFocus` + `WA_ShowWithoutActivating` + `NoFocus`, so the
   editor keeps keyboard focus (keys handled in `XmlTextEdit.keyPressEvent` via
-  `_handle_completion_key`) while mouse clicks still fire. Positioned under the
+  `CompletionController.handle_key`) while mouse clicks still fire. Positioned under the
   caret (`cursorRect` → `mapToGlobal`), flipped above on screen overflow; width
   fits the longest item (`COMPLETION_MIN_WIDTH` + frame/row padding); height
   capped at `MAX_VISIBLE = 8` rows. Styled by `ATTRIBUTE_POPUP_STYLE`
@@ -423,7 +430,7 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   black while focused like the entry list; `FONT_STACK`/12pt, bold inherited from
   the global `QListWidget` rule.
 - **Trigger/retrigger:** only a typed SPACE (or a text-changing key while open)
-  calls `_refresh_completion`; the popup does NOT reappear on caret re-entry
+  calls `CompletionController.refresh`; the popup does NOT reappear on caret re-entry
   (arrow keys hide it). It also hides on `mousePressEvent`, `focusOutEvent`, on
   `textChanged` (external edits), after accepting, on Esc, and whenever the parser
   returns no context/candidates.
@@ -502,6 +509,11 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   boundary; the deletion path handles `open_tag is close_tag` as a single
   removal, otherwise close-then-open order.
 - State: `_pending_tag_delete`, `_pending_open_tag`, `_pending_close_tag`.
+- Helpers (`_handle_delete_key` is the whole Backspace/Delete branch): skip a
+  `LINK_PLACEHOLDER` pair first (`_skip_link_placeholder`), consume an armed pair
+  (`_consume_pending_pair`), reset it (`_reset_pending_pair`), arm a new one
+  (`_arm_pending_pair`); `_reset_pending_tag_delete` is the
+  `cursorPositionChanged` / any-other-key reset.
 - **Direction guard:** the pending state records the arming key
   (`_pending_delete_forward`); the second press deletes only if the SAME key is
   pressed. The opposite key resets the state and runs its own boundary detection
@@ -528,10 +540,10 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 
 ### Key Edit Flow (`XmlTextEdit.keyPressEvent`)
 
-- Completion keys are consumed first by `_handle_completion_key` (early return).
+- Completion keys are consumed first by `CompletionController.handle_key` (early return).
 - Every other key runs `_handle_key` + `_on_scan_changed` inside ONE
   `beginEditBlock()`/`endEditBlock()`, then calls `self.ensureCursorVisible()`
-  and `_refresh_completion()`.
+  and `CompletionController.refresh()`.
 - **Enter keeps the viewport (`preserve`):** Qt can reset the viewport to the
   top while the newline is inserted. `keyPressEvent` records
   `verticalScrollBar().value()` before the edit and, for
@@ -605,10 +617,14 @@ tag on every keystroke.
      is `ElementTree.tostring(root, encoding='unicode')` — re-serialized, so the
      saved block is normalized XML (comments/attribute order not preserved).
   3. Require `source_file` and an existing source path; drop that file from
-     `_source_cache` and re-read it via `_load_source_content`, then locate the
+     `SourceBlocks` and re-read it via `SourceBlocks.load`, then locate the
      ORIGINAL block by exact comparison with the raw text captured at load time
      (`self._loaded_raw[entry_id]`, from `_load_result` /
-     `_read_entry_from_source`). The fresh read means another tool's changes
+     `SourceBlocks.entry_block`). This whole step is
+     `_locate_source_block(source_file, entry_id, headword, entry_link,
+     error_title, ambiguous_message)` → `(file_path, content, blocks, index)` or
+     `None` after warning; `_delete_current_entry` uses the same helper. The
+     fresh read means another tool's changes
      elsewhere in the file are preserved; if the original block no longer
      matches, the save aborts instead of writing a stale cached whole file. The
      block must match **exactly once**; if missing or ambiguous (duplicate
@@ -619,7 +635,7 @@ tag on every keystroke.
      `<br></br>`) is preserved.
   5. Write UTF-8, then `reindex_entry(entry_id, new_entry_string)` so SQLite
      matches immediately (returns the new `(headword, entry_link, keep_acc)`; on
-     failure keep the old values). Drop the file from `_source_cache`, update
+     failure keep the old values). Drop the file from `SourceBlocks`, update
      `_loaded_raw`, call `search_engine.invalidate_entry(entry_id)`, invalidate
      the broken-link cache, set `_has_unsaved = False`, call
      `editor.pane.mark_saved()` (clears modified flag + undo stack), hide the save
@@ -638,8 +654,8 @@ tag on every keystroke.
      (no full-model repaint). `_by_id_headword` is rebuilt and
      `_sub_headword_cache` cleared afterwards.
 - **Whole-entry deletion (`_delete_current_entry`):** drop the file from
-  `_source_cache`, re-read it, and resolve the exact raw block the same way as
-  save (unique `_loaded_raw`/`_read_entry_from_source` match; abort without
+  `SourceBlocks`, re-read it, and resolve the exact raw block the same way as
+  save (unique `_loaded_raw`/`SourceBlocks.entry_block` match; abort without
   writing when missing or ambiguous), then remove that block plus ONE blank line
   so neighbours stay separated by a single empty line (`remove_entry_block`).
   Write the file, call
@@ -651,12 +667,13 @@ tag on every keystroke.
   same-`entry_id` row from `current_results`, re-run `_display_results`, then load
   the first remaining row; with no rows left, hide the checked toggle and clear
   the editor.
-- `_read_entry_from_source(entry_id, source_file, headword=None, entry_link=None,
-  keep_acc=0)`: matches a raw `<entry>` block by **entry XML ID** (`entry_link`,
+- `SourceBlocks.entry_block(entry_id, source_file, headword, entry_link,
+  keep_acc=0)` (`services/source_blocks.py`): matches a raw `<entry>` block by
+  **entry XML ID** (`entry_link`,
   normalized accent- and ё-insensitively, via the `by_link` index) and/or by
   headword through the memoized `by_headword` index (accent- and ё-normalized,
   case-preserving; the index already guarantees the match, so the ID-less path
-  does not re-scan candidates with `_block_matches`). Returns `None` if nothing
+  does not re-scan candidates with `block_matches`). Returns `None` if nothing
   matches or on `ParseError`/`OSError` — NEVER falls back to the first entry.
 - **Ambiguous headword/ID match → disambiguate by the row's own entry XML:** when
   ID-less lookup yields several candidates (distinct entries collided on a
@@ -666,7 +683,8 @@ tag on every keystroke.
   single candidate keeps first-match behavior.
 - **`entry_link` is the owning entry's own `<hw id>`/`<entry id>` and holds no
   `#H` suffix.** Sub-headword identity comes from `headword` + `hw_xml_id`.
-- `_block_matches(block, target_norm)` compares every `<hw>` text in a block
+- `block_matches(block, target_norm)` (`services/entry_blocks.py`) compares every
+  `<hw>` text in a block
   (accent- and ё-normalized, case-preserving) — handles multi-`<hw>` entries.
   Case is preserved because case-distinct headwords are separate entries. `excl`
   variants still match (an entry is loadable via either headword).
@@ -691,7 +709,8 @@ tag on every keystroke.
   re-reads the raw `<entry>` block and stores it in `self._loaded_raw[entry_id]`
   (also the editor text, so the editor works from the file's exact markup). If no
   block is found it keeps the DB-cached XML.
-- `_source_cache` (per file: `content`, `blocks`, `by_link`, `by_headword`) and
+- `SourceBlocks` (`services/source_blocks.py`, per file: `content`, `blocks`,
+  `by_link`, `by_headword`) and
   `_sub_headword_cache` are invalidated on rebuild and after a save of that file.
   `_loaded_raw` grows one block per entry opened in a session and is popped only
   on source re-read failure.
@@ -717,6 +736,14 @@ tag on every keystroke.
 - `BrokenLinkAnalyzer` (`services/broken_link_analyzer.py`) takes a connection
   provider and a source-block provider. `flags()` is lazily computed and cached;
   `invalidate()` clears it (on rebuild and after a successful save).
+  `see_occurrences()` is cached the same way (`_occurrences`, filled by
+  `_iter_see_occurrences`), so building link marks for a loaded entry does not
+  re-classify every `<see>` in the corpus on each click. The DB
+  lookup layer it delegates to is `LinkIndexes` (`services/link_indexes.py`);
+  the shared text/attribute helpers (`normalize_headword`, `row_norm`,
+  `strip_tags`, `split_sense_tail`, `attr_matches`) live in
+  `services/link_text.py`, and the `<hw>`/`<entry>`/`excl` regexes in
+  `utils/xml_patterns.py`.
 - **Span-level detection** (`_span_flags`): partitions a block into regions =
   each `<d>` span (keyed by its nearest `<d>` ancestor) + the non-d region
   (`None`); a nested `<d>` gets its own region. Per region it collects

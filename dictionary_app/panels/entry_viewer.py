@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QSizePolicy, QVBoxLayout
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout
 from PySide6.QtCore import Qt
 from dictionary_app.localization import strings
 from dictionary_app.theme.layout_constants import (
@@ -6,6 +6,7 @@ from dictionary_app.theme.layout_constants import (
     NAV_SPACER_MIN_WIDTH, NAV_SPACER_MAX_WIDTH, LAYOUT_MARGINS, LAYOUT_SPACING
 )
 from dictionary_app.widgets import IconButton, DictTextBrowser
+from dictionary_app.widgets.emoji_label import set_emoji_prefixed_text
 from dictionary_app.utils.scroll_state import ScrollState
 from dictionary_app.theme.styles import FLAT_BUTTON_STYLE
 from dictionary_app.utils.constants import CROSS_MARKER, BACK_ARROW, FORWARD_ARROW
@@ -13,6 +14,22 @@ from dictionary_app.utils.constants import CROSS_MARKER, BACK_ARROW, FORWARD_ARR
 
 def same_senses(a, b):
     return list(a or ()) == list(b or ())
+
+
+def _nav_button(glyph, label):
+    button = QPushButton()
+    button.setCursor(Qt.PointingHandCursor)
+    button.setFlat(True)
+    button.setStyleSheet(FLAT_BUTTON_STYLE)
+    button.setFixedWidth(NAV_BUTTON_WIDTH)
+    text = QLabel()
+    set_emoji_prefixed_text(text, glyph, label)
+    text.setAlignment(Qt.AlignCenter)
+    text.setAttribute(Qt.WA_TransparentForMouseEvents)
+    layout = QVBoxLayout(button)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(text)
+    return button
 
 
 class NavigationBar(QWidget):
@@ -30,11 +47,7 @@ class NavigationBar(QWidget):
         layout.setContentsMargins(*BAR_CONTENTS_MARGINS)
         layout.setSpacing(BAR_SPACING)
 
-        self.back_button = QPushButton(f"{BACK_ARROW} {strings.nav.back}")
-        self.back_button.setCursor(Qt.PointingHandCursor)
-        self.back_button.setFlat(True)
-        self.back_button.setStyleSheet(FLAT_BUTTON_STYLE)
-        self.back_button.setFixedWidth(NAV_BUTTON_WIDTH)
+        self.back_button = _nav_button(BACK_ARROW, strings.nav.back)
         self.back_button.clicked.connect(self.on_back)
 
         self.back_spacer = QWidget()
@@ -46,11 +59,7 @@ class NavigationBar(QWidget):
         self.button_spacer.setMaximumWidth(NAV_SPACER_MAX_WIDTH)
         self.button_spacer.setSizePolicy(QSizePolicy.MinimumExpanding, QSizePolicy.Fixed)
 
-        self.forward_button = QPushButton(f"{FORWARD_ARROW} {strings.nav.forward}")
-        self.forward_button.setCursor(Qt.PointingHandCursor)
-        self.forward_button.setFlat(True)
-        self.forward_button.setStyleSheet(FLAT_BUTTON_STYLE)
-        self.forward_button.setFixedWidth(NAV_BUTTON_WIDTH)
+        self.forward_button = _nav_button(FORWARD_ARROW, strings.nav.forward)
         self.forward_button.clicked.connect(self.on_forward)
 
         self.close_button = IconButton(CROSS_MARKER, flat=True)
@@ -140,6 +149,7 @@ class EntryViewer:
 
         self.scroll_manager = ScrollState(self.viewer)
         self.stored_html = None
+        self._shown_html = None
 
     def get_widget(self):
         return self.container
@@ -148,19 +158,26 @@ class EntryViewer:
         return self.viewer
 
     def display_html(self, html):
-        self.stored_html = html
-        self.viewer.setHtml(html)
+        self._show_html(html)
 
     def display_entry(self, result, formatter):
-        self.stored_html = formatter.format_entry(result[2])
         self.scroll_manager.cache_scroll()
-        self.viewer.setHtml(self.stored_html)
+        self._show_html(formatter.format_entry(result[2]))
         self.scroll_manager.last_anchor = None
+
+    def _show_html(self, html):
+        self.stored_html = html
+        if html == self._shown_html and not self.viewer.textCursor().hasSelection():
+            return
+        self._shown_html = html
+        self.viewer.setHtml(html)
 
     def refresh(self):
         if self.stored_html:
             self.scroll_manager.restore_content(self.stored_html)
+            self._shown_html = self.stored_html
 
     def clear(self):
         self.viewer.clear()
+        self._shown_html = None
         self.scroll_manager.clear_cache()

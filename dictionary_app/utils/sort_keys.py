@@ -67,10 +67,6 @@ def encode_order_key(*sequences):
     return bytes(encoded)
 
 
-def alphabet_for_order(sort_order):
-    return _ALPHABET_TOKENS.get(sort_order, _ALPHABET_TOKENS[SORT_ORDER_STANDARD])
-
-
 def token_ranks_for_order(sort_order):
     return _TOKEN_RANKS.get(sort_order, _DEFAULT_TOKEN_RANKS)
 

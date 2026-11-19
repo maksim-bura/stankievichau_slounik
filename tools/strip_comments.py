@@ -1,15 +1,3 @@
-"""Delete comments from source files (the project rule is: no comments in code).
-
-Run: py -3 tools/strip_comments.py [--root DIR] [--ext .py] [--exclude parts]
-     py -3 tools/strip_comments.py --dry-run
-     py -3 tools/strip_comments.py --allow '^# type:'
-
-Tokenizes each file, so a '#' inside a string is not a comment and docstrings are
-untouched. Shebangs, coding cookies, and --allow matches are kept. Line endings
-and the source encoding are preserved, and the write is refused when the ast
-tree would change. Exits 1 only when a file cannot be read, parsed, or safely
-rewritten.
-"""
 import argparse
 import ast
 import re

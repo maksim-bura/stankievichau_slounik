@@ -1,17 +1,3 @@
-"""Query data files without loading them into the conversation.
-
-Run: py -3 tools/inspect_data.py --count
-     py -3 tools/inspect_data.py --lookup "word" --limit 10
-     py -3 tools/inspect_data.py --duplicates entry/id
-     py -3 tools/inspect_data.py --attribute-audit
-
-Read-only: no query opens a file for writing, creates a file, or touches the
-database. The tag scan is line-oriented and tolerant of malformed markup, so a
-broken file still reports path:line instead of aborting the run. Records are
-discovered at runtime (the most common child of the root element) unless
---tag / --record names one. Exit 0 when the query ran, 1 when no file matched
-or a file could not be read.
-"""
 import argparse
 import bisect
 import fnmatch

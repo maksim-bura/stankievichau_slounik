@@ -4,8 +4,11 @@ import xml.etree.ElementTree as ElementTree
 from dictionary_app.utils.normalize_headword import has_keep_acc, resolve_headword, strip_quotes
 from dictionary_app.utils.remove_accents import remove_accents
 from dictionary_app.utils.xml_schema import (
-    ATTR_HW, ATTR_ID, ATTR_ENTRY, ATTR_N, ATTR_EXCL, ATTR_KEEP_ACC
+    ATTR_HW, ATTR_ID, ATTR_ENTRY, ATTR_EXCL, ATTR_KEEP_ACC
 )
+from markup_app.services.link_indexes import LinkIndexes, index_values
+from markup_app.services.link_text import normalize_headword, row_norm, split_sense_tail, strip_tags
+from markup_app.utils.xml_patterns import EXCL_ATTR_RE, HW_ATTRS_TEXT_RE, HW_TEXT_RE
 
 
 MODE_MISSING = 'missing_links'
@@ -27,112 +30,45 @@ _MODE_OUTCOMES = {
     MODE_UNION: (OUTCOME_MISSING, OUTCOME_UNRESOLVED),
 }
 
+_ALL_BROKEN_MODES = frozenset({MODE_MISSING, MODE_UNRESOLVED, MODE_AMBIGUOUS_G})
+
+
+def expand_broken_mode(mode):
+    if isinstance(mode, str):
+        if mode == MODE_UNION:
+            return set(_ALL_BROKEN_MODES)
+        return {mode}
+    return set(mode)
+
 _OUTCOME_FLAGS = {
     OUTCOME_MISSING: MODE_MISSING,
     OUTCOME_UNRESOLVED: MODE_UNRESOLVED,
 }
 
-_TAG_RE = re.compile(r'<[^>]+>')
 _SEE_RE = re.compile(r'<see\b([^>]*?)>(.*?)</see>', re.DOTALL)
 _SEE_ATTR_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"')
-_HW_RE = re.compile(r'<hw\b([^>]*)>(.*?)</hw>', re.DOTALL)
-_HW_TEXT_RE = re.compile(r'<hw\b[^>]*>(.*?)</hw>', re.DOTALL)
-_ENTRY_ID_RE = re.compile(r'<entry\b[^>]*\b' + ATTR_ID + r'="([^"]*)"')
-_EXCL_RE = re.compile(r'\b' + ATTR_EXCL + r'\s*=')
 _SENSE_TAIL_RE = re.compile(r'^[,\s]*\d')
-_SEE_TAIL_SUFFIX_RE = re.compile(r'[,\s]*\d+(?:[,.]\s*\d+)*$')
-
-
-def normalize_headword(text):
-    return remove_accents(text)
-
-
-def row_norm(text):
-    return remove_accents(text).lower()
-
-
-def strip_tags(text):
-    return _TAG_RE.sub('', text)
-
-
-def _index_add(index, key, value):
-    existing = index.get(key)
-    if existing is None:
-        index[key] = value
-    elif isinstance(existing, list):
-        existing.append(value)
-    else:
-        index[key] = [existing, value]
-
-
-def _index_values(index, key):
-    value = index.get(key)
-    if value is None:
-        return ()
-    if isinstance(value, list):
-        return value
-    return (value,)
-
-
-def split_sense_tail(text):
-    if not text:
-        return text, []
-    match = _SEE_TAIL_SUFFIX_RE.search(text)
-    if match is None:
-        return text, []
-    word = text[:match.start()].strip() or text
-    senses = [int(tok) for tok in re.findall(r'\d+', match.group(0))]
-    return word, senses
-
-
-def attr_matches(attr, headword):
-    if not attr:
-        return False
-    if remove_accents(attr) != attr:
-        return attr == headword
-    return remove_accents(attr) == remove_accents(headword)
-
-
-def _norm_sense_value(value):
-    value = value.strip()
-    if not value:
-        return None
-    if value.endswith('.'):
-        value = value[:-1].strip()
-    if value.isdigit():
-        return ('num', int(value))
-    return ('str', value)
 
 
 class BrokenLinkAnalyzer:
     def __init__(self, connection_provider, source_blocks_provider):
-        self._connection = connection_provider
         self._source_blocks = source_blocks_provider
+        self._indexes = LinkIndexes(connection_provider, source_blocks_provider)
         self._flags = None
-        self._rows_cache = None
-        self._norm_index = None
-        self._exact_index = None
-        self._entry_senses = None
-        self._entry_indexes = None
-        self._row_index_cache = None
+        self._occurrences = None
 
     def invalidate(self):
         self._flags = None
-        self._rows_cache = None
-        self._norm_index = None
-        self._exact_index = None
-        self._entry_senses = None
-        self._entry_indexes = None
-        self._row_index_cache = None
+        self._occurrences = None
+        self._indexes.invalidate()
 
     def flags(self):
         if self._flags is not None:
             return self._flags
 
-        by_link, by_hw = self._entry_id_indexes()
         flags = {}
         for source_file, block in self._source_blocks():
-            entry_ids = self._entry_ids(block, source_file, by_link, by_hw)
+            entry_ids = self._indexes.entry_ids(block, source_file)
             if not entry_ids:
                 continue
             key_ids = entry_ids if len(entry_ids) == 1 else [None]
@@ -165,6 +101,11 @@ class BrokenLinkAnalyzer:
         return spans
 
     def see_occurrences(self):
+        if self._occurrences is None:
+            self._occurrences = list(self._iter_see_occurrences())
+        return iter(self._occurrences)
+
+    def _iter_see_occurrences(self):
         for source_file, block in self._source_blocks():
             for match in _SEE_RE.finditer(block):
                 word, entry_attr, hw_attr = self._see_parts_from_match(block, match)
@@ -215,8 +156,8 @@ class BrokenLinkAnalyzer:
                 strip_tags(match.group(2)).strip(),
                 1 if has_keep_acc(match.group(1)) else 0,
             )
-            for match in _HW_RE.finditer(block)
-            if not _EXCL_RE.search(match.group(1))
+            for match in HW_ATTRS_TEXT_RE.finditer(block)
+            if not EXCL_ATTR_RE.search(match.group(1))
         ]
 
     def ambiguous_spans(self, text):
@@ -307,183 +248,6 @@ class BrokenLinkAnalyzer:
                 idx += 1
         return spans
 
-    def _headword_rows(self):
-        if self._rows_cache is not None:
-            return self._rows_cache
-        cursor = self._connection().cursor()
-        rows = []
-        cursor.execute("SELECT id, headword, entry_link, hw_xml_id, keep_acc FROM dictionary")
-        rows.extend(cursor.fetchall())
-        cursor.execute(
-            "SELECT main_entry_id, headword, link, hw_xml_id, keep_acc FROM sub_headwords"
-        )
-        rows.extend(cursor.fetchall())
-        self._rows_cache = rows
-        return rows
-
-    def _headword_index(self):
-        if self._norm_index is not None:
-            return self._norm_index
-        index = {}
-        for row in self._headword_rows():
-            index.setdefault(normalize_headword(row[1]), []).append(row)
-        self._norm_index = index
-        return index
-
-    def _exact_headword_index(self):
-        if self._exact_index is not None:
-            return self._exact_index
-        index = {}
-        for row in self._headword_rows():
-            index.setdefault(resolve_headword(row[1], row[4]), []).append(row)
-        self._exact_index = index
-        return index
-
-    def _row_indexes(self):
-        if self._row_index_cache is not None:
-            return self._row_index_cache
-        raw_hw = {}
-        norm_hw = {}
-        raw_link = {}
-        norm_link = {}
-        by_hw_xml_id = {}
-        by_entry = {}
-        for i, (entry_id, headword, link, hw_xml_id, _keep_acc) in enumerate(
-            self._headword_rows()
-        ):
-            _index_add(by_entry, entry_id, i)
-            _index_add(raw_hw, headword, i)
-            _index_add(norm_hw, remove_accents(headword), i)
-            if link:
-                _index_add(raw_link, link, i)
-                _index_add(norm_link, remove_accents(link), i)
-            if hw_xml_id:
-                _index_add(by_hw_xml_id, hw_xml_id, i)
-        self._row_index_cache = {
-            'raw_hw': raw_hw,
-            'norm_hw': norm_hw,
-            'raw_link': raw_link,
-            'norm_link': norm_link,
-            'hw_xml_id': by_hw_xml_id,
-            'by_entry': by_entry,
-        }
-        return self._row_index_cache
-
-    def _entry_attr_ids(self, attr):
-        rows = self._headword_rows()
-        index = self._row_indexes()
-        if remove_accents(attr) != attr:
-            hw_ids = _index_values(index['raw_hw'], attr)
-            link_ids = _index_values(index['raw_link'], attr)
-        else:
-            hw_ids = _index_values(index['norm_hw'], attr)
-            link_ids = _index_values(index['norm_link'], attr)
-        ids = {rows[i][0] for i in hw_ids}
-        ids.update(rows[i][0] for i in link_ids)
-        return ids
-
-    def _hw_attr_indexes(self, attr):
-        index = self._row_indexes()
-        if remove_accents(attr) != attr:
-            matched = set(_index_values(index['raw_hw'], attr))
-        else:
-            matched = set(_index_values(index['norm_hw'], attr))
-        matched.update(_index_values(index['hw_xml_id'], attr))
-        return matched
-
-    def _entry_id_indexes(self):
-        if self._entry_indexes is not None:
-            return self._entry_indexes
-        cursor = self._connection().cursor()
-        by_link = {}
-        by_hw = {}
-        cursor.execute("SELECT id, headword, entry_link, source_file FROM dictionary")
-        for entry_id, headword, entry_link, source_file in cursor.fetchall():
-            if entry_link:
-                by_link.setdefault(
-                    (source_file, normalize_headword(entry_link)), []
-                ).append(entry_id)
-            by_hw.setdefault((source_file, row_norm(headword)), []).append(entry_id)
-        self._entry_indexes = (by_link, by_hw)
-        return self._entry_indexes
-
-    def _entry_senses_cache(self):
-        if self._entry_senses is not None:
-            return self._entry_senses
-        by_link, by_hw = self._entry_id_indexes()
-        entry_senses = {}
-        for source_file, block in self._source_blocks():
-            entry_ids = self._entry_ids(block, source_file, by_link, by_hw)
-            if not entry_ids:
-                continue
-            block_senses = self._block_sense_attrs(block)
-            for entry_id in entry_ids:
-                entry_senses[entry_id] = block_senses
-        self._entry_senses = entry_senses
-        return entry_senses
-
-    @staticmethod
-    def _block_sense_attrs(block):
-        try:
-            root = ElementTree.fromstring(block)
-        except ElementTree.ParseError:
-            attrs = set()
-            for match in re.finditer(
-                r'<sense\b([^>]*?)>(.*?)</sense>', block, re.DOTALL
-            ):
-                attr = re.search(r'\bn\s*=\s*"([^"]*)"', match.group(1))
-                if attr:
-                    value = _norm_sense_value(attr.group(1))
-                else:
-                    n = re.search(r'<n\b[^>]*>(.*?)</n>', match.group(2))
-                    value = _norm_sense_value(n.group(1)) if n else None
-                if value is not None:
-                    attrs.add(value)
-            return attrs
-        attrs = set()
-        for sense in root.iter('sense'):
-            value = (sense.get(ATTR_N) or '').strip()
-            if value:
-                attrs.add(_norm_sense_value(value))
-                continue
-            n = next((c for c in sense if c.tag == 'n'), None)
-            if n is not None:
-                attrs.add(
-                    _norm_sense_value(''.join(n.itertext()).strip())
-                )
-        return attrs
-
-    def _row_has_senses(self, row, senses):
-        entry_senses = self._entry_senses_cache().get(row[0])
-        if not entry_senses:
-            return False
-        return all(('num', sense) in entry_senses for sense in senses)
-
-    def _finalize_resolved(self, row, senses):
-        if senses and not self._row_has_senses(row, senses):
-            return OUTCOME_MISSING, None
-        return OUTCOME_RESOLVED, row
-
-    def _entry_ids(self, block, source_file, by_link, by_hw):
-        match = _ENTRY_ID_RE.search(block)
-        if match:
-            key = (source_file, normalize_headword(match.group(1)))
-            candidates = by_link.get(key, [])
-            if candidates:
-                return candidates
-        main_hw = self._main_headword(block)
-        if main_hw is None:
-            return []
-        return by_hw.get((source_file, main_hw), [])
-
-    @staticmethod
-    def _main_headword(block):
-        for match in _HW_RE.finditer(block):
-            if _EXCL_RE.search(match.group(1)):
-                continue
-            return row_norm(strip_tags(match.group(2)).strip())
-        return None
-
     def _see_parts_from_match(self, text, match):
         attrs = dict(_SEE_ATTR_RE.findall(match.group(1)))
         inner = strip_tags(match.group(2)).strip()
@@ -510,26 +274,26 @@ class BrokenLinkAnalyzer:
     def _classify(self, word, entry_attr, hw_attr):
         word, senses = split_sense_tail(word)
         norm = normalize_headword(word)
-        word_rows = self._headword_index().get(norm, ())
+        word_rows = self._indexes.by_normalized_headword().get(norm, ())
         if word_rows and remove_accents(word) != word:
-            exact = self._exact_headword_index().get(word)
+            exact = self._indexes.by_exact_headword().get(word)
             if exact:
                 word_rows = exact
-        rows = self._headword_rows()
+        rows = self._indexes.rows()
 
         def handle_attrs():
             if entry_attr:
-                entry_ids = self._entry_attr_ids(entry_attr)
+                entry_ids = self._indexes.entry_attr_ids(entry_attr)
                 if not entry_ids:
                     return OUTCOME_MISSING, None
                 if len(entry_ids) > 1:
                     return OUTCOME_UNRESOLVED, None
                 entry_id = next(iter(entry_ids))
-                in_entry = _index_values(
-                    self._row_indexes()['by_entry'], entry_id
+                in_entry = index_values(
+                    self._indexes.row_indexes()['by_entry'], entry_id
                 )
                 if hw_attr:
-                    hw_ids = self._hw_attr_indexes(hw_attr)
+                    hw_ids = self._indexes.hw_attr_indexes(hw_attr)
                     matched = [
                         rows[i] for i in in_entry if i in hw_ids
                     ]
@@ -544,7 +308,7 @@ class BrokenLinkAnalyzer:
                     return OUTCOME_MISSING, None
                 return OUTCOME_UNRESOLVED, None
             if hw_attr:
-                matched = self._hw_attr_rows(hw_attr)
+                matched = self._indexes.hw_attr_rows(hw_attr)
                 if len(matched) == 1:
                     return self._finalize_resolved(matched[0], senses)
                 if not matched:
@@ -565,9 +329,10 @@ class BrokenLinkAnalyzer:
             return (outcome or OUTCOME_MISSING), row
         return (outcome or OUTCOME_UNRESOLVED), row
 
-    def _hw_attr_rows(self, attr):
-        rows = self._headword_rows()
-        return [rows[i] for i in sorted(self._hw_attr_indexes(attr))]
+    def _finalize_resolved(self, row, senses):
+        if senses and not self._indexes.row_has_senses(row, senses):
+            return OUTCOME_MISSING, None
+        return OUTCOME_RESOLVED, row
 
     def _span_flags(self, block):
         try:
@@ -631,6 +396,6 @@ class BrokenLinkAnalyzer:
             flags.add(MODE_AMBIGUOUS_G)
         hw_norms = [
             row_norm(strip_tags(match.group(1)).strip())
-            for match in _HW_TEXT_RE.finditer(block)
+            for match in HW_TEXT_RE.finditer(block)
         ]
         return [(flags, hw_norms)]

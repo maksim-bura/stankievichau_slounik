@@ -4,7 +4,11 @@ import re
 from dictionary_app.utils.normalize_headword import has_keep_acc, resolve_headword
 
 from markup_app.localization import strings
-from markup_app.services.broken_link_analyzer import OUTCOME_RESOLVED, attr_matches, normalize_headword, split_sense_tail, strip_tags
+from markup_app.services.broken_link_analyzer import OUTCOME_RESOLVED
+from markup_app.services.link_text import (
+    attr_matches, normalize_headword, split_sense_tail, strip_tags
+)
+from markup_app.utils.xml_patterns import ATTR_ID_RE, HW_ATTRS_TEXT_RE
 
 
 def format_link_tooltip(deps, title):
@@ -24,13 +28,13 @@ def build_link_marks(broken_links, text, entry_id):
     cur_link = None
     entry_tag = re.search(r'<entry\b([^>]*)>', text)
     if entry_tag:
-        id_match = re.search(r'\bid\s*=\s*"([^"]*)"', entry_tag.group(1))
+        id_match = ATTR_ID_RE.search(entry_tag.group(1))
         if id_match:
             cur_link = id_match.group(1)
     cur_hws = []
     cur_hw_ids = set()
     cur_hw_norms = set()
-    for hw_match in re.finditer(r'<hw\b([^>]*)>(.*?)</hw>', text, re.DOTALL):
+    for hw_match in HW_ATTRS_TEXT_RE.finditer(text):
         raw_hw = strip_tags(hw_match.group(2)).strip()
         if not raw_hw:
             continue
@@ -38,7 +42,7 @@ def build_link_marks(broken_links, text, entry_id):
         cur_hw_norms.add(normalize_headword(raw_hw))
         cur_hw_norms.add(resolve_headword(
             raw_hw, has_keep_acc(hw_match.group(1))))
-        hw_id_match = re.search(r'\bid\s*=\s*"([^"]*)"', hw_match.group(1))
+        hw_id_match = ATTR_ID_RE.search(hw_match.group(1))
         if hw_id_match:
             cur_hw_ids.add(hw_id_match.group(1))
 
@@ -98,8 +102,8 @@ def build_link_marks(broken_links, text, entry_id):
     hw_offsets = []
     tooltips = {}
     highlights = {}
-    for match in re.finditer(r'<hw\b([^>]*)>(.*?)</hw>', text, re.DOTALL):
-        hw_id = re.search(r'\bid\s*=\s*"([^"]*)"', match.group(1))
+    for match in HW_ATTRS_TEXT_RE.finditer(text):
+        hw_id = ATTR_ID_RE.search(match.group(1))
         hw_text = strip_tags(match.group(2)).strip()
         inner = resolve_headword(hw_text, has_keep_acc(match.group(1)))
         if (inner in target_norms

@@ -25,7 +25,8 @@ class TooltipShowFilter(QObject):
 
 
 def configure_tooltips(app):
-    style = TooltipDelayStyle(app.style())
+    style = TooltipDelayStyle()
+    style.setParent(app)
     app.setStyle(style)
     tooltip_filter = TooltipShowFilter(app)
     app.installEventFilter(tooltip_filter)

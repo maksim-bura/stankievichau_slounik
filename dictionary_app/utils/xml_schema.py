@@ -22,29 +22,3 @@ ATTRIBUTES = {
     'p':     [(ATTR_LANG, TEXT)],
     'lang':  [(ATTR_CODE, TEXT)],
 }
-
-_BOOL_ATTRS = {
-    tag: frozenset(name for name, kind in spec if kind == BOOL)
-    for tag, spec in ATTRIBUTES.items()
-}
-
-
-def attribute_names(tag):
-    return [name for name, _ in ATTRIBUTES.get(tag, ())]
-
-
-def is_boolean(tag, name):
-    return name in _BOOL_ATTRS.get(tag, ())
-
-
-def unknown_attributes(root):
-    found = set()
-    for element in root.iter():
-        spec = ATTRIBUTES.get(element.tag)
-        if not spec:
-            continue
-        valid = {name for name, _ in spec}
-        for attribute in element.attrib:
-            if attribute not in valid:
-                found.add((element.tag, attribute))
-    return sorted(found)

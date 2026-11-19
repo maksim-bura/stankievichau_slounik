@@ -1,14 +1,3 @@
-"""Report module-level definitions that nothing in the tree references.
-
-Run: py -3 tools/find_unused_definitions.py [--root DIR] [--ext .py]
-     py -3 tools/find_unused_definitions.py --kinds def,class,constant
-     py -3 tools/find_unused_definitions.py --ignore '^main$'
-
-Complements find_unused_imports.py: this covers functions and classes, not
-imports. The scan is name-based, so getattr/string dispatch and dynamic exports
-are invisible; treat hits as candidates, not proof. Names in __all__, dunders,
-and __init__.py are skipped. Exits 1 when a candidate is found.
-"""
 import argparse
 import ast
 import io

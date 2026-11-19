@@ -3,26 +3,21 @@ import re
 from bisect import bisect_left
 from html import escape, unescape
 
-from PySide6.QtWidgets import ( QTextEdit, QListWidgetItem, QApplication, QToolTip )
+from PySide6.QtWidgets import ( QTextEdit, QToolTip )
 from PySide6.QtCore import Qt, QEvent, QRect, QTimer, Signal
 from PySide6.QtGui import ( QTextCursor, QTextCharFormat, QFontMetricsF, )
 
-from dictionary_app.widgets.dict_text_browser import NoBlueFocusFrameStyle
+from dictionary_app.widgets.dict_text_browser import install_no_blue_focus_style
 from dictionary_app.theme.layout_constants import TOOLTIP_MAX_WIDTH
-from markup_app.theme.layout_constants import (
-    COMPLETION_FRAME_PADDING, COMPLETION_MIN_WIDTH, COMPLETION_ROW_PADDING,
-    TOOLTIP_WIDTH_PAD
-)
+from markup_app.theme.layout_constants import TOOLTIP_WIDTH_PAD
 from markup_app.theme.styles import (
     COLOR_AMBIGUOUS_G_BG, COLOR_AMBIGUOUS_HW_BG, COLOR_DIGRAPH_BG,
     COLOR_D_SPAN_UNDERLINE
 )
-from dictionary_app.theme.styles import COLOR_HIGHLIGHT_BG, FONT_STACK
-from dictionary_app.utils.xml_schema import BOOL as _ATTR_BOOL
+from dictionary_app.theme.styles import COLOR_HIGHLIGHT_BG, EMOJI_FONT_FAMILY, FONT_STACK
 from markup_app.localization import strings
-from markup_app.panels.attribute_popup import AttributePopup
 from markup_app.panels.build_selections import ( background_selections, underline_selections, )
-from markup_app.services.completion_context import detect_context as _detect_completion_context
+from markup_app.panels.completion_controller import CompletionController
 from markup_app.utils.constants import LINK_MARKER, LINK_PLACEHOLDER
 from markup_app.services.parse_xml_tags import (
     entry_block_span, find_hw_occurrence, find_hw_occurrences, find_rogue_tags,
@@ -41,7 +36,7 @@ class XmlTextEdit(QTextEdit):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.setStyle(NoBlueFocusFrameStyle(self.style()))
+        install_no_blue_focus_style(self)
         self.setStyleSheet(f'font-family: {FONT_STACK}; font-size: 12pt;')
         self.setAcceptRichText(False)
         self._pending_open_tag = None
@@ -50,14 +45,12 @@ class XmlTextEdit(QTextEdit):
         self._last_scan_text = None
         self._hovered_link_mark = None
         self.setMouseTracking(True)
-        self._completion_popup = AttributePopup(self)
-        self._completion_popup.hide()
-        self._completion_popup.itemClicked.connect(self._accept_completion_item)
+        self._completion = CompletionController(self)
         self.cursorPositionChanged.connect(self._reset_pending_tag_delete)
         self.textChanged.connect(self._check_pair_restore)
         self.textChanged.connect(self._on_scan_changed)
         self.textChanged.connect(self._schedule_rogue_scan)
-        self.textChanged.connect(self._hide_completion)
+        self.textChanged.connect(self._completion.hide)
 
     def reset_state(self):
         self._pending_tag_delete = False
@@ -332,7 +325,7 @@ class XmlTextEdit(QTextEdit):
                     cursor.setPosition(doc_lt + 1)
                     cursor.insertText(LINK_MARKER)
                     fmt = QTextCharFormat()
-                    fmt.setFontFamily('Segoe UI Emoji')
+                    fmt.setFontFamilies([EMOJI_FONT_FAMILY])
                     cursor.setPosition(doc_lt + 1)
                     cursor.setPosition(doc_lt + 3, QTextCursor.KeepAnchor)
                     cursor.mergeCharFormat(fmt)
@@ -691,122 +684,8 @@ class XmlTextEdit(QTextEdit):
         self.setTextCursor(c2)
         self.textChanged.emit()
 
-    def _handle_completion_key(self, event):
-        popup = self._completion_popup
-        if not popup.isVisible():
-            return False
-        key = event.key()
-        if key == Qt.Key_Escape:
-            self._hide_completion()
-            return True
-        if key == Qt.Key_Down:
-            self._move_completion_selection(1)
-            return True
-        if key == Qt.Key_Up:
-            self._move_completion_selection(-1)
-            return True
-        if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab):
-            self._accept_completion_current()
-            return True
-        if key in (Qt.Key_Left, Qt.Key_Right, Qt.Key_Home, Qt.Key_End):
-            self._hide_completion()
-        return False
-
-    def _refresh_completion(self):
-        pos = self.textCursor().position()
-        ctx = _detect_completion_context(self._scan_text(), pos)
-        if ctx is None:
-            self._hide_completion()
-            return
-        items = ctx.candidates()
-        if not items:
-            self._hide_completion()
-            return
-        self._show_completion(items)
-
-    def _show_completion(self, items):
-        popup = self._completion_popup
-        popup.clear()
-        for name, kind in items:
-            item = QListWidgetItem(name)
-            item.setData(Qt.UserRole, (name, kind))
-            popup.addItem(item)
-        popup.setCurrentRow(0)
-        self._size_completion_popup(popup)
-        self._position_completion_popup(popup)
-        if not popup.isVisible():
-            popup.show()
-        popup.raise_()
-
-    def _size_completion_popup(self, popup):
-        metrics = popup.fontMetrics()
-        width = COMPLETION_MIN_WIDTH
-        if popup.count():
-            popup.setUniformItemSizes(False)
-            content_w = popup.sizeHintForColumn(0)
-            popup.setUniformItemSizes(True)
-            width = max(width, content_w + 2 * popup.frameWidth() + COMPLETION_FRAME_PADDING)
-        row_h = popup.sizeHintForRow(0) if popup.count() else metrics.height() + COMPLETION_ROW_PADDING
-        visible = min(popup.count(), AttributePopup.MAX_VISIBLE)
-        popup.setFixedWidth(width)
-        popup.setFixedHeight(visible * row_h + 2 * popup.frameWidth() + COMPLETION_ROW_PADDING)
-
-    def _position_completion_popup(self, popup):
-        rect = self.cursorRect()
-        global_pos = self.viewport().mapToGlobal(rect.bottomLeft())
-        screen = QApplication.screenAt(global_pos) or self.screen()
-        avail = screen.availableGeometry()
-        x = min(max(global_pos.x(), avail.left()), avail.right() - popup.width())
-        y = global_pos.y()
-        if y + popup.height() > avail.bottom():
-            y = self.viewport().mapToGlobal(rect.topLeft()).y() - popup.height()
-        popup.move(x, y)
-
-    def _move_completion_selection(self, delta):
-        popup = self._completion_popup
-        if popup.count() == 0:
-            return
-        popup.setCurrentRow((popup.currentRow() + delta) % popup.count())
-
-    def _accept_completion_current(self):
-        item = self._completion_popup.currentItem()
-        if item is not None:
-            self._apply_completion(item.data(Qt.UserRole))
-
-    def _accept_completion_item(self, item):
-        if item is not None:
-            self._apply_completion(item.data(Qt.UserRole))
-
-    def _apply_completion(self, data):
-        if not data:
-            return
-        name, kind = data
-        cursor = self.textCursor()
-        ctx = _detect_completion_context(self._scan_text(), cursor.position())
-        if ctx is None:
-            self._hide_completion()
-            return
-        start = cursor.position() - len(ctx.fragment)
-        cursor.beginEditBlock()
-        if ctx.fragment:
-            cursor.setPosition(start)
-            cursor.setPosition(start + len(ctx.fragment), QTextCursor.KeepAnchor)
-            cursor.removeSelectedText()
-        if kind == _ATTR_BOOL:
-            cursor.insertText(f'{name}="true"')
-        else:
-            cursor.insertText(f'{name}=""')
-            cursor.setPosition(start + len(name) + 2)
-        self._on_scan_changed()
-        cursor.endEditBlock()
-        self.setTextCursor(cursor)
-        self._hide_completion()
-
-    def _hide_completion(self):
-        self._completion_popup.hide()
-
     def keyPressEvent(self, event):
-        if self._handle_completion_key(event):
+        if self._completion.handle_key(event):
             return
         cursor = self.textCursor()
         scroll = self.verticalScrollBar().value()
@@ -822,114 +701,120 @@ class XmlTextEdit(QTextEdit):
             and self.verticalScrollBar().value() < scroll
         ):
             self.verticalScrollBar().setValue(scroll)
-        self._refresh_completion()
+        self._completion.refresh()
 
     def mousePressEvent(self, event):
-        self._hide_completion()
+        self._completion.hide()
         super().mousePressEvent(event)
-        self._refresh_completion()
+        self._completion.refresh()
 
     def focusOutEvent(self, event):
-        self._hide_completion()
+        self._completion.hide()
         super().focusOutEvent(event)
 
     def _handle_key(self, event):
         if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
-            deleting_forward = event.key() == Qt.Key_Delete
-            cursor = self.textCursor()
-
-            if not cursor.hasSelection():
-                plain = self._scan_text()
-                pos = cursor.position()
-                if deleting_forward and plain[pos:pos + 2] == LINK_PLACEHOLDER:
-                    cursor.setPosition(pos + 2)
-                    self.setTextCursor(cursor)
-                    return
-                if (not deleting_forward and pos >= 2
-                        and plain[pos - 2:pos] == LINK_PLACEHOLDER):
-                    cursor.setPosition(pos - 2)
-                    self.setTextCursor(cursor)
-                    return
-
-            if self._pending_tag_delete and not cursor.hasSelection():
-                if self._pending_open_tag and self._pending_close_tag:
-                    if self._pending_delete_forward != deleting_forward:
-                        self._pending_tag_delete = False
-                        self._pending_open_tag = None
-                        self._pending_close_tag = None
-                        self._pending_delete_forward = None
-                        self.setExtraSelections([])
-                    else:
-                        self.blockSignals(True)
-                        open_tag = self._pending_open_tag
-                        close_tag = self._pending_close_tag
-
-                        self._pair_delete_snapshot = self.toPlainText()
-                        self._last_deleted_open = dict(open_tag)
-                        self._last_deleted_close = dict(close_tag)
-                        self._last_deleted_forward = deleting_forward
-
-                        cursor.beginEditBlock()
-                        if open_tag is close_tag:
-                            cursor.setPosition(open_tag['start'])
-                            cursor.setPosition(open_tag['end'], QTextCursor.KeepAnchor)
-                            cursor.removeSelectedText()
-                            cursor.setPosition(open_tag['start'])
-                        else:
-                            cursor.setPosition(close_tag['start'])
-                            cursor.setPosition(close_tag['end'], QTextCursor.KeepAnchor)
-                            cursor.removeSelectedText()
-
-                            cursor.setPosition(open_tag['start'])
-                            cursor.setPosition(open_tag['end'], QTextCursor.KeepAnchor)
-                            cursor.removeSelectedText()
-
-                            cursor.setPosition(open_tag['start'])
-                        cursor.endEditBlock()
-                        self.setTextCursor(cursor)
-                        self.setExtraSelections([])
-                        self._pending_tag_delete = False
-                        self._pending_open_tag = None
-                        self._pending_close_tag = None
-                        self._pending_delete_forward = None
-                        self.blockSignals(False)
-                        self.textChanged.emit()
-                        return
-
-            self._pending_tag_delete = False
-            self._pending_open_tag = None
-            self._pending_close_tag = None
-            self.setExtraSelections([])
-
-            if cursor.hasSelection():
-                super().keyPressEvent(event)
+            if self._handle_delete_key(event):
                 return
-
-            text = self._scan_text()
-            pos = cursor.position()
-
-            if is_inside_tag(text, pos):
-                if self._try_synced_name_delete(event, text, pos, deleting_forward):
-                    return
-                super().keyPressEvent(event)
-                return
-
-            open_tag, close_tag = pair_at_deletion_boundary(text, pos, forward=deleting_forward)
-            if open_tag and close_tag:
-                self._pending_tag_delete = True
-                self._pending_open_tag = open_tag
-                self._pending_close_tag = close_tag
-                self._pending_delete_forward = deleting_forward
-                self._highlight_tag_pair(open_tag, close_tag)
-                return
-
         else:
-            self._pending_tag_delete = False
-            self._pending_open_tag = None
-            self._pending_close_tag = None
-            self._pending_delete_forward = None
-            self.setExtraSelections([])
+            self._reset_pending_pair()
             if self._try_synced_name_insert(event):
                 return
 
         super().keyPressEvent(event)
+
+    def _handle_delete_key(self, event):
+        deleting_forward = event.key() == Qt.Key_Delete
+        cursor = self.textCursor()
+
+        if not cursor.hasSelection() and self._skip_link_placeholder(
+                cursor, deleting_forward):
+            return True
+
+        if self._pending_tag_delete and not cursor.hasSelection():
+            if self._consume_pending_pair(cursor, deleting_forward):
+                return True
+
+        self._reset_pending_pair()
+
+        if cursor.hasSelection():
+            return False
+
+        text = self._scan_text()
+        pos = cursor.position()
+
+        if is_inside_tag(text, pos):
+            return self._try_synced_name_delete(event, text, pos, deleting_forward)
+
+        open_tag, close_tag = pair_at_deletion_boundary(
+            text, pos, forward=deleting_forward)
+        if open_tag and close_tag:
+            self._arm_pending_pair(open_tag, close_tag, deleting_forward)
+            return True
+        return False
+
+    def _skip_link_placeholder(self, cursor, deleting_forward):
+        plain = self._scan_text()
+        pos = cursor.position()
+        if deleting_forward and plain[pos:pos + 2] == LINK_PLACEHOLDER:
+            cursor.setPosition(pos + 2)
+        elif (not deleting_forward and pos >= 2
+                and plain[pos - 2:pos] == LINK_PLACEHOLDER):
+            cursor.setPosition(pos - 2)
+        else:
+            return False
+        self.setTextCursor(cursor)
+        return True
+
+    def _consume_pending_pair(self, cursor, deleting_forward):
+        open_tag = self._pending_open_tag
+        close_tag = self._pending_close_tag
+        if open_tag is None or close_tag is None:
+            return False
+        if self._pending_delete_forward != deleting_forward:
+            self._reset_pending_pair()
+            return False
+
+        self.blockSignals(True)
+        self._pair_delete_snapshot = self.toPlainText()
+        self._last_deleted_open = dict(open_tag)
+        self._last_deleted_close = dict(close_tag)
+        self._last_deleted_forward = deleting_forward
+
+        cursor.beginEditBlock()
+        if open_tag is close_tag:
+            cursor.setPosition(open_tag['start'])
+            cursor.setPosition(open_tag['end'], QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()
+            cursor.setPosition(open_tag['start'])
+        else:
+            cursor.setPosition(close_tag['start'])
+            cursor.setPosition(close_tag['end'], QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()
+
+            cursor.setPosition(open_tag['start'])
+            cursor.setPosition(open_tag['end'], QTextCursor.KeepAnchor)
+            cursor.removeSelectedText()
+
+            cursor.setPosition(open_tag['start'])
+        cursor.endEditBlock()
+
+        self.setTextCursor(cursor)
+        self._reset_pending_pair()
+        self.blockSignals(False)
+        self.textChanged.emit()
+        return True
+
+    def _arm_pending_pair(self, open_tag, close_tag, deleting_forward):
+        self._pending_tag_delete = True
+        self._pending_open_tag = open_tag
+        self._pending_close_tag = close_tag
+        self._pending_delete_forward = deleting_forward
+        self._highlight_tag_pair(open_tag, close_tag)
+
+    def _reset_pending_pair(self):
+        self._pending_tag_delete = False
+        self._pending_open_tag = None
+        self._pending_close_tag = None
+        self._pending_delete_forward = None
+        self.setExtraSelections([])

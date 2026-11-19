@@ -1,5 +1,6 @@
 FONT_STACK = "'Cambria'"
-EMOJI_FONT_STACK = "'Segoe UI Emoji'"
+EMOJI_FONT_FAMILY = 'Segoe UI Emoji'
+EMOJI_FONT_STACK = f"'{EMOJI_FONT_FAMILY}'"
 
 FONT_SIZE_BASE = '12pt'
 FONT_SIZE_HEADING_LARGE = '16pt'
@@ -168,8 +169,11 @@ ENTRY_STYLESHEET = f"""
     .h2 {{ font-weight: bold; font-size: {FONT_SIZE_HEADING_MEDIUM}; }}
 
     .sense {{ font-style: normal; }}
-    .headword-arrow {{ font-weight: normal; margin-right: 4px; font-style: normal; }}
-    .sense-arrow {{ font-weight: normal; margin-right: 4px; font-style: normal; }}
+    .headword-arrow, .sense-arrow {{
+        font-weight: normal; margin-right: 4px; font-style: normal;
+        font-family: {EMOJI_FONT_STACK};
+    }}
+    .doc-arrow {{ font-family: {EMOJI_FONT_STACK}; }}
     .link, .word-link {{
         font-style: italic; color: inherit;
         text-decoration: none; cursor: pointer;

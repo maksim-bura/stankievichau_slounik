@@ -184,6 +184,13 @@ What must stay small is the number of probes and the size of each.
   counts, collation order vs. Python sort, incremental vs. full rebuild, and
   ё-sensitive lookups. Re-run the relevant checks when touching that layer.
 - If you can't verify something, say so explicitly instead of assuming success.
+- **Pure refactors:** bracket the work with `tools/snapshot_behavior.py --save`
+  / `--check` (§9.14); it compares derived state (entries, searches, previews,
+  sources, `<see>` outcomes), so a mismatch is a behavior change, not noise. The
+  order of the change matters — see §8.16.
+- **Qt lifetime/font changes:** run `tools/check_pyside_traps.py` (§9.15) after
+  touching styles, documents, or text formats; it catches the ownership and
+  font-family crashes documented in `dictionary_app/AGENTS.md`.
 
 ### 4.3 Diagnosing a failing check
 
@@ -210,6 +217,19 @@ What must stay small is the number of probes and the size of each.
   Every non-BMP character shifts all positions after it. When both spaces
   coexist, convert only at the boundary through a named helper and never mix
   the two in one expression.
+- **Time to paint, not the call.** A Qt call can return before layout and paint;
+  measure through `processEvents()` plus a repaint/grab or from the first
+  `paintEvent`. Report cold vs warm separately: the first render of an emoji or
+  a new font family includes one-time shaping (~28 ms here) and belongs in the
+  real click cost. When a mixed glyph+text widget is slow on first show, pin
+  only the glyph (rich text); pinning the whole widget to the emoji family
+  moves the fallback onto the text and is usually worse.
+- **A reproducible teardown crash is a finding.** If a fixed script crashes at
+  interpreter shutdown every time, it is not probe noise; isolate the
+  ownership/lifetime (§9.15) before dismissing it.
+- **Wrapper liveness is not C++ validity.** A Python reference or `weakref` can
+  outlive its `QObject`; use `shiboken6.isValid(obj)` before claiming the
+  underlying object is still alive.
 
 ### 4.4 Testing budget (what the agent verifies, what the user checks)
 
@@ -237,6 +257,9 @@ one glance is waste. Split the work:
   `QTextEditExtraSelection.cursor` / `.format` are properties, while
   `cursorRect()` / `position()` are methods. Probe the accessor once rather
   than assuming; a wrong call looks like a feature bug.
+- **A parity snapshot is not a visual pass.** `tools/snapshot_behavior.py`
+  (§9.14) proves derived state; colours, spacing, hover, and first-paint feel
+  still go to the user's manual pass.
 
 ## 5. Working with the user
 
@@ -395,6 +418,9 @@ and memory as first-class constraints throughout.
   keep `markup_app/` deletable, and change no behavior or design.
 - Prefer many small, action-named modules over one multi-purpose file, and a new
   focused module over growing an already broad one.
+- **Split large files LAST**, after behavior is settled, dead code is gone, and
+  shared primitives are consolidated: refactoring adds lines, so an early split
+  is redone. The full order is in §8.16.
 - Introduce **lazy evaluation** wherever work can be deferred until it is
   actually needed (parse on demand, build on access, compute on use).
 - Check whether any code can be rewritten more directly / more neatly without
@@ -618,7 +644,10 @@ every change:
   `tools/find_unused_definitions.py` before finishing a change that may have
   orphaned code. For
   `<see>` / link-resolution changes, use a targeted probe (§4.1) or the markup
-  app's broken-links filter.
+  app's broken-links filter. For structural changes that must stay
+  behavior-neutral, bracket the work with `tools/snapshot_behavior.py
+  --save`/`--check` (§9.14, order in §8.16); after touching Qt styles,
+  documents, or text formats, run `tools/check_pyside_traps.py` (§9.15).
 - **Scope discipline:** for a small change, do not do a full-cycle cleanup —
   fix the touched code to comply with these rules (no behavior change). If
   compliance requires a broader refactor, ask the user per §8.11.
@@ -650,6 +679,51 @@ every change:
 - **Exempt**: README.md follows universal convention and remains unchanged.
 - All new project documentation must follow this rule. Do not use kebab-case, snake_case, or PascalCase for non-README markdown files.
 
+### 8.16 Order of changes in a refactor or cleanup
+
+Do the work in this order; each step makes the next one safer and cheaper:
+
+1. **Settle behavior first.** Finish or explicitly freeze functional changes
+   before restructuring, so any diff can be attributed to one kind of work.
+2. **Capture derived behavior.** Run `tools/snapshot_behavior.py --save`
+   (§9.14) on the current code. A snapshot is the only parity oracle for state
+   derived from the DB and the formatters; comparing rendered output against
+   `git HEAD` only works for pure moves.
+3. **Delete dead code.** Remove unused imports, helpers, branches, flags, and
+   localization keys (§8.3) before moving anything.
+4. **Consolidate shared primitives.** Apply §8.4/§8.5 while the files are still
+   recognizable; duplication is cheapest to remove before the split.
+5. **Split files last.** Refactoring adds lines (signatures, imports, module
+   scaffolding), so splitting earlier means splitting twice. Re-run the
+   snapshot after each split; a pure move must keep it green.
+6. **Docs last.** Update `AGENTS.md`/this file only after the code stops moving,
+   then run `tools/check_doc_references.py` (§9.8).
+
+Never treat "the refactor is neutral" as a reason to skip the snapshot: a green
+snapshot proves neutrality, a red one means either the change was not neutral or
+the baseline needs an intentional, reviewed re-save.
+
+### 8.17 Crutches and accidental overengineering
+
+A refactor is also the moment to recognize code that exists only because
+something was hard at the time:
+
+- **Crutches:** compatibility shims for data that no longer exists,
+  retry/fallback branches that cannot fire, flags with one caller, helpers added
+  only to make a probe pass, and duplicated values kept "just in case". Delete
+  them unless a maintained doc names the case and calls the code a **trampoline
+  for a specific planned feature**.
+- **Accidental overengineering:** a new abstraction, cache, option, or
+  generalization introduced by the refactor for one caller. §8.6's "do not
+  overengineer" applies during cleanup as well as during optimization.
+- **How to decide:** `rg` the symbol and its doc reference. If only probes,
+  unreferenced helpers, or the refactor itself mention it, it is a crutch. If a
+  doc says "keep"/"preserve"/"trampoline" and explains the future
+  functionality, keep it and cross-reference that section instead of restating
+  the rationale.
+- **Report removals.** List deleted crutches in the change report so the user
+  can veto one that was in fact planned.
+
 # Part III — Repository tools
 
 The scripts in this folder are reusable across projects: pass `--root`,
@@ -680,6 +754,8 @@ applications and is not gitignored. Nothing in `dictionary_app/` or
 | `search_xml_app.pyw` | double-clickable window around `search_xml.py`: type a query, press Enter, see headwords and snippets (see below) | double-click `tools/search_xml_app.pyw` |
 | `fix_tag_punctuation.py` | move punctuation that follows a closing tag inside that tag, one reviewed candidate at a time (see below) | `py -3 tools/fix_tag_punctuation.py` (Enter = skip, `y` = accept, other text = replacement; `--apply` accepts all) |
 | `compare_raw_markup.py` | raw-OCR vs marked-up XML: coverage per letter and convention census (see below) | `py -3 tools/compare_raw_markup.py --coverage` |
+| `snapshot_behavior.py` | golden JSON of derived dictionary/search/sources/`<see>` behavior (see below) | `py -3 tools/snapshot_behavior.py --save` then `--check` |
+| `check_pyside_traps.py` | AST scan for Qt style-ownership, font, and document traps (see below) | `py -3 tools/check_pyside_traps.py` |
 
 ### 9.1 `read_codebase.py` — map a repo quickly
 
@@ -1120,17 +1196,69 @@ flagged blocks. The alignment assumes one bullet per printed headword and print
 order; a transposed pair shows up as two findings. Exit `0` when the report ran,
 `1` when a paired file is missing or unreadable.
 
+### 9.14 `snapshot_behavior.py` — golden parity for derived behavior
+
+Runs the real search engine, entry formatter, sources renderer, and `<see>`
+classifier against the existing `dictionary.db` and writes a deterministic JSON
+snapshot. It is read-only: it opens the DB directly (never
+`create_search_engine()`), enables `PRAGMA query_only`, and fails cleanly when
+the DB is missing. Default baseline:
+`tools/build/behavior_snapshot.json` (under the ignored `build/`). Set
+`$env:PYTHONUTF8="1"` when running it.
+
+| flag | purpose |
+|---|---|
+| `--save [PATH]` | write the baseline (default path above) |
+| `--check [PATH]` | compare the current code with the baseline |
+| `--database PATH` | use another DB |
+| `--entries N` | entry HTML samples, `0` = all (default 150) |
+| `--rows N` | search rows kept verbatim per case; digests still cover all rows |
+
+Captured state: DB invariants (schema version, table counts, content/index and
+source-file distribution, index names); sampled `format_entry` hashes plus one
+targeted-subheadword render; sixteen fixed search cases (headwords,
+translations, examples; both alphabets; empty/whitespace query; wildcards;
+accents; `ё`; `ґ`) with full row/preview digests and a verbatim sample; sources
+rendering (expanded, collapsed, search, no match, marker anchors); and every
+`<see>` outcome with its resolved row identity.
+
+Exit codes: `0` identical, `1` mismatch (first 40 differences printed), `2`
+missing DB/baseline or unreadable JSON. A mismatch is a finding: fix the code,
+or, when the behavior change was intended, review and `--save` a new baseline.
+Run it per §8.16 — before/after every behavior-neutral move and after each
+split. It imports `markup_app`, so it lives only while both apps do.
+
+### 9.15 `check_pyside_traps.py` — Qt ownership and font traps
+
+AST scan (no imports, no Qt needed) for the PySide patterns that crash or leak
+in this build. `--root` and `--ext` select the tree; `--exclude` adds path parts
+on top of the built-in skip list. Findings print as
+`path:line: severity [rule] message`.
+
+| rule | severity | trigger | rule of thumb |
+|---|---|---|---|
+| `proxy-style-base` | fatal | `QProxyStyle(...)` or a `*Style(...)` subclass with a positional/keyword base | the proxy takes ownership of the base; construct it with no base and parent it (use `install_no_blue_focus_style`); never pass a live style (`self.style()`, `app.style()`) |
+| `set-font-family` | fatal | `.setFontFamily(...)` / `.fontFamily(...)` | crash (0xC0000005) in this PySide build; use `setFonts` / `setFontFamilies` |
+| `set-document` | advisory | `.setDocument(...)` | `QTextEdit.setDocument` does not own the document; keep a Python reference and `deleteLater()` the replaced one |
+
+Advisory findings do not fail the run; `--strict` makes them fatal. Exit `0`
+with no fatal finding, `1` fatal (or any advisory under `--strict`), `2` bad
+root. The advisory is deliberate: `setDocument` is correct when ownership is
+explicit (see `DictTextBrowser.setHtml` in `dictionary_app/AGENTS.md`).
+
 ## 10. Exit codes
 
 Scripts exit `0` on success and `1` on findings/failures. `search_xml.py`
 follows grep instead: `0` match, `1` no match, `2` error.
+`snapshot_behavior.py` exits `2` for a missing database/baseline or unreadable
+JSON.
 
 ## 11. Reuse
 
 Copy the scripts in `tools/` into another repo; `read_codebase.py`,
 `plan_cleanup.py`, `strip_comments.py`, `find_unused_definitions.py`,
-`check_doc_references.py`, `inspect_data.py`, and `search_xml.py` are
-project-agnostic. The data inspector learns the record tag at runtime and takes
+`check_doc_references.py`, `inspect_data.py`, `search_xml.py`, and
+`check_pyside_traps.py` are project-agnostic (the latter assumes PySide6). The data inspector learns the record tag at runtime and takes
 `--glob`/`--tag`/`--record`, so it works on any XML-like dataset without edits;
 the search script is a generic recursive grep with a data-folder default.
 `rewrite_imports.py` only touches imports. `digraph_export.py` and the
@@ -1139,6 +1267,8 @@ the exception: they import `dictionary_app` and encode this corpus's `<hw>` /
 `<sep />` / `<see hw>` shapes, so copy them only when the target repo has the
 same schema (the `write_workbook` writer itself is generic).
 `compare_raw_markup.py` (§9.13) hard-codes this repo's raw/XML folder layout and
-`dictionary_<X>` naming; the alignment logic is reusable, the paths are not. For per-repo policy,
+`dictionary_<X>` naming; the alignment logic is reusable, the paths are not.
+`snapshot_behavior.py` (§9.14) imports both apps plus this corpus's DB/format
+layer, so copy it only with the same architecture. For per-repo policy,
 write a local config and a plan JSON (populate from the repo's actual module
 names).

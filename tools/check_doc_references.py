@@ -1,16 +1,3 @@
-"""Check documentation cross-references: numbered sections and repo paths.
-
-Run: py -3 tools/check_doc_references.py
-     py -3 tools/check_doc_references.py --sections-from docs/index.md
-     py -3 tools/check_doc_references.py --checks sections --ignore-glob 'out/*'
-
-Every `§N` / `§N.M` must match a numbered heading in the same document, or in a
-document passed with --sections-from. Every backticked repo path must exist
-(relative to the root or to the file that mentions it); a token counts as a path
-when its first segment exists at the root or its extension is in --path-ext.
-Paths covered by .gitignore are skipped, so generated outputs never fail the
-check. Exits 1 when a reference does not resolve, 0 when the docs are consistent.
-"""
 import argparse
 import re
 import sys

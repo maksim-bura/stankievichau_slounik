@@ -10,6 +10,11 @@ from dictionary_app.widgets.menu_button import MenuButton
 from dictionary_app.widgets.menu_options import CheckOption, RadioOption
 
 
+OPTION_SEARCH_IN_HEADWORDS = 'search_in_headwords'
+OPTION_SEARCH_IN_TRANSLATIONS = 'search_in_translations'
+OPTION_SEARCH_IN_EXAMPLES = 'search_in_examples'
+
+
 PROPERTY_ON = 'true'
 PROPERTY_OFF = 'false'
 
@@ -118,15 +123,15 @@ class SettingsButton(MenuButton):
     def get_option_states(self):
         if self._russian_radio.is_checked():
             return {
-                'search_in_headwords': False,
-                'search_in_translations': True,
-                'search_in_examples': False,
+                OPTION_SEARCH_IN_HEADWORDS: False,
+                OPTION_SEARCH_IN_TRANSLATIONS: True,
+                OPTION_SEARCH_IN_EXAMPLES: False,
             }
         else:
             return {
-                'search_in_headwords': self._headwords_option().is_checked(),
-                'search_in_translations': False,
-                'search_in_examples': self._examples_option().is_checked(),
+                OPTION_SEARCH_IN_HEADWORDS: self._headwords_option().is_checked(),
+                OPTION_SEARCH_IN_TRANSLATIONS: False,
+                OPTION_SEARCH_IN_EXAMPLES: self._examples_option().is_checked(),
             }
 
     def _on_radio_toggled(self, radio):

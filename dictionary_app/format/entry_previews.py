@@ -1,0 +1,424 @@
+import copy
+import xml.etree.ElementTree as ElementTree
+
+from dictionary_app.format.format_entry import plain_parens, process_element
+from dictionary_app.format.highlight_formatter import (
+    EXCLUDED_HIGHLIGHT_CLASS, PARAGRAPH_BREAK_KEY, HighlightFormatter
+)
+from dictionary_app.utils.constants import SEP_SORT_SENTINEL
+from dictionary_app.utils.extract_content_text import (
+    content_text, hw_text_excluding_n, is_excluded_child
+)
+from dictionary_app.utils.normalize_headword import normalize_jo_to_je
+from dictionary_app.utils.remove_accents import remove_accents
+from dictionary_app.utils.xml_schema import ATTR_EXCL, ATTR_ID, ATTR_KEEP_ACC
+
+
+_PREVIEW_SPAN = '<span class="{cls}">{html}</span>'
+_PREVIEW_CLASS_BY_TAG = {'t': 't', 'ex': 'g'}
+
+
+class PreviewBuilder:
+    def __init__(self):
+        self._highlighter = HighlightFormatter()
+
+    def find_content_matches(self, root, headword, tag, pattern, keep_acc=0):
+        parent_map = {c: p for p in root.iter() for c in p}
+        order = list(root.iter())
+        order_pos = {id(el): i for i, el in enumerate(order)}
+
+        matched = []
+        for element in root.iter(tag):
+            search_text = content_text(element, tag)
+            if not search_text:
+                continue
+            normalized_search = remove_accents(search_text)
+            if tag == 't':
+                normalized_search = normalize_jo_to_je(normalized_search)
+            if pattern.search(normalized_search):
+                matched.append(element)
+
+        emitted_sense_ids = set()
+        matched_ids = {id(el) for el in matched}
+
+        if tag == 't':
+            absorbed = set()
+            for el in matched:
+                parent = parent_map.get(el)
+                if parent is None:
+                    continue
+                siblings = list(parent)
+                try:
+                    i = siblings.index(el)
+                except ValueError:
+                    continue
+                if i >= 2:
+                    prev = siblings[i - 1]
+                    prev2 = siblings[i - 2]
+                    if (prev.tag == 'ex' and prev.tail and '—' in prev.tail
+                            and prev2.tag == 't' and id(prev2) in matched_ids):
+                        absorbed.add(id(el))
+            matched = [el for el in matched if id(el) not in absorbed]
+            matched_ids = {id(el) for el in matched}
+
+            embedded_groups, embedded_by_sense = self._group_embedded_t_matches(
+                matched, parent_map)
+            if embedded_groups:
+                consumed_groups = set()
+                skipped_main_t = set()
+                for group in embedded_by_sense.values():
+                    main_t = group['sense'].find('t')
+                    if main_t is not None:
+                        skipped_main_t.add(id(main_t))
+                embedded_previews = []
+                prev_element = None
+                for element in matched:
+                    group = embedded_groups.get(id(element))
+                    if group is not None:
+                        group_key = (
+                            id(group['sense']) if group['sense'] is not None
+                            else id(group['ex'])
+                        )
+                        if group_key in consumed_groups:
+                            continue
+                        consumed_groups.add(group_key)
+                        if group['sense'] is not None:
+                            emitted_sense_ids.add(id(group['sense']))
+                        paragraph_break = self._has_br_between(
+                            prev_element, element, order, order_pos)
+                        preview = self._build_embedded_t_preview(
+                            group, pattern, parent_map, root, headword, keep_acc)
+                        preview[PARAGRAPH_BREAK_KEY] = paragraph_break
+                        embedded_previews.append(preview)
+                        prev_element = element
+                        continue
+                    if id(element) in skipped_main_t:
+                        continue
+                    paragraph_break = self._has_br_between(
+                        prev_element, element, order, order_pos)
+                    preview_hw, preview_sort, preview_hw_id = (
+                        self._preview_hw_fields(
+                            element, parent_map, root, headword, keep_acc))
+                    sense_num, sense_id = self._sense_number_for(
+                        element, parent_map)
+                    suppress = sense_id is not None and sense_id in emitted_sense_ids
+                    preview_html = self._build_preview_html(
+                        element, tag, pattern, parent_map,
+                        add_sense_num=not suppress, matched_ids=matched_ids)
+                    if not suppress and sense_num:
+                        emitted_sense_ids.add(sense_id)
+                    embedded_previews.append({
+                        'headword': preview_hw,
+                        'sort_headword': preview_sort,
+                        'sort_hw_id': preview_hw_id,
+                        'preview_html': preview_html,
+                        PARAGRAPH_BREAK_KEY: paragraph_break,
+                    })
+                    prev_element = element
+                return embedded_previews
+
+        previews = []
+        prev_element = None
+        for element in matched:
+            paragraph_break = self._has_br_between(
+                prev_element, element, order, order_pos)
+
+            preview_hw, preview_sort, preview_hw_id = self._preview_hw_fields(
+                element, parent_map, root, headword, keep_acc)
+
+            sense_num, sense_id = self._sense_number_for(element, parent_map)
+            suppress = sense_id is not None and sense_id in emitted_sense_ids
+            preview_html = self._build_preview_html(
+                element, tag, pattern, parent_map,
+                add_sense_num=not suppress, matched_ids=matched_ids)
+            if not suppress and sense_num:
+                emitted_sense_ids.add(sense_id)
+            previews.append({
+                'headword': preview_hw,
+                'sort_headword': preview_sort,
+                'sort_hw_id': preview_hw_id,
+                'preview_html': preview_html,
+                PARAGRAPH_BREAK_KEY: paragraph_break,
+            })
+            prev_element = element
+        seen_html = set()
+        unique = []
+        for p in previews:
+            if p['preview_html'] not in seen_html:
+                seen_html.add(p['preview_html'])
+                unique.append(p)
+        return unique
+
+    def _has_br_between(self, prev_element, element, order, order_pos):
+        if prev_element is None:
+            return False
+        prev_idx = order_pos.get(id(prev_element), -1)
+        curr_idx = order_pos.get(id(element), -1)
+        if prev_idx < 0 or curr_idx <= prev_idx:
+            return False
+        return any(node.tag == 'br' for node in order[prev_idx + 1:curr_idx])
+
+    def _group_embedded_t_matches(self, matched, parent_map):
+        by_element = {}
+        by_sense = {}
+        by_ex = {}
+        for element in matched:
+            parent = parent_map.get(element)
+            if parent is None or parent.tag != 'ex':
+                continue
+            current = parent
+            sense = None
+            while current is not None:
+                if current.tag == 'sense':
+                    sense = current
+                    break
+                current = parent_map.get(current)
+            if sense is not None:
+                group = by_sense.get(id(sense))
+                if group is None:
+                    group = {'sense': sense, 'ex': None, 'elements': []}
+                    by_sense[id(sense)] = group
+            else:
+                group = by_ex.get(id(parent))
+                if group is None:
+                    group = {'sense': None, 'ex': parent, 'elements': []}
+                    by_ex[id(parent)] = group
+            group['elements'].append(element)
+            by_element[id(element)] = group
+        return by_element, by_sense
+
+    def _build_embedded_t_preview(self, group, pattern, parent_map, root,
+                                  headword, keep_acc=0):
+        sense = group['sense']
+        elements = group['elements']
+
+        parts = []
+        if sense is not None:
+            parts.append(self._sense_number_html(sense))
+            main_t = sense.find('t')
+            if main_t is not None:
+                parts.append(_PREVIEW_SPAN.format(
+                    cls='t',
+                    html=self._element_preview_content(main_t, 't', pattern)))
+                parts.append(main_t.tail or ' ')
+
+        seen_ex = set()
+        sep = ''
+        for element in elements:
+            ex_el = parent_map.get(element)
+            if ex_el is None or id(ex_el) in seen_ex:
+                continue
+            seen_ex.add(id(ex_el))
+            include = {id(el) for el in elements if parent_map.get(el) is ex_el}
+            ex_content = self._element_preview_content(
+                ex_el, 'ex', pattern, include)
+            parts.append(sep)
+            parts.append(_PREVIEW_SPAN.format(cls='g', html=ex_content))
+            sep = ex_el.tail or ' '
+
+        preview_html = ''.join(parts)
+        first = elements[0]
+        preview_hw, preview_sort, preview_hw_id = self._preview_hw_fields(
+            first, parent_map, root, headword, keep_acc)
+        if sense is not None:
+            preview_html = _PREVIEW_SPAN.format(cls='t', html=preview_html)
+        return {
+            'headword': preview_hw,
+            'sort_headword': preview_sort,
+            'sort_hw_id': preview_hw_id,
+            'preview_html': preview_html,
+        }
+
+    def _format_child_for_preview(self, child):
+        child_copy = copy.deepcopy(child)
+        child_copy.tail = None
+        wrapper = ElementTree.Element('_wrapper')
+        wrapper.append(child_copy)
+        return process_element(wrapper, None)
+
+    def _sense_number_for(self, element, parent_map):
+        sense_num = ''
+        sense_id = None
+        crossed_sub_headword = False
+        current = element
+        while current in parent_map:
+            current = parent_map[current]
+            if current.tag == 'd':
+                crossed_sub_headword = True
+                continue
+            if current.tag == 'sense' and current.attrib:
+                if not crossed_sub_headword:
+                    sense_num = self._sense_number_html(current)
+                    sense_id = id(current)
+                break
+        return sense_num, sense_id
+
+    def _build_preview_html(self, element, tag, pattern, parent_map,
+                            add_sense_num=True, matched_ids=None,
+                            include_children=None):
+        highlighted = self._element_preview_content(
+            element, tag, pattern, include_children)
+        if tag in ('t', 'ex'):
+            highlighted = self._add_sibling_context(
+                highlighted, element, pattern, parent_map, tag,
+                add_sense_num, matched_ids)
+        return _PREVIEW_SPAN.format(
+            cls=_PREVIEW_CLASS_BY_TAG[tag], html=highlighted)
+
+    def _element_preview_content(self, element, tag, pattern, include_children=None):
+        segments = []
+        excluded_fragments = []
+        layout = []
+        if element.text:
+            segments.append(plain_parens(element.text) if tag == 'ex' else element.text)
+            layout.append(('seg', len(segments) - 1))
+        for child in element:
+            child_html = self._format_child_for_preview(child)
+            if is_excluded_child(child, tag) and not (
+                    include_children and id(child) in include_children):
+                excluded_fragments.append(child_html)
+                layout.append(('excl', len(excluded_fragments) - 1))
+            else:
+                segments.append(child_html)
+                layout.append(('seg', len(segments) - 1))
+            if child.tail:
+                segments.append(plain_parens(child.tail) if tag == 'ex' else child.tail)
+                layout.append(('seg', len(segments) - 1))
+        html_parts = []
+        for entry_type, idx in layout:
+            if entry_type == 'seg':
+                html_parts.append(segments[idx])
+            else:
+                html_parts.append(_PREVIEW_SPAN.format(
+                    cls=EXCLUDED_HIGHLIGHT_CLASS,
+                    html=excluded_fragments[idx]))
+        return self._highlighter.apply_highlight(
+            ''.join(html_parts), pattern,
+            normalize=(tag == 't'),
+            exclude_classes=[EXCLUDED_HIGHLIGHT_CLASS],
+        )
+
+    def _add_sibling_context(self, highlighted, element, pattern, parent_map,
+                             tag, add_sense_num=True, matched_ids=None):
+        parent = parent_map.get(element)
+        if parent is not None:
+            siblings = list(parent)
+            try:
+                idx = siblings.index(element)
+            except ValueError:
+                idx = -1
+            if tag == 't':
+                if idx > 0:
+                    prev_sib = siblings[idx - 1]
+                    if (prev_sib.tag == 'ex' and prev_sib.tail
+                            and '—' in prev_sib.tail):
+                        ex_fmt = process_element(prev_sib, None)
+                        context = _PREVIEW_SPAN.format(
+                            cls='g', html=ex_fmt) + '—'
+                        j = idx - 2
+                        while j >= 0 and siblings[j].tag == 'ex':
+                            j -= 1
+                        if j >= 0 and siblings[j].tag == 't':
+                            if not (matched_ids and id(siblings[j]) in matched_ids):
+                                prev_t = siblings[j]
+                                prev_t_fmt = self._element_preview_content(
+                                    prev_t, 't', pattern)
+                                context = (_PREVIEW_SPAN.format(
+                                    cls='t', html=prev_t_fmt)
+                                    + (prev_t.tail or '') + context)
+                        highlighted = context + highlighted
+
+                sep = element.tail or ''
+                i = idx + 1
+                while i + 1 < len(siblings):
+                    ex_sib = siblings[i]
+                    t_sib = siblings[i + 1]
+                    if not (ex_sib.tag == 'ex' and ex_sib.tail and '—' in ex_sib.tail
+                            and t_sib.tag == 't'):
+                        break
+                    t_search = normalize_jo_to_je(remove_accents(content_text(t_sib, 't')))
+                    if not pattern.search(t_search):
+                        break
+                    ex_fmt = process_element(ex_sib, None)
+                    t_fmt = self._element_preview_content(t_sib, 't', pattern)
+                    highlighted += (sep + _PREVIEW_SPAN.format(cls='g', html=ex_fmt)
+                                    + '—' + _PREVIEW_SPAN.format(cls='t', html=t_fmt))
+                    sep = t_sib.tail or ''
+                    i += 2
+
+                if add_sense_num:
+                    sense_num, _ = self._sense_number_for(element, parent_map)
+                    highlighted = sense_num + highlighted
+            elif (tag == 'ex' and element.tail and '—' in element.tail
+                    and idx + 1 < len(siblings)):
+                next_sib = siblings[idx + 1]
+                if next_sib.tag == 't':
+                    t_fmt = process_element(next_sib, None)
+                    highlighted += _PREVIEW_SPAN.format(
+                        cls='t', html='—' + t_fmt)
+        return highlighted
+
+    def _enclosing_sense(self, element, parent_map):
+        current = element
+        while current in parent_map:
+            current = parent_map[current]
+            if current.tag == 'sense':
+                return current
+        return None
+
+    def _preview_hw_fields(self, element, parent_map, root, headword, keep_acc=0):
+        current = element
+        while current in parent_map:
+            current = parent_map[current]
+            if current.tag == 'd':
+                variants = []
+                sort_variants = []
+                hw_id = None
+                for child in current:
+                    if child.tag != 'hw' or child.get(ATTR_EXCL) is not None:
+                        continue
+                    text = ''.join(child.itertext()).strip()
+                    if not text:
+                        continue
+                    if hw_id is None:
+                        hw_id = child.get(ATTR_ID)
+                    child_keep = child.get(ATTR_KEEP_ACC) is not None
+                    variants.append(text if child_keep else remove_accents(text))
+                    sort_variants.append(
+                        hw_text_excluding_n(child, SEP_SORT_SENTINEL).strip()
+                        or text)
+                if variants:
+                    return '|'.join(variants), '|'.join(sort_variants), hw_id
+        element_sense = self._enclosing_sense(element, parent_map)
+        relevant = []
+        relevant_sort = []
+        hw_id = None
+        for h in root.findall('.//hw'):
+            if h.get(ATTR_EXCL) is not None:
+                continue
+            text = ''.join(h.itertext()).strip()
+            if not text:
+                continue
+            hw_sense = self._enclosing_sense(h, parent_map)
+            if hw_sense is None or hw_sense is element_sense:
+                if hw_id is None:
+                    hw_id = h.get(ATTR_ID)
+                child_keep = h.get(ATTR_KEEP_ACC) is not None
+                relevant.append(text if child_keep else remove_accents(text))
+                relevant_sort.append(hw_text_excluding_n(h, SEP_SORT_SENTINEL).strip() or text)
+        if relevant:
+            if root.find('.//d') is None:
+                return '|'.join(relevant), '|'.join(relevant_sort), hw_id
+            return relevant[0], relevant_sort[0], hw_id
+        display_main = headword if keep_acc else remove_accents(headword)
+        return display_main, headword, hw_id
+
+    @staticmethod
+    def _sense_number_html(sense):
+        num = sense.find('n')
+        if num is None:
+            num = sense.find('b')
+        if num is None:
+            return ''
+        num_text = ''.join(num.itertext()).strip()
+        return f'<span class="{num.tag}">{num_text}</span> '

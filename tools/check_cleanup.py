@@ -1,13 +1,3 @@
-"""Run the post-change verification and cleanup steps for a cleanup pass.
-
-Run: py -3 tools/check_cleanup.py
-     py -3 tools/check_cleanup.py --probes "%TEMP%/opencode" --clean --status
-     py -3 tools/check_cleanup.py --step "baseline::py -3 check_baseline.py"
-
-Built-in steps run only when their target exists: compileall and unused imports.
-Extra checks are passed with --step. Probe files accept the repo's PySide
-offscreen shutdown codes when they still print a pass marker.
-"""
 import argparse
 import os
 import shlex

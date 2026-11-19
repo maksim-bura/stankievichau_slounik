@@ -1,22 +1,3 @@
-"""Review punctuation that follows a closing tag.
-
-Run: py -3 tools/fix_tag_punctuation.py
-     py -3 tools/fix_tag_punctuation.py --apply
-     py -3 tools/fix_tag_punctuation.py dictionary_app/data/dictionary/dictionary_D.xml
-
-A candidate is an opening tag, its content, its closing tag, and the run of
-Unicode punctuation that immediately follows the closing tag. The prepared
-`after` text moves that run inside the closing tag. Some runs are skipped
-because moving them would change the rendered form (`</hw>.`, `</t>.`, any
-`</g>—`, `</see>`, `</n>`, a `<src>` containing `<b>`, and similar). Adjacent
-`<src>` runs separated by `;` or `,` are merged into one source span, even when
-the separator follows other punctuation or the last source has no trailing
-punctuation. A trailing em dash is left outside `<g>`/`<src>`; only the
-punctuation before it is absorbed. Each candidate is presented one at a time:
-Enter skips it, `y` writes the prepared text, and any other input replaces the
-whole candidate span. Accepted changes are written immediately and the file's
-existing line endings are preserved.
-"""
 import argparse
 import re
 import sys

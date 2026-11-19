@@ -10,8 +10,13 @@ from dictionary_app.utils.remove_accents import remove_accents
 from dictionary_app.utils.sort_keys import alphabet_sort_key, entry_id_sort_key
 from dictionary_app.utils.compile_search_regex import compile_search_regex
 import dictionary_app.format.format_entry as formatter
+from dictionary_app.format.highlight_formatter import PARAGRAPH_BREAK_KEY
 from dictionary_app.localization import strings
-from dictionary_app.widgets import SourcesButton, SettingsButton, SearchBox, InsertLetterGButton, INSERT_LETTER_G
+from dictionary_app.widgets import (
+    SourcesButton, SettingsButton, SearchBox, InsertLetterGButton,
+    INSERT_LETTER_G, OPTION_SEARCH_IN_HEADWORDS, OPTION_SEARCH_IN_TRANSLATIONS,
+    OPTION_SEARCH_IN_EXAMPLES,
+)
 from dictionary_app.utils.install_global_copy import install_global_copy
 from dictionary_app.panels import SearchResultsList, EntryViewer, SourcesPanel, SourcesToggle, same_senses
 from dictionary_app.theme.layout_constants import (
@@ -384,14 +389,15 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _is_exclusive(options):
-        return (options['search_in_translations'] + options['search_in_examples'] == 1
-                and not options['search_in_headwords'])
+        return (options[OPTION_SEARCH_IN_TRANSLATIONS]
+                + options[OPTION_SEARCH_IN_EXAMPLES] == 1
+                and not options[OPTION_SEARCH_IN_HEADWORDS])
 
     @staticmethod
     def _is_combined(options):
-        return (options['search_in_headwords']
-                and options['search_in_examples']
-                and not options['search_in_translations'])
+        return (options[OPTION_SEARCH_IN_HEADWORDS]
+                and options[OPTION_SEARCH_IN_EXAMPLES]
+                and not options[OPTION_SEARCH_IN_TRANSLATIONS])
 
     def on_search(self, text):
         self.entry_viewer.navigation_bar.clear()
@@ -400,8 +406,10 @@ class MainWindow(QMainWindow):
 
         if text.strip():
             self._search_pattern = compile_search_regex(text, text.endswith(' '))
-            self._search_normalize = options['search_in_translations'] and not options['search_in_examples']
-            self._search_in_headwords = options['search_in_headwords']
+            self._search_normalize = (
+                options[OPTION_SEARCH_IN_TRANSLATIONS]
+                and not options[OPTION_SEARCH_IN_EXAMPLES])
+            self._search_in_headwords = options[OPTION_SEARCH_IN_HEADWORDS]
         else:
             self._search_pattern = None
 
@@ -411,15 +419,20 @@ class MainWindow(QMainWindow):
 
         if is_combined and text.strip():
             self._set_results_visible(True)
-            hw_results = self.search_engine.search(text, search_in_headwords=True, search_in_translations=False, search_in_examples=False, sort_order=sort_order)
+            hw_results = self.search_engine.search(
+                text, search_in_headwords=True, search_in_translations=False,
+                search_in_examples=False, sort_order=sort_order)
             self.results_list.display_results(hw_results)
-            ex_results = self.search_engine.search(text, search_in_headwords=False, search_in_translations=False, search_in_examples=True, sort_order=sort_order)
+            ex_results = self.search_engine.search(
+                text, search_in_headwords=False, search_in_translations=False,
+                search_in_examples=True, sort_order=sort_order)
             self._show_previews(ex_results, translations_mode=False)
         elif is_exclusive and text.strip():
             self._set_results_visible(False)
             results = self.search_engine.search(text, sort_order=sort_order, **options)
             self.results_list.display_results(results)
-            self._show_previews(results, translations_mode=options['search_in_translations'])
+            self._show_previews(
+                results, translations_mode=options[OPTION_SEARCH_IN_TRANSLATIONS])
         else:
             results = self.search_engine.search(text, sort_order=sort_order, **options)
             self.results_list.display_results(results)
@@ -492,7 +505,7 @@ class MainWindow(QMainWindow):
                         groups[key] = {'headword': p['headword'], 'sort_headword': p.get('sort_headword') or p['headword'], 'sort_id': result[3], 'sort_hw_id': p.get('sort_hw_id'), 'htmls': [], 'breaks': []}
                     if p['preview_html'] not in groups[key]['htmls']:
                         groups[key]['htmls'].append(p['preview_html'])
-                        groups[key]['breaks'].append(p.get('paragraph_break', False))
+                        groups[key]['breaks'].append(p.get(PARAGRAPH_BREAK_KEY, False))
         if not groups:
             return
         html_parts = ['<body>']

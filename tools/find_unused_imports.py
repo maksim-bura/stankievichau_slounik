@@ -1,4 +1,3 @@
-"""Report imported names that are never referenced. Run: py -3 tools/find_unused_imports.py [root]"""
 import argparse
 import ast
 import pathlib

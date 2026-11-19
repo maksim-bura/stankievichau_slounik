@@ -33,7 +33,7 @@ stankievichau_slounik/
 │   ├── panels/              # EntryViewer, SearchResultsList, SourcesPanel, SourcesToggle
 │   ├── widgets/             # SearchBox, icon/menu buttons, delegates, row-nav helpers
 │   ├── db/                  # SearchEngine, build_database, create_search_engine
-│   ├── format/              # format_entry, highlight_formatter, link_handler, render_sources, source_mapper
+│   ├── format/              # format_entry, entry_previews, highlight_formatter, link_handler, render_sources, source_mapper
 │   ├── utils/               # shared primitives (table below)
 │   ├── theme/               # layout_constants.py, styles.py
 │   ├── localization/        # load_strings.py + manually maintained strings.json
@@ -455,8 +455,7 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
   `markup_app/utils/constants.py`.
 - **Tag attributes (single source):** `dictionary_app/utils/xml_schema.py` holds
   `ATTRIBUTES` (tag → ordered `(name, kind)`, `kind` = `TEXT`/`BOOL`), the
-  `ATTR_*` constants, and helpers `attribute_names` / `is_boolean` /
-  `unknown_attributes`. Every attribute read imports from here; the markup
+  `ATTR_*` constants. Every attribute read imports from here; the markup
   completion prompt reads the same registry. `sources.xml` (`section/@id`) is a
   separate document shape and intentionally NOT in this registry.
 - **Arrow-suppression for homonyms:** whether the opened headword is the *main*
@@ -508,27 +507,55 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
 - `DictTextBrowser` (QTextBrowser subclass) in a `QVBoxLayout` with
   `NavigationBar` above.
 - Read-only, no external links (`setOpenExternalLinks(False)`), `ClickFocus`.
-- `DictTextBrowser` installs `NoBlueFocusFrameStyle`, sets `ENTRY_STYLESHEET`
-  as the document stylesheet, and calls `setOpenLinks(False)`. Link navigation
+- `DictTextBrowser` calls `setOpenLinks(False)` and installs its focus-frame
+  style through `install_no_blue_focus_style(self)`
+  (`dictionary_app/widgets/dict_text_browser.py`), which constructs
+  `NoBlueFocusFrameStyle()` with NO base and parents it to the widget. The markup
+  editor's Text and Author edits use the same helper. `QWidget::setStyle` takes no
+  ownership and `QProxyStyle` takes ownership of a base style, so never pass a
+  live style (`self.style()`, `app.style()`) — that hands the application style
+  to the proxy. Link navigation
   is handled ONLY by `anchorClicked` handlers. QTextBrowser's built-in
   `setSource` is non-virtual, so a Python `setSource` override cannot stop a
   click: without `setOpenLinks(False)` a custom-scheme click tries to load the
   URL, fails, and CLEARS the document. Keep the override for direct Python calls
   (`word:`, `source:`, `preview:`, checked against `SCHEME_*`).
-- Document margin: `DOCUMENT_MARGIN` left/right via `rootFrame().frameFormat()` —
-  **re-applied on every `setHtml`** (Qt resets the root frame format).
+- **`setHtml` builds a detached document:** `QTextDocument` →
+  `setDefaultStyleSheet(ENTRY_STYLESHEET)` → `setHtml` → `DOCUMENT_MARGIN`
+  left/right on the root frame → `setDocument`; the replaced document is
+  `deleteLater()`-ed. Margins are fixed before the widget lays the document out,
+  so the widget does one layout at the final width instead of `QTextEdit.setHtml`
+  plus a margin-triggered relayout (~22 → ~18 ms on the largest entry). The
+  editor does not own a parentless document, so `_document` keeps the current one
+  alive and the explicit delete frees the previous one.
 - `stored_html` holds the last displayed HTML for refresh/restore.
 - `ScrollState` handles anchor scroll, resize re-scroll, and cached state restore
   (see Scroll State).
 - `display_entry(result, formatter)` formats `result[2]` (the entry XML) and
   stores the HTML.
+- **Repeat clicks skip the document re-parse (`_show_html`):** every entry and
+  preview render goes through `_show_html`, which always updates `stored_html`
+  but calls `setHtml` only when the HTML differs from what the viewer currently
+  shows (`_shown_html`) or the pane has a text selection. Clicking the same
+  result row therefore costs a format-cache hit plus the anchor scroll instead
+  of a document parse/relayout; a changed target or highlight produces
+  different HTML and re-renders normally. `_shown_html` is reset by `clear()`
+  and re-synced by `refresh()`.
 
 ### Navigation Bar (`NavigationBar`)
 
 - Fixed height `BAR_HEIGHT`; layout Back | Back-spacer | Flex-spacer | Forward |
   stretch | Close.
-- Back/Forward: `NAV_BUTTON_WIDTH` wide, emoji labels
-  (`BACK_ARROW`/`FORWARD_ARROW` + `strings.nav.back/forward`), flat transparent.
+- Back/Forward: `NAV_BUTTON_WIDTH` wide, flat transparent, built by the local
+  `_nav_button(glyph, label)` helper. Each is a `QPushButton` whose text is empty
+  and whose only child is a centered rich-text `QLabel` filled by
+  `set_emoji_prefixed_text` (`dictionary_app/widgets/emoji_label.py`,
+  `WA_TransparentForMouseEvents` so clicks reach the button). Only the glyph
+  span is pinned to `EMOJI_FONT_STACK`; the label text stays `FONT_STACK`.
+  Never put the emoji in `QPushButton.setText` (the whole text then shapes under
+  Cambria and the first Back show costs ~233 ms) and never pin the whole button
+  to the emoji family (the Cyrillic label then pays the fallback, ~371 ms). See
+  Startup Latency for the measurements.
 - Close: `IconButton`, `BUTTON_SIZE`.
 - Visible only when `navigation_stack` has >1 entry; Back is hidden at index 0
   (replaced by a fixed-width invisible spacer to keep layout stable).
@@ -584,7 +611,9 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
   `TooltipDelayStyle` (`QProxyStyle`) returning the shared
   `TOOLTIP_WAKE_UP_DELAY` (`dictionary_app/theme/layout_constants.py`, 150 ms vs
   Qt's 700 ms default) for `SH_ToolTip_WakeUpDelay`, plus ONE app-level
-  `TooltipShowFilter`.
+  `TooltipShowFilter`. Construct the style with NO base (it proxies the current
+  application style) and parent it to the app; never pass `app.style()` — the
+  proxy would take ownership of the application style.
 - `TooltipShowFilter` intercepts every widget `QEvent.ToolTip` whose
   `toolTip()` is non-empty and re-shows it with `QToolTip.showText(globalPos,
   text, widget, widget.rect())`. Binding the tip to the widget rect makes Qt hide
@@ -685,7 +714,9 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
 - Section toggle links use `SCHEME_TOGGLE_SECTION`
   (`toggle-section:{id}`), rendered with
   `COLLAPSED_TRIANGLE_ENTITY`/`EXPANDED_TRIANGLE_ENTITY`; `ARROW_MARKER` is
-  injected after the anchor span whose id was passed as `marker_anchor`.
+  injected at the start of the anchor span whose id was passed as
+  `marker_anchor`, wrapped in `<span class="doc-arrow">` (emoji-family pin, see
+  Startup Latency).
 - `scroll_to_source(abbr, was_visible=None)`: strips trailing `:`/`.` for anchor
   lookup, auto-expands collapsed sections containing the target, calls
   `QApplication.processEvents()` before scrolling on the rebuild path, then
@@ -706,8 +737,9 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
 - **Qt anchor quirk (preserve):** `scrollToAnchor` only resolves a fragment whose
   `QTextCharFormat` has BOTH `isAnchor()` and matching `anchorNames()`; names
   alone scroll to 0. Marker insertion therefore clones the target anchor's first
-  character format and calls `setAnchor(True)`; `_restore_anchor` does the same
-  for the previous anchor.
+  character format, calls `setAnchor(True)`, and pins the emoji family on the
+  inserted glyph (`setFontFamilies`, never `setFontFamily` — it crashes this
+  PySide build); `_restore_anchor` does the same for the previous anchor.
 - `show_panel()` / `SourcesToggle.reveal(...)`: show and resize the panel WITHOUT
   rendering. `MainWindow.open_source` reveals first, then runs the single
   `scroll_to_source` render, and calls `entry_viewer.refresh()` only when the
@@ -879,13 +911,15 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
 - Nav-bar close → `_dismiss_highlight()` re-renders without highlight and clears
   `_search_pattern`.
 - Applied via `SearchEngine.apply_highlight`, delegating to
-  `HighlightFormatter` (`format/highlight_formatter.py`). Exclusion is enforced at
+  `HighlightFormatter` (`format/highlight_formatter.py`). Previews are built by
+  `PreviewBuilder` (`format/entry_previews.py`), which owns the match search and
+  every preview fragment. Exclusion is enforced at
   two levels:
   - `apply_highlight` protects `<a>` tags (`_ANCHOR_RANGE_RE`) and each excluded
     class block via `_protect_class_blocks` (manually tracks `<span>` nesting
     depth to find the matching close); protected blocks become placeholders, so
     the regex scans only highlightable (indexed-equivalent) text;
-  - `_element_preview_content` wraps excluded children in
+  - `PreviewBuilder._element_preview_content` wraps excluded children in
     `<span class="search-excluded">` and passes
     `exclude_classes=[EXCLUDED_HIGHLIGHT_CLASS]` (same class as the Exclusion
     Rules table);
@@ -1046,10 +1080,25 @@ Measured with `py -3` (Python 3.14): both launchers reach first paint in
   Use the emoji-aware variants: `EMOJI_FLAT_BUTTON_STYLE`,
   `MENU_BUTTON_EMOJI_STYLE` / `menu_button_style(font_family=…)` /
   `MenuButton(emoji_font=True)`, and `flat_button_style(font_family=…)`.
-  Mixed glyph+text `QLabel`s use rich text via `set_emoji_prefixed_text`
+  Mixed glyph+text widgets use rich text via `set_emoji_prefixed_text`
   (`dictionary_app/widgets/emoji_label.py`), which puts ONLY the glyph in an
   emoji-font span. Widget-level style beats `setFont`. Rendering is
-  pixel-identical to the old whole-stack version.
+  pixel-identical to the old whole-stack version. Never pin a whole mixed
+  widget to the emoji family: the Latin/Cyrillic text then pays the fallback
+  instead. Measured on the nav Back button's first show (`⬅️` + "Назад"):
+  text in a `QPushButton` under `FONT_STACK` 233 ms, whole button in
+  `EMOJI_FONT_STACK` 371 ms, glyph-only span in a child `QLabel` 1 ms (see
+  Navigation Bar).
+  **Entry document too:** `ENTRY_STYLESHEET` pins `font-family:
+  {EMOJI_FONT_STACK}` on `.headword-arrow` / `.sense-arrow`, and `.doc-arrow`
+  wraps the sources-panel marker (`render_sources.build_filtered_html` and
+  `_move_marker`). `EMOJI_FONT_FAMILY` is the raw family for `setFontFamilies`;
+  `EMOJI_FONT_STACK` is its CSS-quoted form. Without the pin, the first 👉 costs
+  ~0.25 s of font fallback — it lands on whichever click first shows a
+  sub-headword/sense arrow or jumps to a source. Even pinned, the first emoji in
+  a document pays ~28 ms of one-time shaping (sources marker: 108.7 ms with the
+  marker vs 80.8 ms without). Never render an emoji under `FONT_STACK`, in a
+  widget or in a `QTextDocument`.
 - **`dictionary_app/__init__.py` is lazy** (PEP 562 `__getattr__`): importing the
   package (as `markup_app` does) does not import `main_window`. Keep
   `from dictionary_app import MainWindow` working through `__getattr__`.
@@ -1071,13 +1120,15 @@ Measured with `py -3` (Python 3.14): both launchers reach first paint in
 - **Save patches only changed rows:** `_apply_saved_result` compares each
   same-entry model row before replacing it and emits `dataChanged` only for the
   contiguous runs that actually changed (usually none for unchanged saves).
-- **Hash indexes in the broken-link analyzer:** `BrokenLinkAnalyzer` builds
-  compact (single-value-first) indexes for rows-by-entry, raw/normalized
+- **Hash indexes in the broken-link analyzer:** `LinkIndexes`
+  (`markup_app/services/link_indexes.py`) builds compact (single-value-first)
+  indexes for rows-by-entry, raw/normalized
   headword, raw/normalized link, and `hw_xml_id`, so `entry=`/`hw=` attribute
   classification is a lookup instead of a scan over every headword row. They are
   cleared by `invalidate()` together with the flags cache.
-- **Source reads trust their index:** `_read_entry_from_source` uses the cached
-  `by_headword` index directly instead of re-running `_block_matches` over each
+- **Source reads trust their index:** `SourceBlocks.entry_block`
+  (`markup_app/services/source_blocks.py`) uses the cached
+  `by_headword` index directly instead of re-running `block_matches` over each
   candidate block.
 - **Row tooltips touch no model state:** `ElidingDelegate.helpEvent` shows the
   hovered row's text through the shared rect-bound `QToolTip.showText` (see

@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QTextCursor, QTextCharFormat
 
 from dictionary_app.format.format_entry import format_entry
-from dictionary_app.widgets.dict_text_browser import NoBlueFocusFrameStyle
+from dictionary_app.widgets.dict_text_browser import install_no_blue_focus_style
 from dictionary_app.theme.styles import ENTRY_STYLESHEET
 from dictionary_app.theme.layout_constants import LAYOUT_MARGINS, LAYOUT_SPACING, BUTTON_SIZE
 from markup_app.theme.layout_constants import (
@@ -33,6 +33,8 @@ TAG_BUTTON_GROUPS = [
 ]
 
 SELF_CLOSING_TAGS = ('br', 'sep')
+
+_AUTHOR_TAB_INDEX = 1
 
 
 class EditorPane(QWidget):
@@ -66,7 +68,7 @@ class EditorPane(QWidget):
         self._author_edit = QTextEdit()
         self._author_edit.setReadOnly(True)
         self._author_edit.document().setDefaultStyleSheet(ENTRY_STYLESHEET)
-        self._author_edit.setStyle(NoBlueFocusFrameStyle(self._author_edit.style()))
+        install_no_blue_focus_style(self._author_edit)
 
         self._tabs.addTab(self._text_edit, strings.tabs.xml.title)
         self._tabs.addTab(self._author_edit, strings.tabs.ui.title)
@@ -123,7 +125,8 @@ class EditorPane(QWidget):
         self._text_edit.reset_state()
         self._text_edit.setExtraSelections([])
         self._refresh_digraph_spans()
-        self._render_author()
+        if self._tabs.currentIndex() == _AUTHOR_TAB_INDEX:
+            self._render_author()
 
     def mark_sub_hw(self, headword, occurrence_index=0, keep_acc=0, separate_occurrences=False):
         if not headword:
@@ -192,7 +195,7 @@ class EditorPane(QWidget):
             self._author_edit.blockSignals(False)
 
     def _on_tab_changed(self, index):
-        if index == 1:
+        if index == _AUTHOR_TAB_INDEX:
             self._render_author()
         self._update_overlay_inset()
 

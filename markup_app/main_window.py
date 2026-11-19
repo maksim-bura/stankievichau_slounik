@@ -1,5 +1,4 @@
 import os
-import re
 import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListView, QApplication, QPushButton,
@@ -8,15 +7,17 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QPoint, QEvent, QRect, QItemSelectionModel, QTimer
 from PySide6.QtGui import QCursor
 from dictionary_app.utils.collapse_duplicates import collapse_with_identities
-from dictionary_app.utils.normalize_headword import has_keep_acc, resolve_headword
-from dictionary_app.utils.xml_schema import ATTR_ID
+from dictionary_app.utils.normalize_headword import resolve_headword
 from dictionary_app.db.build_database import (
     build_database, delete_entry, get_source_path, reindex_entry
 )
 from markup_app.services.broken_link_analyzer import (
     BrokenLinkAnalyzer, MODE_AMBIGUOUS_G, MODE_MISSING, MODE_UNION, MODE_UNRESOLVED,
-    normalize_headword, row_norm
+    expand_broken_mode
 )
+from markup_app.services.entry_blocks import remove_entry_block
+from markup_app.services.link_text import row_norm
+from markup_app.services.source_blocks import SourceBlocks
 from dictionary_app.widgets import (
     SearchBox, select_row, navigate_rows, INSERT_LETTER_G, InsertLetterGButton
 )
@@ -45,37 +46,7 @@ from dictionary_app.utils.item_roles import (
 from dictionary_app.widgets.menu_options import RadioOption
 from markup_app.utils.constants import ( RELOAD_MARKER, DUPLICATES_MARKER, BROKEN_LINKS_MARKER, )
 
-_ENTRY_BLOCK_RE = re.compile(r'<entry\b.*?</entry>', re.DOTALL)
-
-_ALL_BROKEN_MODES = frozenset({MODE_MISSING, MODE_UNRESOLVED, MODE_AMBIGUOUS_G})
-
-
-def find_entry_blocks(content):
-    return _ENTRY_BLOCK_RE.findall(content)
-
-
-def expand_broken_mode(mode):
-    if isinstance(mode, str):
-        if mode == MODE_UNION:
-            return set(_ALL_BROKEN_MODES)
-        return {mode}
-    return set(mode)
-
-
-def remove_entry_block(content, block):
-    index = content.find(block)
-    if index < 0:
-        return None
-    end = index + len(block)
-    if content.startswith('\n\n', end):
-        end += 2
-    elif content.startswith('\r\n\r\n', end):
-        end += 4
-    elif index >= 2 and content[index - 2:index] == '\n\n':
-        index -= 2
-    elif index >= 4 and content[index - 4:index] == '\r\n\r\n':
-        index -= 4
-    return content[:index] + content[end:]
+_ENTRY_NOT_FOUND_MESSAGE = 'Could not locate the original entry in the source file.'
 
 
 class MarkupMainWindow(QMainWindow):
@@ -91,14 +62,14 @@ class MarkupMainWindow(QMainWindow):
         self._has_unsaved = False
         self._loaded_raw = {}
         self._by_id_headword = {}
-        self._source_cache = {}
+        self._source_blocks = SourceBlocks(search_engine)
         self._sub_headword_cache = {}
         self._duplicate_resolver = DuplicateResolver(self.search_engine)
         self._broken_mode = None
         self._current_query = ''
         self._broken_links = BrokenLinkAnalyzer(
             self.search_engine._get_connection,
-            self._iter_source_blocks,
+            self._source_blocks.iter_blocks,
         )
 
 
@@ -386,17 +357,6 @@ class MarkupMainWindow(QMainWindow):
         )
         self.editor.pane.set_link_marks(offsets, tooltips, highlights, reset_undo)
 
-    def _iter_source_blocks(self):
-        cursor = self.search_engine._get_connection().cursor()
-        cursor.execute("SELECT DISTINCT source_file FROM dictionary")
-        source_files = [r[0] for r in cursor.fetchall() if r[0]]
-        for source_file in source_files:
-            loaded = self._load_source_content(source_file)
-            if loaded is None:
-                continue
-            for block in loaded['blocks']:
-                yield source_file, block
-
     def _on_broken_category_toggled(self, option):
         key = next(
             (k for k, opt in self._broken_menu_options.items() if opt is option),
@@ -571,7 +531,7 @@ class MarkupMainWindow(QMainWindow):
 
         self._load_result(result, occurrence, self._separate_occurrences_mode())
 
-    def _main_headword(self, entry_id):
+    def _db_main_headword(self, entry_id):
         cursor = self.search_engine._get_connection().cursor()
         cursor.execute("SELECT headword FROM dictionary WHERE id=?", (entry_id,))
         row = cursor.fetchone()
@@ -581,7 +541,7 @@ class MarkupMainWindow(QMainWindow):
         key = (result[0], result[1])
         cached = self._sub_headword_cache.get(key)
         if cached is None:
-            main_headword = self._main_headword(result[0])
+            main_headword = self._db_main_headword(result[0])
             cached = main_headword is not None and main_headword != result[1]
             self._sub_headword_cache[key] = cached
         return cached
@@ -593,7 +553,8 @@ class MarkupMainWindow(QMainWindow):
         entry_link = result[3]
         keep_acc = result[6] if len(result) > 6 else 0
 
-        raw = self._read_entry_from_source(entry_id, source_file, headword, entry_link, keep_acc)
+        raw = self._source_blocks.entry_block(
+            entry_id, source_file, headword, entry_link, keep_acc)
         if raw is not None:
             self._loaded_raw[entry_id] = raw.rstrip('\n')
             xml_text = raw
@@ -618,96 +579,6 @@ class MarkupMainWindow(QMainWindow):
                 result[1], occurrence, keep_acc, separate_occurrences)
         else:
             self.editor.pane.mark_main_non_d(result[1], occurrence, keep_acc)
-
-    def _read_entry_from_source(self, entry_id, source_file, headword=None, entry_link=None, keep_acc=0):
-        if not source_file:
-            return None
-        if headword is None and self.current_result and self.current_result[0] == entry_id:
-            headword = self.current_result[1]
-        if entry_link is None and self.current_result and self.current_result[0] == entry_id:
-            entry_link = self.current_result[3]
-
-        loaded = self._load_source_content(source_file)
-        if loaded is None:
-            return None
-        blocks = loaded['blocks']
-        t_norm = resolve_headword(headword, keep_acc) if headword else None
-        link_norm = normalize_headword(entry_link) if entry_link else None
-
-        def _matches_own_entry(candidates):
-            if len(candidates) == 1:
-                return blocks[candidates[0]]
-            full = self.search_engine.get_full_entry(entry_id)
-            if full is not None:
-                target = re.sub(r'\s+', '', full)
-                for i in candidates:
-                    if re.sub(r'\s+', '', blocks[i]) == target:
-                        return blocks[i]
-            return blocks[candidates[0]]
-
-        if link_norm:
-            candidates = []
-            for i in loaded['by_link'].get(link_norm, ()):
-                block = blocks[i]
-                if t_norm is None or self._block_matches(block, t_norm):
-                    candidates.append(i)
-            if candidates:
-                return _matches_own_entry(candidates)
-
-        if t_norm:
-            candidates = loaded['by_headword'].get(t_norm)
-            if candidates:
-                return _matches_own_entry(candidates)
-        return None
-
-    def _load_source_content(self, source_file):
-        cached = self._source_cache.get(source_file)
-        if cached is not None:
-            return cached
-        file_path = get_source_path(source_file)
-        if not os.path.exists(file_path):
-            return None
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-        except OSError:
-            return None
-        blocks = find_entry_blocks(content)
-        by_link = {}
-        by_headword = {}
-        for i, block in enumerate(blocks):
-            link_norm = self._block_link(block)
-            if link_norm is not None:
-                by_link.setdefault(link_norm, []).append(i)
-            for hw_norm in self._block_headwords(block):
-                by_headword.setdefault(hw_norm, []).append(i)
-        loaded = {'content': content, 'blocks': blocks, 'by_link': by_link, 'by_headword': by_headword}
-        self._source_cache[source_file] = loaded
-        return loaded
-
-    @staticmethod
-    def _block_raw_id(block):
-        m = re.search(r'<entry\b[^>]*\b' + ATTR_ID + r'="([^"]*)"', block)
-        return m.group(1) if m else None
-
-    @classmethod
-    def _block_link(cls, block):
-        raw = cls._block_raw_id(block)
-        if not raw:
-            return None
-        return normalize_headword(raw)
-
-    @staticmethod
-    def _block_headwords(block):
-        norms = []
-        for m in re.finditer(r'<hw\b([^>]*)>(.*?)</hw>', block, re.DOTALL):
-            inner = re.sub(r'<[^>]+>', '', m.group(2))
-            norms.append(resolve_headword(inner.strip(), has_keep_acc(m.group(1))))
-        return norms
-
-    @staticmethod
-    def _block_matches(block, target_norm):
-        return target_norm in MarkupMainWindow._block_headwords(block)
 
     def _on_checked_toggle(self):
         if not self.current_result:
@@ -762,7 +633,7 @@ class MarkupMainWindow(QMainWindow):
             QMessageBox.warning(self, 'Rebuild Error', f'Database rebuild failed:\n{exc}')
             return
 
-        self._source_cache.clear()
+        self._source_blocks.clear()
         self._sub_headword_cache.clear()
         self._duplicate_resolver.invalidate()
         self._refresh_after_rebuild(search_text, current)
@@ -805,50 +676,55 @@ class MarkupMainWindow(QMainWindow):
             return self._delete_current_entry()
         return False
 
+    def _locate_source_block(self, source_file, entry_id, headword, entry_link,
+                             error_title, ambiguous_message):
+        if not source_file:
+            QMessageBox.warning(self, error_title, 'No source file found for this entry.')
+            return None
+        file_path = get_source_path(source_file)
+        if not os.path.exists(file_path):
+            QMessageBox.warning(
+                self, error_title, f'Source file not found: {source_file}')
+            return None
+        self._source_blocks.invalidate(source_file)
+        loaded = self._source_blocks.load(source_file)
+        content = loaded['content'] if loaded else None
+        blocks = loaded['blocks'] if loaded else []
+        if not blocks:
+            QMessageBox.warning(self, error_title, _ENTRY_NOT_FOUND_MESSAGE)
+            return None
+        old_raw = self._loaded_raw.get(entry_id)
+        if old_raw is None:
+            old_raw = self._source_blocks.entry_block(
+                entry_id, source_file, headword, entry_link)
+        indices = [i for i, b in enumerate(blocks) if b == old_raw] if old_raw else []
+        if not indices:
+            QMessageBox.warning(self, error_title, _ENTRY_NOT_FOUND_MESSAGE)
+            return None
+        if len(indices) != 1:
+            QMessageBox.warning(self, error_title, ambiguous_message)
+            return None
+        return file_path, content, blocks, indices[0]
+
     def _delete_current_entry(self):
         entry_id = self.current_result[0]
         headword = self.current_result[1]
         entry_link = self.current_result[3]
         source_file = self.current_result[4]
 
-        if not source_file:
-            QMessageBox.warning(self, 'Delete Error', 'No source file found for this entry.')
+        located = self._locate_source_block(
+            source_file, entry_id, headword, entry_link, 'Delete Error',
+            'The original entry could not be matched uniquely; nothing was deleted.')
+        if located is None:
             return False
+        _file_path, content, blocks, index = located
 
-        file_path = get_source_path(source_file)
-        if not os.path.exists(file_path):
-            QMessageBox.warning(self, 'Delete Error', f'Source file not found: {source_file}')
-            return False
-
-        self._source_cache.pop(source_file, None)
-        loaded = self._load_source_content(source_file)
-        content = loaded['content'] if loaded else None
-        blocks = loaded['blocks'] if loaded else []
-        if not blocks:
-            QMessageBox.warning(self, 'Delete Error',
-                'Could not locate the original entry in the source file.')
-            return False
-
-        old_raw = self._loaded_raw.get(entry_id)
-        if old_raw is None:
-            old_raw = self._read_entry_from_source(
-                entry_id, source_file, headword, entry_link)
-        indices = [i for i, b in enumerate(blocks) if b == old_raw] if old_raw else []
-        if not indices:
-            QMessageBox.warning(self, 'Delete Error',
-                'Could not locate the original entry in the source file.')
-            return False
-        if len(indices) != 1:
-            QMessageBox.warning(self, 'Delete Error',
-                'The original entry could not be matched uniquely; nothing was deleted.')
-            return False
-
-        new_content = remove_entry_block(content, blocks[indices[0]])
+        new_content = remove_entry_block(content, blocks[index])
         with open(file_path, 'w', encoding='utf-8') as file:
             file.write(new_content)
 
         delete_entry(entry_id)
-        self._source_cache.pop(source_file, None)
+        self._source_blocks.invalidate(source_file)
         self._loaded_raw.pop(entry_id, None)
         self.search_engine.invalidate_entry(entry_id)
         self._broken_links.invalidate()
@@ -890,46 +766,21 @@ class MarkupMainWindow(QMainWindow):
                 strings.dialog.invalid_xml.body)
             return False
 
-        if not source_file:
-            QMessageBox.warning(self, 'Save Error', 'No source file found for this entry.')
-            return False
-
-        file_path = get_source_path(source_file)
-
-        if not os.path.exists(file_path):
-            QMessageBox.warning(self, 'Save Error', f'Source file not found: {source_file}')
-            return False
-
         headword = self.current_result[1]
         entry_link = self.current_result[3]
 
-        self._source_cache.pop(source_file, None)
-        loaded = self._load_source_content(source_file)
-        content = loaded['content'] if loaded else None
-        blocks = loaded['blocks'] if loaded else []
-        if not blocks:
-            QMessageBox.warning(self, 'Save Error', 'Could not locate the original entry in the source file.')
+        located = self._locate_source_block(
+            source_file, entry_id, headword, entry_link, 'Save Error',
+            'The original entry could not be matched uniquely; no changes were saved.')
+        if located is None:
             return False
+        file_path, content, blocks, index = located
 
-        old_raw = self._loaded_raw.get(entry_id)
-        if old_raw is None:
-            old_raw = self._read_entry_from_source(entry_id, source_file, headword, entry_link)
-
-        indices = [i for i, b in enumerate(blocks) if b == old_raw] if old_raw else []
-
-        if not indices:
-            QMessageBox.warning(self, 'Save Error', 'Could not locate the original entry in the source file.')
-            return False
-        if len(indices) != 1:
-            QMessageBox.warning(self, 'Save Error',
-                'The original entry could not be matched uniquely; no changes were saved.')
-            return False
-
-        new_content = content.replace(blocks[indices[0]], new_entry_string, 1)
+        new_content = content.replace(blocks[index], new_entry_string, 1)
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
-        old_main_headword = self._main_headword(entry_id)
+        old_main_headword = self._db_main_headword(entry_id)
         reindexed = reindex_entry(entry_id, new_entry_string)
         if reindexed is not None:
             new_headword, new_entry_link, new_keep_acc = reindexed
@@ -938,7 +789,7 @@ class MarkupMainWindow(QMainWindow):
             new_entry_link = entry_link
             new_keep_acc = self.current_result[5] or 0
 
-        self._source_cache.pop(source_file, None)
+        self._source_blocks.invalidate(source_file)
         self._loaded_raw[entry_id] = new_entry_string
         self.search_engine.invalidate_entry(entry_id)
         self._broken_links.invalidate()

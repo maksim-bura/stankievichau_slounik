@@ -8,6 +8,7 @@ from dictionary_app.utils.extract_content_text import index_text
 from dictionary_app.utils.compile_search_regex import compile_search_regex
 from dictionary_app.utils.sort_keys import SORT_ORDER_DICTIONARY, SORT_ORDER_STANDARD
 from dictionary_app.utils.xml_schema import ATTR_KEEP_ACC
+from dictionary_app.format.entry_previews import PreviewBuilder
 from dictionary_app.format.highlight_formatter import HighlightFormatter
 
 
@@ -75,6 +76,7 @@ class SearchEngine:
         self._preview_cache = OrderedDict()
         self._headword_cache = OrderedDict()
         self._highlight_formatter = HighlightFormatter()
+        self._preview_builder = PreviewBuilder()
 
     def _get_connection(self):
         if self._connection is None:
@@ -309,7 +311,7 @@ class SearchEngine:
                     previews_by_entry[entry_id] = cached
                 else:
                     root = self.get_parsed_entry(entry_id, full_entry)
-                    previews = self._highlight_formatter.find_content_matches(root, headword, tag, pattern, keep_acc)
+                    previews = self._preview_builder.find_content_matches(root, headword, tag, pattern, keep_acc)
                     self._preview_cache[cache_key] = previews
                     while len(self._preview_cache) > _PREVIEW_CACHE_MAX_SIZE:
                         self._preview_cache.popitem(last=False)

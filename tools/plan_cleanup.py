@@ -1,11 +1,3 @@
-"""Scan a codebase and produce a cleanup plan skeleton plus raw metrics.
-
-Run: py -3 tools/plan_cleanup.py [--root DIR] [--scenario thorough|quick]
-     py -3 tools/plan_cleanup.py --since HEAD~1 --quick
-
-The generated markdown is a starting point: delete irrelevant findings, then work
-through the checklist. Thresholds are overridable with --config JSON.
-"""
 import argparse
 import ast
 import json

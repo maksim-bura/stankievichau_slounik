@@ -1,17 +1,3 @@
-"""Compare the raw OCR files with the marked-up XML, per letter.
-
-Run: py -3 tools/compare_raw_markup.py --coverage
-     py -3 tools/compare_raw_markup.py --conventions
-     py -3 tools/compare_raw_markup.py --coverage --letter Cz --limit 0
-
-Read-only. Prints compact ASCII-labelled summaries: how much of each raw file
-is already covered by the XML (aligned in print order), which raw blocks have no
-XML entry, which XML entries have no raw counterpart, and the markup
-conventions in use per file (accent marks per tag, split source runs, break
-forms, attributes). Cyrillic appears only in samples, never in labels.
-
-Exit 0 when the report ran, 1 when a paired file is missing or unreadable.
-"""
 import argparse
 import difflib
 import re

@@ -46,6 +46,10 @@ _FTS_CONTENT_EX = 'content_fts_ex'
 _FTS_TABLES = (_FTS_HEADWORD, _FTS_SUB_HEADWORD, _FTS_CONTENT_T, _FTS_CONTENT_EX)
 _BASE_TABLES = ('dictionary', 'entry_body', 'sub_headwords', 'content_index')
 
+_FTS_TABLE_SQL = (
+    'CREATE VIRTUAL TABLE IF NOT EXISTS {} USING fts5({}, tokenize = "trigram")'
+)
+
 
 def _collation_key(sort_headword, sort_order, entry_link, hw_xml_id):
     return encode_order_key(
@@ -288,10 +292,10 @@ def build_database(file_names=None):
             (_SCHEMA_VERSION_KEY, str(_SCHEMA_VERSION)),
         )
 
-    cursor.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS {_FTS_HEADWORD} USING fts5(word, tokenize = \"trigram\")")
-    cursor.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS {_FTS_SUB_HEADWORD} USING fts5(word, tokenize = \"trigram\")")
-    cursor.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS {_FTS_CONTENT_T} USING fts5(searchable_text, tokenize = \"trigram\")")
-    cursor.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS {_FTS_CONTENT_EX} USING fts5(searchable_text, tokenize = \"trigram\")")
+    cursor.execute(_FTS_TABLE_SQL.format(_FTS_HEADWORD, 'word'))
+    cursor.execute(_FTS_TABLE_SQL.format(_FTS_SUB_HEADWORD, 'word'))
+    cursor.execute(_FTS_TABLE_SQL.format(_FTS_CONTENT_T, 'searchable_text'))
+    cursor.execute(_FTS_TABLE_SQL.format(_FTS_CONTENT_EX, 'searchable_text'))
 
     dict_rows = []
     body_rows = []

@@ -1,13 +1,3 @@
-"""Build a fast-to-read map, snapshot, and symbol index of a codebase.
-
-Run: py -3 tools/read_codebase.py [--root DIR] [--out DIR] [--ext .py,.md]
-     py -3 tools/read_codebase.py --query 'def on_link_clicked'
-
-Outputs (into --out, default %TEMP%/cleanup/<root name>):
-  code_map.txt       per-file outline: size, imports, classes, functions with line ranges
-  code_snapshot.txt  every file with line numbers, ready to grep visually
-  symbols.txt        name -> path:line -> kind
-"""
 import argparse
 import ast
 import re
