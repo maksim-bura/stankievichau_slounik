@@ -1,4 +1,5 @@
 import argparse
+import json
 import re
 import sys
 import unicodedata
@@ -9,6 +10,15 @@ from pathlib import Path
 TOOLS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = TOOLS_DIR.parent
 DEFAULT_PATH = PROJECT_ROOT / 'dictionary_app' / 'data'
+
+PROHIBITED_PAIRS = [
+]
+
+FORGOT_PATH = TOOLS_DIR / 'fix_tag_punctuation_forget.json'
+
+WRITE_PREFIX = 'write: '
+
+FORGET_ANSWER = 'forget'
 
 TAG_PATTERN = (
     r'<(?P<close>/)?(?P<name>[A-Za-z_][\w:.-]*)'
@@ -23,18 +33,22 @@ IDENTITY_TAGS = {'hw', 'see'}
 SKIP_TAGS = {'see', 'n'}
 FRAGMENT_MAX = 200
 YES_ANSWER = 'y'
-SOURCE_SEPARATORS = {';', ','}
-DASH_SPLIT_TAGS = {'g', 'src'}
+SKIPPED_FILES = {'sources.xml'}
 SRC_ELEMENT_RE = re.compile(r'<src(?:\s[^>]*)?>.*?</src>', re.DOTALL)
+G_ELEMENT_RE = re.compile(r'<g>.*?</g>', re.DOTALL)
+POD_SEE_RE = re.compile(r'под\s+<see\b[^>]*>.*?</see>', re.DOTALL)
+CLOSING_RUN_RE = re.compile(r'(?:</[A-Za-z_][\w:.-]*>)+$')
+INNER_CLOSING_RE = re.compile(r'</(?P<name>[A-Za-z_][\w:.-]*)>')
 HEADWORD_RE = re.compile(r'<hw\b[^>]*>(.*?)</hw>', re.DOTALL)
-BOLD_TAG_RE = re.compile(r'<b\b')
 TAG_MARKUP_RE = re.compile(r'<[^>]+>')
 WHITESPACE_RE = re.compile(r'\s+')
+SRC_BOLD_ONLY_RE = re.compile(r'<b>С\.</b>')
 SKIP_PUNCTUATION_BY_TAG = {
-    'hw': ('.', ',', '—', '(', ')', ':', ';', '['),
+    'hw': ('.', ',', ')', '(', '—', ':', '[', ';'),
     't': ('.',),
-    'ex': ('—'),
+    'src': ('(',),
 }
+T_PERIOD_SUFFIXES = ('-л', '-н', 'т.п')
 
 
 @dataclass
@@ -58,19 +72,14 @@ class Candidate:
     group_members: tuple = ()
     d_block: Block | None = None
     entry_block: Block | None = None
+    dash_inside: bool = False
 
 
 def _is_punctuation(char):
     return unicodedata.category(char).startswith(PUNCTUATION_CATEGORY_PREFIX)
 
 
-def _has_source_separator(punctuation):
-    return any(char in SOURCE_SEPARATORS for char in punctuation)
-
-
-def _split_punctuation(punctuation, tag):
-    if tag not in DASH_SPLIT_TAGS:
-        return punctuation, ''
+def _split_punctuation(punctuation):
     dash = punctuation.find('—')
     if dash == -1:
         return punctuation, ''
@@ -86,76 +95,202 @@ def _pop_opening(stack, name):
     return None
 
 
+def _src_close_in_run(text, close_start):
+    run = CLOSING_RUN_RE.search(text, 0, close_start)
+    if run is None or run.end() != close_start:
+        return None
+    target = None
+    for closing in INNER_CLOSING_RE.finditer(text, run.start(), run.end()):
+        if closing.group('name') == 'src':
+            target = closing.start()
+    return target
+
+def _has_outer_open_paren(text, candidate):
+    scan = candidate.open_start
+    depth = 0
+    while scan > 0:
+        char = text[scan - 1]
+        if char in '\r\n':
+            return False
+        if char == ')':
+            depth += 1
+        elif char == '(':
+            if depth == 0:
+                return True
+            depth -= 1
+        scan -= 1
+    return False
+
+
 def _should_skip(candidate, text):
     if candidate.group_members and len(candidate.group_members) > 1:
         return False
     if candidate.tag in SKIP_TAGS:
         return True
+    if candidate.dash_inside:
+        return candidate.tag in IDENTITY_TAGS
+    if candidate.tag == 'i' and candidate.punctuation.startswith(').'):
+        content = text[candidate.open_end:candidate.close_start].strip()
+        if POD_SEE_RE.fullmatch(content):
+            return True
     if candidate.tag == 'src':
-        if candidate.punctuation.startswith('—'):
+        content = text[candidate.open_end:candidate.close_start].strip()
+        if SRC_BOLD_ONLY_RE.fullmatch(content):
             return True
-        content = text[candidate.open_end:candidate.close_start]
-        if BOLD_TAG_RE.search(content):
+        if (
+            candidate.punctuation.startswith(')')
+            and _has_outer_open_paren(text, candidate)
+        ):
             return True
-    if candidate.tag == 'g':
-        return candidate.punctuation.startswith('—')
+    if candidate.tag == 't' and candidate.punctuation.startswith('.'):
+        content = _strip_tags(text[candidate.open_end:candidate.close_start])
+        if content.endswith(T_PERIOD_SUFFIXES):
+            return False
     skip_punctuation = SKIP_PUNCTUATION_BY_TAG.get(candidate.tag)
     if skip_punctuation is None:
         return False
     return candidate.punctuation.startswith(skip_punctuation)
 
 
-def _source_group(text, candidates, start):
-    first = candidates[start]
-    if first.tag != 'src' or not _has_source_separator(first.punctuation):
+def _punct_end(text, pos):
+    end = pos
+    while end < len(text) and _is_punctuation(text[end]):
+        end += 1
+    return end
+
+
+def _dash_inside_start(text, close_start):
+    start = close_start
+    while start > 0 and _is_punctuation(text[start - 1]):
+        start -= 1
+    if '—' not in text[start:close_start]:
         return None
-    members = [first]
-    scan = first.punct_end
-    while True:
-        match = SRC_ELEMENT_RE.search(text, scan)
-        if match is None:
-            break
-        previous = members[-1]
-        if text[previous.punct_end:match.start()].strip():
-            break
-        open_end = text.index('>', match.start()) + 1
-        close_start = match.end() - len('</src>')
-        close_end = match.end()
-        punct_end = close_end
-        while punct_end < len(text) and _is_punctuation(text[punct_end]):
-            punct_end += 1
-        member = Candidate(
-            match.start(), open_end, close_start, close_end, punct_end,
-            'src', text[close_end:punct_end],
-            d_block=first.d_block, entry_block=first.entry_block,
+    return start
+
+
+def _is_element_separator(gap):
+    if any(
+        not (char.isspace() or _is_punctuation(char)) for char in gap
+    ):
+        return False
+    punctuation = [char for char in gap if _is_punctuation(char)]
+    return not punctuation or any(char in ';,' for char in punctuation)
+
+
+def _element_runs(text, pattern):
+    runs = []
+    current = []
+    for match in pattern.finditer(text):
+        if current and _is_element_separator(
+                text[current[-1].end():match.start()]):
+            current.append(match)
+        else:
+            if len(current) > 1:
+                runs.append(current)
+            current = [match]
+    if len(current) > 1:
+        runs.append(current)
+    return runs
+
+
+def _block_close(text, block):
+    depth = 0
+    for match in TOKEN_RE.finditer(text, block.open_end):
+        name = match.group('name')
+        if name is None or name != block.tag:
+            continue
+        if match.group('close'):
+            if depth == 0:
+                return match.start(), match.end()
+            depth -= 1
+            continue
+        body = match.group('body') or ''
+        if not body.rstrip().endswith('/'):
+            depth += 1
+    return None
+
+
+def _enclosing_blocks(text, pos):
+    stack = []
+    for match in TOKEN_RE.finditer(text, 0, pos):
+        name = match.group('name')
+        if name is None:
+            continue
+        if match.group('close'):
+            _pop_opening(stack, name)
+            continue
+        body = match.group('body') or ''
+        if body.rstrip().endswith('/'):
+            continue
+        stack.append(Block(name, match.start(), match.end()))
+    found = {}
+    for frame in reversed(stack):
+        if frame.tag not in ('d', 'entry') or frame.tag in found:
+            continue
+        close = _block_close(text, frame)
+        if close is not None:
+            frame.close_start, frame.close_end = close
+        found[frame.tag] = frame
+    return found.get('d'), found.get('entry')
+
+
+def _element_group_candidates(text, pattern, tag):
+    groups = []
+    for matches in _element_runs(text, pattern):
+        members = tuple(
+            (
+                match.start(), text.index('>', match.start()) + 1,
+                match.end() - len('</' + tag + '>'), match.end(),
+                _punct_end(text, match.end()),
+            )
+            for match in matches
         )
-        members.append(member)
-        if not _has_source_separator(member.punctuation):
-            break
-        scan = punct_end
-    if len(members) < 2:
-        return None
-    group_start = first.open_start
-    prefix_start = group_start
-    while prefix_start > 0 and text[prefix_start - 1].isspace():
-        prefix_start -= 1
-    if prefix_start > 0 and text[prefix_start - 1] == '(':
-        group_start = prefix_start - 1
-    last = members[-1]
-    group_members = tuple(
-        (
-            member.open_start, member.open_end, member.close_start,
-            member.close_end, member.punct_end,
+        d_block, entry_block = _enclosing_blocks(text, matches[0].start())
+        group_start = matches[0].start()
+        if tag == 'src':
+            prefix_start = group_start
+            while prefix_start > 0 and text[prefix_start - 1].isspace():
+                prefix_start -= 1
+            if prefix_start > 0 and text[prefix_start - 1] == '(':
+                group_start = prefix_start - 1
+        groups.append(Candidate(
+            group_start, members[0][1], members[-1][2], members[-1][3],
+            members[-1][4], tag, text[members[-1][3]:members[-1][4]],
+            members, d_block, entry_block,
+        ))
+    return groups
+
+
+def _merge_element_groups(text, candidates):
+    groups = (
+        _element_group_candidates(text, SRC_ELEMENT_RE, 'src')
+        + _element_group_candidates(text, G_ELEMENT_RE, 'g')
+    )
+    if not groups:
+        return candidates
+    candidates = [
+        candidate for candidate in candidates
+        if not any(
+            candidate.open_start in {
+                member[0] for member in group.group_members
+            }
+            or (
+                group.open_start <= candidate.open_start
+                and candidate.close_end <= group.close_end
+            )
+            for group in groups
         )
-        for member in members
-    )
-    group = Candidate(
-        group_start, first.open_end, last.close_start, last.close_end,
-        last.punct_end, 'src', last.punctuation, group_members,
-        first.d_block, first.entry_block,
-    )
-    consumed = {member.open_start for member in members}
-    return group, consumed
+    ]
+    for group in groups:
+        insert_at = next(
+            (
+                index for index, candidate in enumerate(candidates)
+                if candidate.open_start > group.open_start
+            ),
+            len(candidates),
+        )
+        candidates.insert(insert_at, group)
+    return candidates
 
 
 def _paren_source_group(text, candidate):
@@ -180,27 +315,6 @@ def _paren_source_group(text, candidate):
     )
 
 
-def _merge_source_groups(text, candidates):
-    merged = []
-    index = 0
-    while index < len(candidates):
-        result = _source_group(text, candidates, index)
-        if result is None:
-            paren_group = _paren_source_group(text, candidates[index])
-            merged.append(paren_group or candidates[index])
-            index += 1
-            continue
-        group, consumed = result
-        merged.append(group)
-        index += 1
-        while (
-            index < len(candidates)
-            and candidates[index].open_start in consumed
-        ):
-            index += 1
-    return merged
-
-
 def find_candidates(text):
     stack = []
     candidates = []
@@ -215,32 +329,51 @@ def find_candidates(text):
                 continue
             block.close_start = match.start()
             block.close_end = match.end()
-            punct_end = match.end()
-            while punct_end < len(text) and _is_punctuation(text[punct_end]):
-                punct_end += 1
-            if punct_end == match.end():
-                continue
+            punct_end = _punct_end(text, match.end())
             d_block = next(
-                (frame for frame in reversed(stack) if frame.tag == 'd'), None,
+                (frame for frame in reversed(stack) if frame.tag == 'd'),
+                None,
             )
             entry_block = next(
                 (frame for frame in reversed(stack) if frame.tag == 'entry'),
                 None,
             )
-            candidates.append(Candidate(
-                block.open_start, block.open_end, match.start(), match.end(),
-                punct_end, name, text[match.end():punct_end],
-                d_block=d_block, entry_block=entry_block,
-            ))
+            if punct_end > match.end():
+                close_start = match.start()
+                tag_name = name
+                src_close = _src_close_in_run(text, close_start)
+                if src_close is not None:
+                    close_start = src_close
+                    tag_name = 'src'
+                candidates.append(Candidate(
+                    block.open_start, block.open_end, close_start, match.end(),
+                    punct_end, tag_name, text[match.end():punct_end],
+                    d_block=d_block, entry_block=entry_block,
+                ))
+            dash_start = _dash_inside_start(text, match.start())
+            if dash_start is not None:
+                candidates.append(Candidate(
+                    block.open_start, block.open_end, match.start(),
+                    match.end(), match.end(), name,
+                    text[dash_start:match.start()],
+                    d_block=d_block, entry_block=entry_block,
+                    dash_inside=True,
+                ))
             continue
         if body.rstrip().endswith('/'):
             continue
         stack.append(Block(name, match.start(), match.end()))
-    candidates = _merge_source_groups(text, candidates)
-    return [
-        candidate for candidate in candidates
-        if not _should_skip(candidate, text)
-    ]
+    candidates = _merge_element_groups(text, candidates)
+    kept = []
+    for candidate in candidates:
+        candidate = _paren_source_group(text, candidate) or candidate
+        if _should_skip(candidate, text):
+            continue
+        start, _, _, end = current_span(text, candidate, [])
+        if prepared_after(text, candidate, []) == text[start:end]:
+            continue
+        kept.append(candidate)
+    return kept
 
 
 def _map_offset(offset, edits):
@@ -339,9 +472,22 @@ def _render_source_group(text, members):
             parts.append(text[close_end:punct_end])
             parts.append(text[punct_end:next_open_start])
     last = members[-1]
-    absorbed, rest = _split_punctuation(text[last[3]:last[4]], 'src')
+    absorbed, rest = _split_punctuation(text[last[3]:last[4]])
     parts.append(absorbed)
-    return '<src>' + ''.join(parts) + '</src>' + rest
+    opening = text[members[0][0]:members[0][1]]
+    return opening + ''.join(parts) + '</src>' + rest
+
+
+def _render_g_group(text, members):
+    parts = []
+    for position, member in enumerate(members):
+        _, open_end, close_start, _, _ = member
+        if position:
+            parts.append(text[members[position - 1][3]:member[0]])
+        parts.append(text[open_end:close_start])
+    last = members[-1]
+    opening = text[members[0][0]:members[0][1]]
+    return opening + ''.join(parts) + '</g>' + text[last[3]:last[4]]
 
 
 def prepared_after(text, candidate, edits):
@@ -350,11 +496,19 @@ def prepared_after(text, candidate, edits):
             tuple(_map_offset(offset, edits) for offset in member)
             for member in candidate.group_members
         ]
+        if candidate.tag == 'g':
+            return _render_g_group(text, members)
         return _render_source_group(text, members)
     start, close_start, close_end, end = current_span(text, candidate, edits)
-    absorbed, rest = _split_punctuation(
-        text[close_end:end], candidate.tag,
-    )
+    if candidate.dash_inside:
+        keep, outside = _split_punctuation(candidate.punctuation)
+        return (
+            text[start:close_start - len(candidate.punctuation)]
+            + keep
+            + text[close_start:close_end]
+            + outside
+        )
+    absorbed, rest = _split_punctuation(text[close_end:end])
     return (
         text[start:close_start]
         + absorbed
@@ -389,9 +543,16 @@ def iter_xml_files(paths):
     for path in paths:
         path = Path(path)
         if path.is_dir():
-            yield from sorted(path.rglob('*.xml'))
+            found = sorted(path.rglob('*.xml'))
         elif path.is_file():
-            yield path
+            found = [path]
+        else:
+            found = []
+        for file in found:
+            if file.name.lower() in SKIPPED_FILES:
+                print(f'\n{file}\n  skipped: source-list file, no entries')
+                continue
+            yield file
 
 
 def read_preserving_newlines(path):
@@ -418,11 +579,60 @@ def is_interactive():
         return False
 
 
+def _headword_scope(headwords):
+    return tuple(sorted({headword for headword in headwords if headword}))
+
+
+def load_forgotten_pairs(path):
+    try:
+        with open(path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError):
+        print(f'  warning: cannot read {path}; ignored.')
+        return set()
+    pairs = set()
+    entries = data.get('forgotten', []) if isinstance(data, dict) else []
+    for entry in entries:
+        if not isinstance(entry, (list, tuple)) or len(entry) not in (2, 3):
+            continue
+        before, after = str(entry[0]), str(entry[1])
+        if len(entry) == 3 and entry[2]:
+            scope = _headword_scope(
+                [str(head) for head in entry[2] if str(head).strip()]
+            )
+        else:
+            scope = ()
+        pairs.add((before, after, scope))
+    return pairs
+
+
+def save_forgotten_pairs(path, pairs):
+    data = {
+        'forgotten': [
+            [before, after, list(scope)]
+            for before, after, scope in sorted(pairs)
+        ]
+    }
+    with open(path, 'w', encoding='utf-8') as file:
+        json.dump(data, file, ensure_ascii=False, indent=2)
+        file.write('\n')
+
+
+def _is_forgotten(pair, headwords, forgotten):
+    before, after = pair
+    if (before, after, ()) in forgotten:
+        return True
+    return (before, after, _headword_scope(headwords)) in forgotten
+
+
 def ask_action():
     try:
         answer = input(
             '  Enter = skip | y = write after | '
-            'custom text = replace the whole span: '
+            'forget = hide for these headword(s) | '
+            'write: <text> = replace the span: '
         )
     except (EOFError, KeyboardInterrupt):
         print()
@@ -448,6 +658,8 @@ def main(argv=None):
 
     interactive = is_interactive()
     preview_only = not args.apply and not interactive
+    prohibited = {tuple(pair) for pair in PROHIBITED_PAIRS}
+    forgotten = load_forgotten_pairs(FORGOT_PATH)
     total_candidates = 0
     written = 0
     stopped = False
@@ -465,14 +677,19 @@ def main(argv=None):
             )
         edits = []
         for index, candidate in enumerate(candidates, 1):
-            total_candidates += 1
             start, _, _, end = current_span(
                 text, candidate, edits,
             )
             before = text[start:end]
             after = prepared_after(text, candidate, edits)
-            print(f'  [{index}/{len(candidates)}] </{candidate.tag}>')
+            pair = (clip(before), clip(after))
             headwords = _candidate_headwords(text, candidate, edits)
+            if pair in prohibited:
+                continue
+            if _is_forgotten(pair, headwords, forgotten):
+                continue
+            total_candidates += 1
+            print(f'  [{index}/{len(candidates)}] </{candidate.tag}>')
             if headwords:
                 print(f'  headword(s): {clip(", ".join(headwords))}')
             print(f'  before: {clip(before)}')
@@ -483,14 +700,58 @@ def main(argv=None):
             if args.apply:
                 replacement = after
             else:
-                answer = ask_action()
-                if answer is None:
-                    print('No input available: stopped before the next candidate.')
-                    stopped = True
+                replacement = None
+                while True:
+                    answer = ask_action()
+                    if answer is None:
+                        print(
+                            'No input available: stopped before the next '
+                            'candidate.'
+                        )
+                        stopped = True
+                        break
+                    stripped = answer.strip()
+                    lowered = stripped.lower()
+                    if not stripped:
+                        break
+                    if lowered == YES_ANSWER:
+                        replacement = after
+                        break
+                    if lowered == FORGET_ANSWER:
+                        scope = _headword_scope(headwords)
+                        forgotten.add((pair[0], pair[1], scope))
+                        save_forgotten_pairs(FORGOT_PATH, forgotten)
+                        if scope:
+                            print(
+                                '  forgotten for headword(s): '
+                                f'{", ".join(scope)} '
+                                '(other headwords still shown).'
+                            )
+                        else:
+                            print(
+                                '  forgotten globally '
+                                '(no enclosing headword found).'
+                            )
+                        break
+                    if answer.startswith(WRITE_PREFIX):
+                        custom = answer[len(WRITE_PREFIX):]
+                        if custom.strip():
+                            replacement = custom
+                            break
+                        print(
+                            f'  nothing after "{WRITE_PREFIX}"; '
+                            'nothing was written.'
+                        )
+                        continue
+                    print(
+                        '  not written: use Enter to skip, '
+                        f'"{YES_ANSWER}" to accept, "{FORGET_ANSWER}", '
+                        f'or "{WRITE_PREFIX}" followed by your text.'
+                    )
+                if stopped:
                     break
-                if answer == '':
+                if replacement is None:
                     continue
-                replacement = after if answer.strip().lower() == YES_ANSWER else answer
             text, edits = apply_change(
                 text, candidate, edits, replacement,
             )

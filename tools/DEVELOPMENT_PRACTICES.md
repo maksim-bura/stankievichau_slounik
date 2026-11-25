@@ -752,8 +752,9 @@ applications and is not gitignored. Nothing in `dictionary_app/` or
 | `export_see_hw.py` | every `<see hw="…">` with its entry's main headword → xlsx | `py -3 tools/export_see_hw.py` |
 | `search_xml.py` | grep-like recursive text search across the marked-up XML corpus (see below) | `py -3 tools/search_xml.py "слова"` |
 | `search_xml_app.pyw` | double-clickable window around `search_xml.py`: type a query, press Enter, see headwords and snippets (see below) | double-click `tools/search_xml_app.pyw` |
-| `fix_tag_punctuation.py` | move punctuation that follows a closing tag inside that tag, one reviewed candidate at a time (see below) | `py -3 tools/fix_tag_punctuation.py` (Enter = skip, `y` = accept, other text = replacement; `--apply` accepts all) |
+| `fix_tag_punctuation.py` | move punctuation that follows a closing tag inside that tag, one reviewed candidate at a time; adjacent `<src>` runs and separator-separated plain `<g>` elements are reviewed as one merge candidate; a dash is never left inside a tag; `sources.xml` is skipped (see below) | `py -3 tools/fix_tag_punctuation.py` (Enter = skip, `y` = accept, `forget` = hide for these headwords, `write: <text>` = custom replacement; `--apply` accepts all) |
 | `compare_raw_markup.py` | raw-OCR vs marked-up XML: coverage per letter and convention census (see below) | `py -3 tools/compare_raw_markup.py --coverage` |
+| `check_hallucinations.py` | incremental raw-OCR vs XML audit for hallucinated content, sources, and element order (see below) | `py -3 tools/check_hallucinations.py --dry-run` |
 | `snapshot_behavior.py` | golden JSON of derived dictionary/search/sources/`<see>` behavior (see below) | `py -3 tools/snapshot_behavior.py --save` then `--check` |
 | `check_pyside_traps.py` | AST scan for Qt style-ownership, font, and document traps (see below) | `py -3 tools/check_pyside_traps.py` |
 
@@ -1029,25 +1030,66 @@ opened, and nothing is written except the workbook.
 
 ### 9.11 `fix_tag_punctuation.py` — trailing punctuation inside tags
 
+The script has three kinds of candidate:
+
+1. **Merge tags** — adjacent `<src>` elements, or adjacent plain `<g>` elements,
+   become one element; the text between them is kept. This is the only kind that
+   changes tag structure.
+2. **Move punctuation inside** — the punctuation run after a closing tag moves
+   just before that closing tag (`</g>,` → `,</g>`).
+3. **Em dash stays outside** — the dash and everything after it always stay
+   after a closing tag (`</src>.—` → `.</src>—`), and a dash that is already
+   inside a tag just before its close tag is moved out
+   (`<t>слово—</t>` → `<t>слово</t>—`).
+
 A candidate is an opening tag, its content, its closing tag, and the run of
 Unicode punctuation characters (category `P*`) that immediately follows the
-closing tag. The run ends at the first non-punctuation character. These
-candidates are skipped because moving the punctuation would change the rendered
-form: any `</g>—` (an em dash after `</g>`), every `</hw>` whose run starts with
-a character in the editable `SKIP_PUNCTUATION_BY_TAG['hw']` tuple (by default
-`. , — ( ) : ; - [`), `</t>.`, every `</see>` and `</n>`, and any `<src>` whose
-content contains `<b>` (e.g. `<src><b>С.</b></src>)`). Add new punctuation to
-that tuple rather than to `_should_skip`.
+closing tag. The run ends at the first non-punctuation character. The dash rule
+is applied to every tag before anything else: the run is split at its first `—`,
+only the part before the dash is absorbed, and a candidate with nothing to
+absorb is not shown at all — so `</g>—`, `</t>—`, `</st>—` and `</ex>—` never
+appear as candidates, while `</src>.—` and `</g>,—` do.
 
-When two or more adjacent `<src>` elements are separated by `;` or `,` and
-optional spaces, the candidate covers the whole run (including optional
-surrounding `(` / `)`), whether or not the last source is followed by
-punctuation, and the prepared text merges them into one source span. The
-separator may follow other punctuation, as in `</src>.; <src>`:
+These candidates are always skipped: `</see>`, `</n>`, and `</i>).` when the
+`<i>` content is exactly `под <see>…</see>` (a cross-reference pointer such as
+`<i>под <see>чуць</see></i>).`). Also skipped: an `<src>` whose content is
+exactly `<b>С.</b>` (a bare source code, not a source list), an `<src>` whose
+run starts with `(`, an `<src>` whose run starts with `)` while an unclosed `(`
+is still open to its left on the same line, and the first-character lists in
+the editable `SKIP_PUNCTUATION_BY_TAG` — by default `<hw>`: `.` `,` `)` `(` `—`
+`:` `[` `;`, and `<t>`: `.`. Repeats are covered by the same first character, so
+`..`, `,,` and `))` are skipped too. `<g>` has no punctuation skip list. Add a
+character to those tuples rather than to `_should_skip`, and add a whole
+before/after pair to `PROHIBITED_PAIRS` (below).
+
+When two or more adjacent `<src>` elements (attributes allowed) are separated
+only by whitespace and/or `;`/`,` (in any combination, including none), the
+candidate covers the whole run (including an optional surrounding `(` / `)`)
+whether or not the last source is followed by punctuation, and the prepared text
+merges them into one source span. The separator may also follow other
+punctuation as long as it contains `;` or `,`, as in `</src>.; <src>`; a gap
+made only of other punctuation, such as `</src>) <src>`, does not merge. The
+merged content is the concatenation of the interiors and the gap text, with no
+space added:
 
 ```text
   before: <src>Янк. І</src>; <src>Ар.</src>
   after:  <src>Янк. І; Ар.</src>
+```
+
+```text
+  before: <src>Нсл.</src> <src>Ар.</src>
+  after:  <src>Нсл. Ар.</src>
+```
+
+```text
+  before: <src>a</src><src>b</src>
+  after:  <src>ab</src>
+```
+
+```text
+  before: <src>a </src><src>b</src>
+  after:  <src>a b</src>
 ```
 
 ```text
@@ -1064,14 +1106,59 @@ them:
   after:  <src>(Ар.).</src>
 ```
 
-For `<g>` and `<src>`, a trailing em dash stays outside the tag; only the
-punctuation before it is absorbed. This turns `</g>,—` into `,</g>—` and
-`</src>.—` into `.</src>—`:
+When two or more adjacent plain `<g>` elements (no attributes — a
+`<g hw="…">` inflection block is never part of a run, though its own trailing
+punctuation is still reviewed) are separated by the same character set —
+whitespace and/or `;`/`,`, including none — the candidate covers the whole run
+and the prepared text merges them into one `<g>`, keeping the separator text
+between them:
+
+```text
+  before: <g>-нюся-нішся,</g> <g>соверш. к <see>прычыняцца</see>.</g>
+  after:  <g>-нюся-нішся, соверш. к <see>прычыняцца</see>.</g>
+```
+
+```text
+  before: <g>Соверш.</g>, <g>перех.</g>
+  after:  <g>Соверш., перех.</g>
+```
+
+```text
+  before: <g>a</g><g>b</g>
+  after:  <g>ab</g>
+```
+
+For every tag, a trailing em dash stays outside the tag; only the punctuation
+before it is absorbed. This turns `</g>,—` into `,</g>—` and `</src>.—` into
+`.</src>—`:
 
 ```text
   before: <src>Нсл. 346</src>.—
   after:  <src>Нсл. 346.</src>—
 ```
+
+The inverse case is also offered: when a dash already sits inside a tag just
+before its close tag, it is moved out (identity tags `<hw>`/`<see>` are left
+alone):
+
+```text
+  before: <t>слово—</t>
+  after:  <t>слово</t>—
+```
+
+A punctuation run that follows adjacent closing tags is absorbed by the
+`</src>` in that chain, so the period lands inside the source and outside the
+enclosing tag (a source citation carries its own final period):
+
+```text
+  before: <ex>Чэпіль новы… <src>Стасева Выс. (Ксл.)</src></ex>.
+  after:  <ex>Чэпіль новы… <src>Стасева Выс. (Ксл.).</src></ex>
+```
+
+Nested markup between the source content and its close tag is preserved: with
+`<src><i>Ксл.</i></src></ex>.` the period goes before `</src>` (after `</i>`).
+Chains without a `</src>` keep the single-tag rule, so `</t></ex>.` still
+becomes `</t>.</ex>`.
 
 Otherwise each candidate is shown as the pair before and after moving that run
 inside the closing tag:
@@ -1084,11 +1171,21 @@ inside the closing tag:
 Each candidate also prints the headword(s) of its parent `<d>` span, or of the
 entry span outside any `<d>`, so the reviewed context is identifiable.
 
-The prompt offers three actions: Enter skips the candidate, `y` writes the
-prepared `after` text, and any other input replaces the whole candidate span
-(opening tag through trailing punctuation) with the typed text. Moving
-punctuation inside `<hw>` changes the headword, so the `<hw>` cases above are
-skipped; `<see>` and `<n>` are always skipped. An accepted change is written
+The prompt offers four actions: Enter skips the candidate, `y` writes the
+prepared `after` text, `forget` hides the current before/after pair for the
+headword(s) shown, and `write: <text>` replaces the whole candidate span
+(opening tag through trailing punctuation) with `<text>`. Any other input is
+ignored with a hint and the prompt is shown again, so a stray keypress is never
+written to the file. `forget` appends `[before, after, [headword…]]` to
+`tools/fix_tag_punctuation_forget.json`, which is kept across XML edits; the
+pair is hidden only where the candidate's headword set is exactly the same, so
+the same markup under another headword is still offered. A JSON entry with two
+fields (no headword list) hides the pair everywhere. `PROHIBITED_PAIRS` at the
+top of the script is a separate global list, matched on the clipped
+`before`/`after` text printed on screen. That block, with the `write: `/`forget`
+words, is the user-editable section for non-developers.
+Moving punctuation inside `<hw>` changes the headword, so the `<hw>` cases above
+are skipped; `<see>` and `<n>` are always skipped. An accepted change is written
 immediately and the file's existing line endings are preserved. Before each
 write the script re-reads the file and compares it with the text it last saw; if
 another program (for example the markup app) saved the file in the meantime, the
@@ -1097,7 +1194,9 @@ current file. Later candidates are re-mapped after every write, so nested pairs
 and following tags stay valid. `--apply` writes the prepared `after` text for
 every candidate without asking (for scripts/automation); a non-interactive run
 without `--apply` only previews. Arguments are XML files or directories; the
-default target is `dictionary_app/data` (recursive `*.xml`). Examples:
+default target is `dictionary_app/data` (recursive `*.xml`), except the
+source-list file `sources.xml`, which is skipped with a printed note because it
+has no `<entry>` markup to review. Examples:
 
 ```powershell
 py -3 tools/fix_tag_punctuation.py
@@ -1246,12 +1345,51 @@ with no fatal finding, `1` fatal (or any advisory under `--strict`), `2` bad
 root. The advisory is deliberate: `setDocument` is correct when ownership is
 explicit (see `DictTextBrowser.setHtml` in `dictionary_app/AGENTS.md`).
 
+### 9.16 `check_hallucinations.py` - incremental hallucination audit
+
+Audits dictionary XML against raw OCR before `MARKUP_PATTERNS.md` updates.
+It aligns XML entries to raw `•` blocks in print order, then checks for
+hallucinated content, source tags absent from the raw example, suspicious
+grammar labels, and out-of-order element text. Findings are split into
+`violation` and `review`; the report is meant for triage, not blind edits.
+
+Scope is explicit. Before running it for a markup-patterns update, confirm the
+checked delta with the user and do not continue until the scope is clear. Pass
+`--all`, `--changed`, `--letter`, or `--headword`; the tool refuses to guess a
+default scope. Fingerprints are stored in `tools/build/hallucination_state.json`
+(outside git) so unchanged entries in that explicit scope can be skipped; only
+audited entries are recorded.
+
+| flag | purpose |
+|---|---|
+| `--letter X` | one dictionary letter only |
+| `--headword WORD` | limit to entries whose main headword contains WORD |
+| `--all` | audit every selected entry, ignoring previous state |
+| `--changed` | audit selected entries, skipping unchanged fingerprints |
+| `--force` | re-audit selected entries even if unchanged |
+| `--reset` | clear incremental state before running |
+| `--dry-run` | do not write state |
+| `--state PATH` | alternate state file |
+| `--report PATH` | write an xlsx report when there are findings |
+| `--limit N` | printed findings, `0` = all (default 20) |
+
+```powershell
+$env:PYTHONUTF8="1"
+py -3 tools/check_hallucinations.py --all --headword чыкаць --force --dry-run
+py -3 tools/check_hallucinations.py --changed --letter Cz --report tools/build/cz_hallucinations.xlsx
+```
+
+It is a locator, not a judge: raw OCR is noisy, so review findings need human
+confirmation. Exit `0` when there are no violations, `1` when any violation is
+reported, `2` when no explicit scope was given.
+
 ## 10. Exit codes
 
 Scripts exit `0` on success and `1` on findings/failures. `search_xml.py`
 follows grep instead: `0` match, `1` no match, `2` error.
 `snapshot_behavior.py` exits `2` for a missing database/baseline or unreadable
-JSON.
+JSON. `check_hallucinations.py` exits `1` on violations, `0` on review-only or
+clean runs, and `2` when no explicit scope was given.
 
 ## 11. Reuse
 
@@ -1266,8 +1404,9 @@ the search script is a generic recursive grep with a data-folder default.
 the exception: they import `dictionary_app` and encode this corpus's `<hw>` /
 `<sep />` / `<see hw>` shapes, so copy them only when the target repo has the
 same schema (the `write_workbook` writer itself is generic).
-`compare_raw_markup.py` (§9.13) hard-codes this repo's raw/XML folder layout and
-`dictionary_<X>` naming; the alignment logic is reusable, the paths are not.
+`compare_raw_markup.py` (§9.13) and `check_hallucinations.py` (§9.16) hard-code
+this repo's raw/XML folder layout and `dictionary_<X>` naming; the
+alignment logic is reusable, the paths are not.
 `snapshot_behavior.py` (§9.14) imports both apps plus this corpus's DB/format
 layer, so copy it only with the same architecture. For per-repo policy,
 write a local config and a plan JSON (populate from the repo's actual module

@@ -1,4 +1,5 @@
 import os
+import re
 import xml.etree.ElementTree as ElementTree
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListView, QApplication, QPushButton,
@@ -47,6 +48,7 @@ from dictionary_app.widgets.menu_options import RadioOption
 from markup_app.utils.constants import ( RELOAD_MARKER, DUPLICATES_MARKER, BROKEN_LINKS_MARKER, )
 
 _ENTRY_NOT_FOUND_MESSAGE = 'Could not locate the original entry in the source file.'
+_ENTRY_STRAY_GT_RE = re.compile(r'(<entry\b[^>]*>)\s*>')
 
 
 class MarkupMainWindow(QMainWindow):
@@ -58,6 +60,7 @@ class MarkupMainWindow(QMainWindow):
         self.checked_state.migrate(self.search_engine._get_connection())
         self.current_result = None
         self.current_occurrence = None
+        self.current_separate_occurrences = False
         self.current_results = []
         self._has_unsaved = False
         self._loaded_raw = {}
@@ -298,6 +301,8 @@ class MarkupMainWindow(QMainWindow):
 
     def _display_results(self, results):
         self.current_results = results
+        separate_occurrences = self._separate_occurrences_mode()
+        mode_changed = separate_occurrences != self.current_separate_occurrences
         if self._duplicates_toggle.isChecked() or self._broken_mode is not None:
             displayed = self._duplicate_resolver.filter(results) if self._duplicates_toggle.isChecked() else results
             if self._broken_mode is not None:
@@ -308,11 +313,36 @@ class MarkupMainWindow(QMainWindow):
             ]
         else:
             displayed, identities = collapse_with_identities(results)
+            displayed = self._prefer_main_rows(displayed, identities, results)
         self._by_id_headword = {(r[0], r[1], r[3]): r for r in displayed}
         self.results_model.set_rows(list(zip(identities, displayed)))
 
         if displayed:
             select_row(self.results_box, self.results_model, 0)
+            if mode_changed:
+                index = self.results_box.currentIndex()
+                if index.isValid():
+                    self.on_result_clicked(index)
+
+    def _prefer_main_rows(self, displayed, identities, results):
+        counts = {}
+        for result in results:
+            keep_acc = result[6] if len(result) > 6 else 0
+            key = (result[0], resolve_headword(result[1], keep_acc))
+            counts[key] = counts.get(key, 0) + 1
+        by_id_headword = {(r[0], r[1]): r for r in results}
+        rows = []
+        for row, identity in zip(displayed, identities):
+            if (counts.get((row[0], identity), 0) > 1
+                    and self._is_sub_headword(row)):
+                main = by_id_headword.get(
+                    (row[0], self._db_main_headword(row[0])))
+                if main is not None:
+                    main_keep_acc = main[6] if len(main) > 6 else 0
+                    if identity == resolve_headword(main[1], main_keep_acc):
+                        row = main
+            rows.append(row)
+        return rows
 
     def _broken_filter(self, results, mode):
         flags = self._broken_links.flags()
@@ -521,7 +551,9 @@ class MarkupMainWindow(QMainWindow):
             return
 
         current = self.current_result
+        separate_occurrences = self._separate_occurrences_mode()
         if (current and self.current_occurrence == occurrence
+                and self.current_separate_occurrences == separate_occurrences
                 and (current[0], current[1], current[3]) == (entry_id, headword, entry_link)):
             return
 
@@ -529,7 +561,7 @@ class MarkupMainWindow(QMainWindow):
             self._restore_selection_to_current()
             return
 
-        self._load_result(result, occurrence, self._separate_occurrences_mode())
+        self._load_result(result, occurrence, separate_occurrences)
 
     def _db_main_headword(self, entry_id):
         cursor = self.search_engine._get_connection().cursor()
@@ -564,6 +596,7 @@ class MarkupMainWindow(QMainWindow):
 
         self.current_result = (result[0], result[1], xml_text, result[3], source_file, keep_acc)
         self.current_occurrence = occurrence
+        self.current_separate_occurrences = separate_occurrences
         self.editor.pane.set_entry(xml_text)
         self._has_unsaved = False
 
@@ -633,6 +666,7 @@ class MarkupMainWindow(QMainWindow):
             QMessageBox.warning(self, 'Rebuild Error', f'Database rebuild failed:\n{exc}')
             return
 
+        self.checked_state.migrate(self.search_engine._get_connection())
         self._source_blocks.clear()
         self._sub_headword_cache.clear()
         self._duplicate_resolver.invalidate()
@@ -677,7 +711,7 @@ class MarkupMainWindow(QMainWindow):
         return False
 
     def _locate_source_block(self, source_file, entry_id, headword, entry_link,
-                             error_title, ambiguous_message):
+                             error_title, ambiguous_message, keep_acc=0):
         if not source_file:
             QMessageBox.warning(self, error_title, 'No source file found for this entry.')
             return None
@@ -695,9 +729,15 @@ class MarkupMainWindow(QMainWindow):
             return None
         old_raw = self._loaded_raw.get(entry_id)
         if old_raw is None:
-            old_raw = self._source_blocks.entry_block(
-                entry_id, source_file, headword, entry_link)
+            old_raw = self._source_blocks.strict_entry_block(
+                entry_id, source_file, headword, entry_link, keep_acc)
         indices = [i for i, b in enumerate(blocks) if b == old_raw] if old_raw else []
+        if not indices:
+            old_raw = self._source_blocks.strict_entry_block(
+                entry_id, source_file, headword, entry_link, keep_acc)
+            indices = [
+                i for i, b in enumerate(blocks) if b == old_raw
+            ] if old_raw else []
         if not indices:
             QMessageBox.warning(self, error_title, _ENTRY_NOT_FOUND_MESSAGE)
             return None
@@ -714,10 +754,11 @@ class MarkupMainWindow(QMainWindow):
 
         located = self._locate_source_block(
             source_file, entry_id, headword, entry_link, 'Delete Error',
-            'The original entry could not be matched uniquely; nothing was deleted.')
+            'The original entry could not be matched uniquely; nothing was deleted.',
+            keep_acc=self.current_result[5])
         if located is None:
             return False
-        _file_path, content, blocks, index = located
+        file_path, content, blocks, index = located
 
         new_content = remove_entry_block(content, blocks[index])
         with open(file_path, 'w', encoding='utf-8') as file:
@@ -758,8 +799,9 @@ class MarkupMainWindow(QMainWindow):
         source_file = self.current_result[4]
         new_xml = self.editor.pane.get_xml()
 
+        clean_xml = _ENTRY_STRAY_GT_RE.sub(r'\1', new_xml, count=1)
         try:
-            root = ElementTree.fromstring(new_xml)
+            root = ElementTree.fromstring(clean_xml)
             new_entry_string = ElementTree.tostring(root, encoding='unicode').rstrip('\n')
         except ElementTree.ParseError:
             QMessageBox.warning(self, strings.dialog.invalid_xml.title,
@@ -771,7 +813,8 @@ class MarkupMainWindow(QMainWindow):
 
         located = self._locate_source_block(
             source_file, entry_id, headword, entry_link, 'Save Error',
-            'The original entry could not be matched uniquely; no changes were saved.')
+            'The original entry could not be matched uniquely; no changes were saved.',
+            keep_acc=self.current_result[5])
         if located is None:
             return False
         file_path, content, blocks, index = located

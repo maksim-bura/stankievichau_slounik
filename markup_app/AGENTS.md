@@ -47,6 +47,10 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 
 - Fixed `QHBoxLayout` (no splitter): entry list at stretch 0 + editor at
   stretch 1. Default `WINDOW_DEFAULT_WIDTH` × `WINDOW_DEFAULT_HEIGHT`.
+- **Window minimum width is implicit:** the tag toolbar's natural width plus the
+  entry list sets the floor through the layout, so the tag row never squeezes
+  its buttons. Do not set an explicit window minimum smaller than the toolbar —
+  that makes the buttons compress into unreadable slivers.
 - Top row (`top_layout`, spacing `TOP_LAYOUT_SPACING`): `SearchBox` (stretch 1) +
   ґ-insert button + duplicates toggle + broken-links toggle + alphabet button +
   rebuild button (all `BUTTON_SIZE`). The checked toggle and Save button are NOT
@@ -77,7 +81,12 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 - **Same-entry duplicate collapse (NORMAL list only):** with NO filter active
   (`_duplicates_toggle` off AND `_broken_mode is None`), `_display_results`
   collapses rows sharing a DB entry id + accent-resolved headword via
-  `collapse_with_identities` (first occurrence wins). It reuses the returned
+  `collapse_with_identities` (first occurrence wins), then `_prefer_main_rows`
+  swaps a surviving sub-headword row for the entry's main-headword row when the
+  collapse hid it. Collation ranks accents, so an accented sub-headword (e.g.
+  `чму́рыць` vs the main `чмуры́ць`) can sort first and become the entry's only
+  row; without the swap, clicking that row runs the sub-headword underline path
+  and an ambiguous non-`<d>` region draws nothing. It reuses the returned
   identities for the model display rows (no second resolve); with either filter
   active the collapse is skipped and identities are computed once while the
   rows are built, so the 👯 groups/⛓️‍💥 flags are inspected per row. Clicking a
@@ -211,13 +220,21 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
 - API: `is_checked(source_file, entry_id, entry_link, headword, occurrence)`,
   `toggle(...)` (returns the new state and persists), `uncheck_all()`, `save()`,
   `remove_entry(source_file, entry_id)`, `migrate(conn)`.
-- `migrate(conn)` runs at startup and rewrites legacy keys (e.g.
-  `{entry_id}:{headword}`, `{source_file}:{headword}`, the older
+- `migrate(conn)` runs at startup and after the 🔄 rebuild, and rewrites legacy
+  keys (e.g. `{entry_id}:{headword}`, `{source_file}:{headword}`, the older
   `{source_file}:{entry_link}:{headword}`, and the interim
   `{source_file}:{entry_id}:{entry_link}:{headword}`) to the current schema,
   resolving `entry_id` from the `dictionary`/`sub_headwords` rows. Legacy keys
   carry no occurrence, so they map to occurrence `0`. It no-ops when the state is
   empty, so a fresh install pays no DB work.
+- **DB ids are transient, so current-schema keys are re-keyed too:** a full
+  rebuild renumbers every entry from 1 in file order and an incremental rebuild
+  re-appends a file's entries at `MAX(id)+1`, so the id component of a stored key
+  goes stale after any rebuild. `migrate` therefore re-resolves every key by
+  `(source_file, entry_link, headword)`, preferring the recorded id, falling back
+  to the only candidate, and rank-mapping a same-headword homograph group (old
+  ids sorted ↔ candidate ids sorted) when both counts match. A key with no
+  candidate (deleted/renamed entry) is kept as-is, never dropped.
 - Visual states via `BorderDelegate.paint()` using the shared palette
   (`COLOR_NORMAL_BG`/`COLOR_HOVER_BG`/`COLOR_SELECTED_BG`/
   `COLOR_BORDER_DEFAULT`/`COLOR_BORDER_SELECTED` from
@@ -277,7 +294,10 @@ imported from `dictionary_app.db.build_database` (never re-derive paths).
   `occurrence`: `ResultsListModel` precomputes each row's index among rows with
   the same `(entry_id, headword, entry_link)` triple (`ROLE_OCCURRENCE`) and
   `on_result_clicked` passes it to `_load_result`; the "already current" guard
-  compares `current_occurrence` too.
+  compares `current_occurrence` too. `_display_results` reloads the selected
+  first row whenever `_separate_occurrences_mode()` changes, and the guard
+  compares `current_separate_occurrences`, so switching between normal and
+  duplicates/broken views refreshes the underline without another click.
 
 ### Link markers & dependency tooltip
 

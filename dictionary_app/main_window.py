@@ -178,7 +178,8 @@ class MainWindow(QMainWindow):
                     _, target_anchor = self.search_engine.get_entry_sub_headword(
                         result_to_display[0], target_subheadword)
             elif sense_parts:
-                formatter.set_target_senses(sense_parts, headword)
+                sense_headword = resolved_id_headword or compare_to or headword
+                formatter.set_target_senses(sense_parts, sense_headword)
                 applied_target = None
             elif not from_navigation and highlight_word and highlight_word != main_headword:
                 formatter.set_target_subheadword(highlight_word)

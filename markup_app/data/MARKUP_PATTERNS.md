@@ -23,6 +23,9 @@ Raw format facts that drive the splitting:
   form the entry BODY; the body always sits inside the wrapper. In the XML file
   the wrapper is at column 0 with a blank line between blocks.
 - Each printed headword starts with a `•` bullet: `•ся́драва, нареч.—холодновато.`
+- A leading `^` is the same headword marker when it opens a raw block
+  (`^чыты-тая-тае—трезвый.` → `<hw>чы́ты</hw>` — Cz); a caret before a
+  parenthesized source (`^(Афанасьев, …)`) is source text, not a headword.
 - A raw line/block may contain **several** bullet-led headwords joined by `,`
   (`•ґазалі́на-…, •ґазамэтра-…`) — each `•` becomes its own `<entry>`, in the
   order the bullets appear, left to right. A merged line is layout, not a sort:
@@ -30,7 +33,9 @@ Raw format facts that drive the splitting:
   `•чарот…, •чапы́жнік…` keeps чарот first). The printed order is the only
   authority.
 - A raw block may also hide a related sub-word inside the same paragraph
-  (`•ґарсэт, … •ґарсэтніца, …`); split those too.
+  (`•ґарсэт, … •ґарсэтніца, …`); split those too. A bullet that follows a
+  numbered continuation sense is a new entry, not part of that sense
+  (`2. … •зырчэць` — Z).
 - Blank lines separate printed blocks; they do **not** map 1:1 to entries.
 - Multi-part content of one entry (senses, sub-headwords, phrasal headwords)
   becomes `<sense>`/`<d>` blocks separated by `<br />`.
@@ -64,7 +69,7 @@ never the whole file at once.
 |---|---|---|
 | `<hw>` | headword (bold, clickable anchor) | one per spelling variant; multi-word headwords like `ґазавая ґрана́та`; homonym numerals nested: `<hw>гале́ра <n>ІІ</n></hw>`; disambiguation links see §8; `excl="true"` marks a display-only variant that is kept out of the entry list and all logic except display + the pointing-finger (`👉`), e.g. `•<hw excl="true">ёсьць</hw>, <hw>ёсьцяка</hw>` (see `dictionary_app/AGENTS.md` → `<hw excl="true">`); an inflected/cognate variant shown alongside the main form may be italicized INSIDE `<hw>`: `<hw>Юр'е</hw>, <hw><i>Юр'я</i></hw>` (Ju); `keep-acc="true"` marks a headword whose combining accents are load-bearing and must be PRESERVED (never stripped) for display, list identity, search, and `<see>` resolution — used on the Cz `ча́паць`/`чапа́ць` family |
 | `<g>` | grammar/declension, italic | declension starts with `-`: `-са, м.`; standalone markers: `нареч.`, `местоим.`, `союз`, `соверш.`, `несоверш.`, `безлич.`, `однкр.`, `средн.`, `прич.`, `отгл. имя сущ.`; may embed `<st>`, `<see>`, `<p>`, `<src>`, even `<hw>` (`один <hw>ґалёш</hw>`) |
-| `<t>` | Russian translation; also appears nested INSIDE an `<ex>` as a Russian gloss of a proverb/idiom | transcription, multiple `<t>` per sense allowed; sources and `—` separators inside (H `гарох`: `<ex>Хадзі̀ма ў гарох <t>(знач. щипать горох)</t>. <src>Ст.</src></ex>`); a parenthetical Russian note inside a Belarusian `<ex>` is its own `<t>` (`надзявай<t>(  зн. узкие)</t>` — Cz); an unreadable gloss stays a dot run `<t>.....</t>`, never empty |
+| `<t>` | Russian translation; also appears nested INSIDE an `<ex>` as a Russian gloss of a proverb/idiom | transcription, multiple `<t>` per sense allowed; sources and `—` separators inside (H `гарох`: `<ex>Хадзі̀ма ў гарох <t>(знач. щипать горох)</t>. <src>Ст.</src></ex>`); a parenthetical Russian note inside a Belarusian `<ex>` is its own `<t>` (`надзявай<t>( зн. узкие)</t>` — Cz); an unreadable gloss stays a dot run `<t>.....</t>`, never empty |
 | `<ex>` | Belarusian example, italic, srcless or `<src>`-tagged | may embed a Russian `<t>` gloss and/or `<st>Послов.</st>` (H `гарох`: `Ідзе гарох, там сем дарог. <st>Послов.</st>, <t>о частом щипании гороха</t>. <src>Дсл.</src>`); `lang="orv"` marks an Old Russian / Old Belarusian quoted passage (Cz `ча́ра`) |
 | `<src>` | source, becomes link | `Ар.`, `Гсл.`, `Нсл. 119.`, `Стаішча Чаш. (Ксл.)`, long bibliographic refs stay whole (`Азбукін: Ґеоґрафія Эўропы, 1924`); single-letter `С.` bolded as `<src><b>С.</b></src>`; a source printed inside parens keeps them IN the tag (`<src>(Ксл.)</src>`, `<src>(Ар.)</src>`, `<src>(НК)</src>` — Cz); song/popular-lore attributions stay whole `<src>` (`Из песни, Войш.`, `Из нар. песни.`, `З купальскае песьні.` — Cz); a printed source RUN is one tag with its own separators inside (`<src>Ар.; Ксл.; Шсл.</src>`, `<src>Барсл., Пол., Лепл. (Юхн.).</src>`) — never one `<src>` per abbreviation (Cz review removed 97 split tags); `<st>`/`<i>` may nest inside it (`<src>Ст. Слабада, …, <st>област.</st> Люц. пав.</src>`, `<src>Ст.( <i>под <see>адбівацца</see></i>).</src>` — Cz) |
 | `<st>` | register/style marker, italic, linkable | `хим.`, `биол.`, `рел.`, `муз.`, `ист. мор.`, `област.`, `перен.`, `Послов.`; may attach case (`послов.`). Before a sense dash: `<n>1.</n> <st>презр.</st>—<t>кровь. …` (Ju юшка 1); at an `<ex>` tail, with a trailing comma when followed by a source: `<ex>Які добры пан! … <st>Насм. пословица,</st> <src>Нсл.</src></ex>` (Ju юшка 2), also `<st>Поговор.</st>`; a parenthetical usage note inside `<g>` may also be a `<st>` (see §6). An embedded `<p>` inside `<st>` stays plain (non-italic): `<st><p>презр.</p></st>` renders `<span class="st"><span class="p">презр.</span></span>` (Ju `юха́`) |
@@ -123,6 +128,10 @@ Multi-sense:
 <sense n="2"><n>2.</n> <t>газовый счётчик</t>.</sense>
 ```
 
+A single unsensed translation stays at entry level; add `<sense n="1">` only
+where the raw prints the numeral. Do not regularize a one-sense entry into a
+numbered sense block.
+
 Entry with sub-headwords — main headword in a `•<d>` block, phrasal/family blocks
 after `<br />`; `<d>` may also carry its own variant `<hw>`s:
 ```xml
@@ -169,11 +178,17 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
   `<t>…</t>—<t>…</t>`, `<ex>…</ex>—<t>…</t>`. A crowded proverb whose Russian
   gloss gets its own citation renders with the gloss OUTSIDE the `<ex>`, joined
   by `—` (user-checked Cz `чорт`): `<ex>Чорт на паганага папаў, <st>послов.</st></ex>—<t>нашла коса на камень. <src>Ар.</src>; <src>Іг.</src></t>`.
-- `,`/`:`/`;` follows `</hw>` directly (no space before it), ordinary form:
-  `•<hw>ґастрономны</hw>, <g>-ная-нае</g>—<t>…`; the symbol is auto-absorbed into
-  the headword anchor at render time (stays bold) — e.g. `•<hw>акалотам</hw>: <ex>…`.
+- `,`/`:`/`;`/`.`/`…` follows `</hw>` directly (no space before it), ordinary
+  form: `•<hw>ґастрономны</hw>, <g>-ная-нае</g>—<t>…`; the symbol is auto-absorbed
+  into the headword anchor at render time (stays bold) — e.g.
+  `•<hw>акалотам</hw>: <ex>…`, the entry-final `.</d>` in
+  `<d><g>Прич.</g> <hw>абагу́льнены</hw>.</d>`, and the ellipsis of
+  `<d><hw>вычвара́ць</hw>…</d>` (Cz).
   Two duplicate commas `,,` directly after `</hw>` are BOTH absorbed (both stay
-  bold) — e.g. `<hw>разьюрыцца</hw>,, <sense …`.
+  bold) — e.g. `<hw>разьюрыцца</hw>,, <sense …`. A dot is absorbed singly (there
+  is no `..` case in the corpus). A comma printed before a `см. под` dash stays
+  after `</hw>` and before the dash:
+  `<hw>чыніць ласку</hw>,—<i>см. под <see>ласка</see>.</i>` (Cz).
 - Square brackets directly abut the preceding/following tag, **optional/redundant**:
   when `[`…`]` enclose only `<hw>` and/or `<src>`/`<st>` (at least one `<hw>`),
   the renderer auto-bolds the brackets even without `<b>` (see
@@ -195,7 +210,7 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
   punctuation keeps it inside: `<src>Пск.(Иеропольский).</src>`,
   `<src>Нсл. 75.</src>`.
 - `<br />` is the canonical block separator; the equivalent `<br></br>` form also
-  occurs in the data (A, N) and ElementTree treats both identically — either is
+  occurs in the data (N) and ElementTree treats both identically — either is
   acceptable on input. The separator PRECEDES the block it opens (one `<br />`
   line between two blocks, none after the last block), and the first `<d>` may
   stay on the translation's line separated by one space
@@ -227,16 +242,19 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
 - Grammar markers inside a declension `<g>` are wrapped in `<st>`:
   `<g>м., <st>област.</st></g>` (Cz `чобат`); the raw's
   `увел.`/`прилаг.`/`соверш.` relative labels stay literal words in `<g>`:
-  `<g>-гі, увел. от <see>чорт</see></g>`.
+  `<g>-гі, увел. от <see>чорт</see></g>`. A standalone family marker keeps the
+  capitalized dictionary label (`Соверш.`, `Прич.`, `Отгл. имя сущ.`) even when
+  the raw or a draft prints it lowercase.
 - **Register markers stay outside the source.** A `<st>` is never moved inside
   the `<src>` that follows it, `перен.`/`ирон.` stand as their own `<st>` beside
   the `<t>`, and a marker qualifying one noun stays inside `<g>`
   (`<g>м., <st>област.</st></g>` — Cz `чобат`). Sense-dash and `<ex>`-tail
   placement are in §3 (`<st>` row).
 - **The two combining accents are not interchangeable:** `<hw>` takes the acute
-  U+0301, `<g>` (and its declension tails) takes the grave U+0300 — the checked
-  data observes this split with no exception. Mixing them inside one tag is an
-  error even when both render as an accent.
+  U+0301, `<g>` (and its declension tails) takes the grave U+0300. One corpus
+  exception exists: an italicized derived variant inside `<hw>` keeps the raw's
+  grave (`<hw><i>ачулѐць</i></hw>` — Cz). Mixing both marks inside one tag is an
+  error even when they render alike.
 - **Parenthetical usage note with an embedded proverb** (Ju `юры́ць`): the
   declension's `<g>` may carry a long parenthetical wrapped in `<st>`, and a
   proverb quoted inside is tagged `<ex>` even nested in the `<g>`/`<st>`:
@@ -263,6 +281,9 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
   such entries; the user deletes them manually if they prove unnecessary. Kept
   example:
   `•<hw excl="true">ёсьць</hw>, <hw>ёсьцяка</hw>,—<i>см. под <see>ё</see>.</i>`.
+  A redundant stub is never folded or dropped by the transcriber: the user may
+  delete it, leaving the word as a `<hw>` variant or `<d>` sub-headword of the
+  target (`ёлупень` in `ёлапень`, `чува́ць` in `чуць`).
 - Two `См.` sets same entry:
   `<i>См. <see>грункач</see>, <see>ґруґан</see>, <see>крумкач</see>.</i>`.
 - In `<g>`: `прилаг. к <see>ґімназя</see>`, `увел. от <see>чорт</see>` (Cz),
@@ -277,7 +298,9 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
 - `<see>` headword spelling must match the linked entry's headword (accents
   allowed; normalization is accent-stripped). When the raw's cross-ref is
   OCR-mangled, normalize it back to the dictionary's headword spelling
-  (e.g. `Кажа-мЯКа` → `кажамяка`).
+  (e.g. `Кажа-мЯКа` → `кажамяка`). When the printed label is an archaic or
+  line-broken form, keep it as the visible `<see>` text and pin the real target
+  with `hw=`: `<i>см. под <see hw="прырачэньне">прырачэнье</see>.</i>` (Cz).
 
 ## 8. Homonyms and disambiguating IDs
 
@@ -395,7 +418,11 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
   `py -3 tools/compare_raw_markup.py --coverage` gives the untranscribed raw
   blocks, the blocks skipped inside the covered range, and any entry that broke
   print order; `--conventions` gives the per-file tag/accent/attribute census.
-  Read the flagged entries, not the whole letter.
+  Read the flagged entries, not the whole letter. Coverage aligns `•`-led blocks
+  only: a `^`-led headword surfaces as an unmatched XML entry (`best 0.00`), and
+  a user-deleted `см. под` stub surfaces as `skipped raw` (§1, §7). A positive
+  `remaining` count is a missing entry (Z `зырчэць`), not a formatting quirk.
+  Treat all three as findings to read.
 - **Reuse the shapes.** Most entries are one of the §4 shapes; copy the closest
   shape and substitute the text instead of composing tags from scratch.
 - **Use the existing entries as the template library.** When a construction is
@@ -419,8 +446,8 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
 1. **Parses.** The chunk must parse with `xml.etree.ElementTree` (the markup
    editor and `dictionary_app.db.build_database` rely on it). A quick probe:
    `py -3 -c "import xml.etree.ElementTree as ET; ET.parse(r'dictionary_app/data/dictionary/dictionary_X.xml')"`.
-2. **Every `•` accounted for.** Count the `•` bullets in the raw chunk and the new
-   `<entry>` blocks; none missing, none duplicated.
+2. **Every headword marker accounted for.** Count `•` and leading `^` (§1) in the
+   raw chunk and the new `<entry>` blocks; none missing, none duplicated.
 3. **Print order preserved.** Existing `<entry>` blocks are untouched — never
    moved, re-sorted, or re-inserted; new entries are appended at the end in raw
    order; no alphabetical sorting, including within one merged raw line (§1).
@@ -432,13 +459,13 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
    really nests it; no crossed pairs; `<br />` self-closed.
 6. **Structural separators.** `<sense>`/`<d>` blocks separated by `<br />` (the
    separator precedes each block, none trails the last one, no block packed onto
-   one line); every
+   one line); `<sense>` appears only where the raw prints its numeral (§4); every
    headword is one `<entry>`…`</entry>` block; entry blocks separated by a blank
    line.
 7. **Identity.** Homonym numerals inside `<hw>`; every colliding plain headword
    has a unique `<entry id>`; `<see>` targets spell the real headword.
-8. **Spacing.** `•` abuts `<hw>`; `—` abuts the preceding tag; `,`/`:`/`;` follow
-   `</hw>` directly; no stray space inside tags.
+8. **Spacing.** `•` abuts `<hw>`; `—` abuts the preceding tag; `,`/`:`/`;`/`.`
+   follow `</hw>` directly; no stray space inside tags.
 9. **Attributes.** Only schema attributes (`entry:id`, `hw:id,excl,keep-acc`,
    `g:hw`, `see:entry,hw,syn`, `sense:n`, `ex:lang`, `i:lang,excl`, `p:lang`,
    `lang:code`) — no `tp`, no `lvl`, no `link`, no `#` fragments.
@@ -446,8 +473,17 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
     (`<src>Ар.; Ксл.; Шсл.</src>`), never one tag per abbreviation; a
     parenthesized run keeps its parens inside the tag.
 11. **Accent mark matches the tag.** `<hw>` carries U+0301, `<g>` carries U+0300
-    (§6); no tag mixes both, no accent was silently dropped.
+    (§6); an italicized derived `<hw>` may keep the raw grave (§6); no tag mixes
+    both, no accent was silently dropped.
 12. **Encoding.** UTF-8, Cyrillic intact, combining accents preserved.
+13. **Printed `<hw>`/`<g>` order.** When `<hw>` and `<g>` are adjacent, keep
+    the raw order — normally `<hw>word</hw><g>morphology</g>`; a grammar label
+    before a derived headword (`<g>Соверш.</g> <hw>…</hw>`) stays only where the
+    raw prints it. Never flip the pair.
+14. **Do not hallucinate.** Never add a `<src>`, `<g>`, `<t>`, `<ex>`, or `<hw>`
+    the raw does not contain; a source belongs only to the example it follows,
+    never copied from the previous one. When unsure, transcribe only what is
+    printed.
 
 ## 12. Failure modes (what goes wrong and how to avoid it)
 
@@ -467,6 +503,12 @@ Synonym pointer — the translation slot holds a `<see syn="true">`, never a `<t
 | A synonym renders as a translation | `<see syn="true">` was wrapped in `<t>` | a synonym pointer stands bare in the translation slot (§7) |
 | Two blocks render as one paragraph | `</t> <d>` or `</sense> <sense>` without the separator | `<br />` before each block, none after the last (§5) |
 | A Latin name renders italic | taxonomic name put in `<i>` | `<lang code="la">…</lang>` inherits the surrounding style (§3) |
+| A tag is invented or its order flipped | the source/label was inferred from a neighbour instead of read from the raw | keep the printed order; add no `<src>`/`<g>`/`<t>`/`<ex>`/`<hw>` the raw lacks (§11, items 13–14) |
+| A caret-led headword is skipped | only `•` was counted as a bullet | treat leading `^` as a bullet; coverage reports its XML entry as unmatched with `best 0.00` (§1, §10) |
+| A bullet after a continuation sense is absorbed | the block was read as one sense | split at every `•` even after `2. …`; coverage `remaining` flags the missing entry (§1, §10) |
+| A redundant `см. под` stub is mishandled | the draft re-created it as its own `<entry>` or dropped it | transcribe it verbatim as its own entry; let the user delete it (§7) |
+| An unsensed entry gets `<sense n="1">` | the draft regularized the structure | add `<sense>` only where the raw prints the numeral (§4, §11, item 6) |
+| A cross-ref label is rewritten or left unpinned | the draft copied the raw spelling into `<see>` without `hw=` | keep the printed label and pin the real headword with `hw=` (§7) |
 
 ## 13. Verification and commit
 

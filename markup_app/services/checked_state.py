@@ -98,9 +98,64 @@ class CheckedState:
                 (source_file, headword), []
             ).append(row)
 
-        def current(row):
+        def current(row, occurrence=0):
             entry_id, headword, entry_link, source_file = row
-            return self._key(source_file, entry_id, entry_link, headword, 0)
+            return self._key(
+                source_file, entry_id, entry_link, headword, occurrence)
+
+        def parse_current(key):
+            tail, sep, occurrence = key.rpartition(':')
+            if not sep or not occurrence.isdigit():
+                return None
+            source_file, sep, rest = tail.partition(':')
+            if not sep:
+                return None
+            entry_id_text, sep, rest = rest.partition(':')
+            if not sep or not entry_id_text.isdigit():
+                return None
+            entry_link, sep, headword = rest.partition(':')
+            if not sep:
+                return None
+            link = None if entry_link == 'None' else entry_link
+            return (
+                source_file, link, headword, int(entry_id_text),
+                int(occurrence),
+            )
+
+        def rekey(parsed):
+            source_file, link, headword, entry_id, occurrence = parsed
+            candidates = by_parts.get((source_file, link, headword))
+            if not candidates:
+                return None
+            for row in candidates:
+                if row[0] == entry_id:
+                    return current(row, occurrence)
+            if len(candidates) == 1:
+                return current(candidates[0], occurrence)
+            return None
+
+        ambiguous = {}
+        for key in self._states:
+            parsed = parse_current(key)
+            if parsed is None:
+                continue
+            source_file, link, headword, entry_id, occurrence = parsed
+            candidates = by_parts.get((source_file, link, headword))
+            if not candidates or len(candidates) < 2:
+                continue
+            if any(row[0] == entry_id for row in candidates):
+                continue
+            ambiguous.setdefault(
+                (source_file, link, headword), []
+            ).append((entry_id, occurrence, key))
+
+        ranked = {}
+        for group, keys in ambiguous.items():
+            candidates = sorted(by_parts[group], key=lambda row: row[0])
+            if len(keys) != len(candidates):
+                continue
+            for (_, occurrence, key), row in zip(sorted(keys), candidates):
+                ranked[key] = current(row, occurrence)
 
         def rewrite(key):
             parts = key.split(':')
@@ -152,6 +207,16 @@ class CheckedState:
         migrated = {}
         changed = False
         for key, value in self._states.items():
+            new_key = ranked.get(key)
+            if new_key is None:
+                parsed = parse_current(key)
+                if parsed is not None:
+                    new_key = rekey(parsed)
+            if new_key is not None:
+                if new_key != key:
+                    changed = True
+                migrated[new_key] = migrated.get(new_key, False) or value
+                continue
             new_keys = rewrite(key)
             if new_keys is None:
                 migrated[key] = value

@@ -42,6 +42,11 @@ class PreviewBuilder:
         matched_ids = {id(el) for el in matched}
 
         if tag == 't':
+            matched = [
+                el for el in matched
+                if not self._has_matched_t_ancestor(el, parent_map, matched_ids)
+            ]
+            matched_ids = {id(el) for el in matched}
             absorbed = set()
             for el in matched:
                 parent = parent_map.get(el)
@@ -148,6 +153,15 @@ class PreviewBuilder:
                 seen_html.add(p['preview_html'])
                 unique.append(p)
         return unique
+
+    @staticmethod
+    def _has_matched_t_ancestor(element, parent_map, matched_ids):
+        current = parent_map.get(element)
+        while current is not None:
+            if current.tag == 't' and id(current) in matched_ids:
+                return True
+            current = parent_map.get(current)
+        return False
 
     def _has_br_between(self, prev_element, element, order, order_pos):
         if prev_element is None:

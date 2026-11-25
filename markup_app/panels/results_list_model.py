@@ -4,6 +4,7 @@ from dictionary_app.utils.item_roles import (
     ROLE_ENTRY_LINK, ROLE_HEADWORD, ROLE_ENTRY_ID, ROLE_OCCURRENCE,
     ROLE_SOURCE_FILE,
 )
+from dictionary_app.utils.normalize_headword import resolve_headword
 
 
 class ResultsListModel(QAbstractListModel):
@@ -52,7 +53,9 @@ class ResultsListModel(QAbstractListModel):
         counts = {}
         occurrences = []
         for _display, result in rows:
-            key = (result[0], result[1], result[3])
+            keep_acc = result[6] if len(result) > 6 else 0
+            key = (
+                result[0], resolve_headword(result[1], keep_acc), result[3])
             occurrences.append(counts.get(key, 0))
             counts[key] = occurrences[-1] + 1
         return occurrences

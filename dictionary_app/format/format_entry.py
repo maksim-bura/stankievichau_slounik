@@ -407,7 +407,7 @@ def process_element(element, context, is_sources=False, current_variants=None):
             elif not is_sources and child.tag == 'hw':
                 hw_text = ''.join(child.itertext()).strip() or child.text
                 sep = ''
-                if child.tail and child.tail.startswith((',', ':', ';')):
+                if child.tail and child.tail.startswith((',', ':', ';', '.', '…', '?')):
                     sep = child.tail[0]
                     child.tail = child.tail[1:]
                     if sep == ',' and child.tail.startswith(','):

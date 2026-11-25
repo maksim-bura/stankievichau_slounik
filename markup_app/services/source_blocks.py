@@ -61,38 +61,57 @@ class SourceBlocks:
             for block in loaded['blocks']:
                 yield source_file, block
 
-    def entry_block(self, entry_id, source_file, headword, entry_link, keep_acc=0):
+    def entry_block_candidates(self, source_file, headword, entry_link, keep_acc=0):
         if not source_file:
-            return None
+            return []
         loaded = self.load(source_file)
         if loaded is None:
-            return None
+            return []
         blocks = loaded['blocks']
         t_norm = resolve_headword(headword, keep_acc) if headword else None
         link_norm = normalize_headword(entry_link) if entry_link else None
-
-        def _matches_own_entry(candidates):
-            if len(candidates) == 1:
-                return blocks[candidates[0]]
-            full = self._search_engine.get_full_entry(entry_id)
-            if full is not None:
-                target = re.sub(r'\s+', '', full)
-                for i in candidates:
-                    if re.sub(r'\s+', '', blocks[i]) == target:
-                        return blocks[i]
-            return blocks[candidates[0]]
 
         if link_norm:
             candidates = []
             for i in loaded['by_link'].get(link_norm, ()):
                 block = blocks[i]
                 if t_norm is None or block_matches(block, t_norm):
-                    candidates.append(i)
+                    candidates.append(block)
             if candidates:
-                return _matches_own_entry(candidates)
+                return candidates
 
         if t_norm:
-            candidates = loaded['by_headword'].get(t_norm)
-            if candidates:
-                return _matches_own_entry(candidates)
+            return [blocks[i] for i in loaded['by_headword'].get(t_norm, ())]
+        return []
+
+    def entry_block(self, entry_id, source_file, headword, entry_link, keep_acc=0):
+        candidates = self.entry_block_candidates(
+            source_file, headword, entry_link, keep_acc)
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        full = self._search_engine.get_full_entry(entry_id)
+        if full is not None:
+            target = re.sub(r'\s+', '', full)
+            for block in candidates:
+                if re.sub(r'\s+', '', block) == target:
+                    return block
+        return candidates[0]
+
+    def strict_entry_block(self, entry_id, source_file, headword, entry_link,
+                           keep_acc=0):
+        candidates = self.entry_block_candidates(
+            source_file, headword, entry_link, keep_acc)
+        if len(candidates) == 1:
+            return candidates[0]
+        full = self._search_engine.get_full_entry(entry_id)
+        if full is not None:
+            target = re.sub(r'\s+', '', full)
+            matches = [
+                block for block in candidates
+                if re.sub(r'\s+', '', block) == target
+            ]
+            if len(matches) == 1:
+                return matches[0]
         return None

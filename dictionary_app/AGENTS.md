@@ -208,6 +208,9 @@ and the search engine.
   itself preceded by a `<t>` (the `t . ex — t` chain), that `<t>` is leading
   context too. No context from further-back siblings (avoids leaking e.g. a
   `<b>:</b>` separator).
+- **Nested-`<t>` suppression (translation only):** a matched `<t>` with a
+  matched `<t>` ancestor is dropped; the ancestor's preview already renders it
+  as content, so the same nested translation is not appended twice.
 - **Absorbed-`<t>` suppression (translation only):** when a matched `<t>` is
   immediately followed by an `<ex>` (with `—` tail) whose next sibling is another
   matched `<t>`, the earlier `<t>` becomes the later one's leading context and is
@@ -402,10 +405,13 @@ flags, then accent positions. Two alphabet tables live in `_ALPHABET_TOKENS`:
   entry view and the markup app's Author/UI tab. A `<d>` not preceded by
   `<br>`, or one preceded by visible text, is not indented.
 - **`<hw>` separator absorption (preserve):** a `<hw>` tail starting with `,`,
-  `:` or `;` moves that one separator **inside** the headword span (bold and
-  clickable), or two when they are duplicated (e.g. `,,`). Only the first
-  character of the tail is checked; the anchor ID was computed before absorption,
-  so it stays based on the word alone.
+  `:`, `;`, `.` or `…` moves that one separator **inside** the headword span
+  (bold and clickable), or two when they are duplicated (e.g. `,,`). Only the
+  first character of the tail is checked; the anchor ID was computed before
+  absorption, so it stays based on the word alone. The corpus has 23 `</hw>.`
+  tails, all in non-italic contexts; the absorbed dot also takes `.hw`'s
+  `font-style: normal`. The single `</hw>…` tail (Cz `вычвара́ць`) absorbs the
+  ellipsis the same way, so it renders bold with the headword.
 - **`<hw>` trailing dash (preserve):** a leading `—`/`–` in a `<hw>` tail
   stays outside the bold headword span, so it renders at normal weight by CSS
   inheritance; no wrapper span is emitted. Punctuation after the dash (e.g.

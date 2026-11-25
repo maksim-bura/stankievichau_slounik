@@ -77,6 +77,12 @@ class LinkHandler:
         return word, sense_parts
 
     @classmethod
+    def _parse_scoped_target(cls, target_hw, keep_accents):
+        if target_hw is None:
+            return None, []
+        return cls.parse_link_text(target_hw, keep_accents=keep_accents)
+
+    @classmethod
     def process_url(cls, url_string):
         word_prefix = SCHEME_WORD + ':'
         word_attr_prefix = SCHEME_WORD_ATTR + ':'
@@ -85,12 +91,14 @@ class LinkHandler:
             target = unquote(url_string[len(word_attr_prefix):])
             entry_raw, target_hw = cls._split_target(target)
             entry, sense_parts = cls.parse_link_text(entry_raw, keep_accents=True)
-            return ('word-attr', entry, sense_parts, target_hw)
+            target_hw, scoped_senses = cls._parse_scoped_target(target_hw, True)
+            return ('word-attr', entry, sense_parts + scoped_senses, target_hw)
         if url_string.startswith(word_prefix):
             target = unquote(url_string[len(word_prefix):])
             entry, target_hw = cls._split_target(target)
             word, sense_parts = cls.parse_link_text(entry)
-            return ('word', word, sense_parts, target_hw)
+            target_hw, scoped_senses = cls._parse_scoped_target(target_hw, True)
+            return ('word', word, sense_parts + scoped_senses, target_hw)
         elif url_string.startswith(source_prefix):
             target = url_string[len(source_prefix):]
             return ('source', target, None, None)
